@@ -156,12 +156,15 @@ struct SmartSearchView: View {
             let h = geo.size.height
             // Moon shrinks with the window and drops out when there's no room.
             let moon = min(170, (h - 330) * 0.5)
-            let topOffset = max(16, h * 0.09)
+            // With the moon showing, lift it into the top margin and give it a
+            // clear gap above the greeting; the search field stays put.
+            let moonLift: CGFloat = moon >= 64 ? 12 : 0
+            let topOffset = max(16, h * 0.09) - moonLift
             ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 0) {
                 if moon >= 64 {
                     AsciiMoon(diameter: moon, isBusy: isRouting)
-                        .padding(.bottom, -6)
+                        .padding(.bottom, moonLift - 6)
                 }
                 // Quiet greeting above the bar (Siri / ChatGPT-app style)
                 Text(Self.greeting())
