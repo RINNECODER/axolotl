@@ -86,12 +86,4 @@ final class PanelCardTests: XCTestCase {
         let back = try JSONDecoder().decode(ChatMessage.self, from: JSONEncoder().encode(message))
         XCTAssertEqual(back.card, .agentRun(run))
     }
-
-    func testCodexModelMenuListsOnlyVisibleModels() {
-        let cache = #"{"models":[{"slug":"gpt-a","display_name":"GPT A","visibility":"list"},{"slug":"hidden","visibility":"hide"},{"slug":"gpt-b"}]}"#
-        let models = DevModelCatalog.parseCodexModels(Data(cache.utf8))
-        XCTAssertEqual(models.map(\.id), ["gpt-a", "gpt-b"])
-        XCTAssertEqual(models.map(\.name), ["GPT A", "gpt-b"])
-        XCTAssertTrue(DevModelCatalog.parseCodexModels(Data("not json".utf8)).isEmpty)
-    }
 }

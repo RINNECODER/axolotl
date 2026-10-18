@@ -33,6 +33,8 @@ struct CommandSurfaceView: View {
     @AppStorage(DevPrefs.terminalKey) private var devTerminal: Bool = false
     @Environment(\.openSettings) private var openSettings
     @Environment(\.colorScheme) private var outerColorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var modeSwitchNS
     @State private var inputText: String = ""
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
@@ -75,25 +77,35 @@ struct CommandSurfaceView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Both modes share one frame; switching crossfades and slides them (no layout jump) while
+        // the mode switch glides between its two homes.
+        ZStack {
             if isDevMode {
                 // Dev mode copies T3 Code: its own header (with the mode switch), surface and light/dark tokens.
                 DevPanelView(fontSize: chatFontSize, onOpenSettings: openConnectAgents, onOpenLink: openLinkInNewTab,
                              modeSwitch: AnyView(modeSwitch()), onClose: close)
+                    // Dev mode follows the app's appearance, like T3 Code.
+                    .environment(\.colorScheme, outerColorScheme)
+                    .transition(modeTransition(edge: .trailing))
             } else {
-                panelHeader()
-                if DevMode.isDevBuild {
-                    modeSwitch().padding(.bottom, 6)
+                VStack(spacing: 0) {
+                    panelHeader()
+                    if DevMode.isDevBuild {
+                        modeSwitch().padding(.bottom, 6)
+                    }
+                    conversationStream()
+                    MCPApprovalStack()
+                    inputArea()
                 }
-                conversationStream()
-                MCPApprovalStack()
-                inputArea()
+                // No surface of its own: the panel sits on the window chrome, like the
+                // sidebar, so the browser, the page and the panel read as one piece.
+                .environment(\.colorScheme, .dark)
+                .transition(modeTransition(edge: .leading))
             }
         }
-        // No surface of its own: the panel sits on the window chrome, like the
-        // sidebar, so the browser, the page and the panel read as one piece.
-        // Dev mode follows the app's appearance, like T3 Code.
-        .environment(\.colorScheme, isDevMode ? outerColorScheme : .dark)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .animation(reduceMotion ? nil : .smooth(duration: 0.2), value: isDevMode)
         .overlay { if isDropTargeted { FileDropHint() } }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDocumentDrop(providers: providers)
@@ -194,30 +206,44 @@ struct CommandSurfaceView: View {
     }
 
     /// General | Dev as small text tabs (T3 Code-style toggle group). Shown only in the Luna Dev build.
+    /// The selection pill is a matched geometry, so it slides between tabs and between the two headers.
     private func modeSwitch() -> some View {
         HStack(spacing: 0) {
             ForEach([AIPanelMode.general, .dev], id: \.self) { mode in
                 let selected = panelModeRaw == mode.rawValue
                 Button {
-                    panelModeRaw = mode.rawValue
+                    guard !selected else { return }
+                    withAnimation(reduceMotion ? nil : .smooth(duration: 0.2)) { panelModeRaw = mode.rawValue }
                 } label: {
                     Text(mode == .general ? "General" : "Dev")
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(selected ? Color.primary : Color.secondary)
                         .padding(.horizontal, 8)
                         .frame(height: 22)
-                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(selected ? Color.primary.opacity(0.09) : .clear))
+                        .background {
+                            if selected {
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.primary.opacity(0.09))
+                                    .matchedGeometryEffect(id: "modeIndicator", in: modeSwitchNS)
+                            }
+                        }
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
+        .matchedGeometryEffect(id: "modeSwitch", in: modeSwitchNS)
         .disabled(!DevMode.isAvailable)
         .help(DevMode.isAvailable ? "Panel mode" : "Dev needs the unsandboxed Luna Dev build.")
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Panel mode")
+    }
+
+    private func modeTransition(edge: Edge) -> AnyTransition {
+        reduceMotion ? .opacity : .asymmetric(
+            insertion: .opacity.combined(with: .offset(x: edge == .trailing ? 14 : -14)),
+            removal: .opacity.combined(with: .offset(x: edge == .trailing ? 14 : -14)))
     }
 
     private func openConnectAgents() {

@@ -91,7 +91,42 @@ struct DevTerminalView: NSViewRepresentable {
                 }
                 view?.feed(text: "\r\n[process exited]\r\n")
             }
+            #if DEBUG
+            typeSnapshotKeys(into: view)
+            #endif
         }
+
+        #if DEBUG
+        /// Screenshots / input check: `LUNA_SNAPSHOT_DEV_TERM_KEYS="down|return|wait|text:hi|return"`
+        /// is typed as real key events (TerminalView.keyDown, the keyboard path), 1.5 s apart.
+        private func typeSnapshotKeys(into view: TerminalView) {
+            guard let script = ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_DEV_TERM_KEYS"] else { return }
+            Task { @MainActor [weak view] in
+                try? await Task.sleep(for: .seconds(3))
+                for token in script.split(separator: "|").map(String.init) {
+                    guard let view else { return }
+                    let chars: String
+                    var code: UInt16 = 0
+                    switch token {
+                    case "down": chars = String(UnicodeScalar(UInt16(NSDownArrowFunctionKey))!); code = 125
+                    case "up": chars = String(UnicodeScalar(UInt16(NSUpArrowFunctionKey))!); code = 126
+                    case "return": chars = "\r"; code = 36
+                    case "wait": try? await Task.sleep(for: .seconds(4)); continue
+                    default: chars = token.hasPrefix("text:") ? String(token.dropFirst(5)) : token
+                    }
+                    for ch in (code == 0 ? chars.map(String.init) : [chars]) {
+                        if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                        windowNumber: view.window?.windowNumber ?? 0, context: nil,
+                                                        characters: ch, charactersIgnoringModifiers: ch,
+                                                        isARepeat: false, keyCode: code) {
+                            view.keyDown(with: event)
+                        }
+                    }
+                    try? await Task.sleep(for: .seconds(1.5))
+                }
+            }
+        }
+        #endif
 
         func stop() {
             pendingLaunch = nil

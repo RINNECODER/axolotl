@@ -11,6 +11,7 @@ enum DevPrefs {
     static let modelKey = "luna_dev_model"
     static let resumeKey = "luna_dev_resume"
     static let terminalKey = "luna_dev_terminal"
+    static let effortKey = "luna_dev_effort"
 
     static func recentProjects(_ defaults: UserDefaults = .standard) -> [String] {
         defaults.stringArray(forKey: recentProjectsKey) ?? []
@@ -82,7 +83,9 @@ final class DevSessionController {
     /// Starts a session resuming `resumeID` (any Claude session / Codex thread id, e.g. one
     /// from `SessionSync`), or a new one when nil. `keeping` seeds the thread (take-over keeps
     /// the mirrored history on screen).
-    func start(kind: AgentCLIKind, projectDir: URL, model: String?, resumeID: String?, keeping: DevThreadState? = nil) async {
+    /// `effort` is Codex's reasoning effort for each turn (nil = the model's default).
+    func start(kind: AgentCLIKind, projectDir: URL, model: String?, resumeID: String?, effort: String? = nil,
+               keeping: DevThreadState? = nil) async {
         stop()
         isStarting = true
         startError = nil
@@ -90,6 +93,7 @@ final class DevSessionController {
         self.projectDir = projectDir
         hasBrowserTools = LunaMCPBridge.shared.isEnabled && DevSettings.shared.autoWireBrowserTools
         let session = AgentCLISessions.make(kind)
+        if let codex = session as? CodexAdapter, let effort, !effort.isEmpty { codex.effort = effort }
         self.session = session
         var state = keeping ?? DevThreadState(kind: kind)
         let trimmedModel = (model ?? DevSettings.shared.defaultModel(for: kind.harnessID))?.trimmingCharacters(in: .whitespaces)

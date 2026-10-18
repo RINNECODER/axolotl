@@ -129,7 +129,8 @@ enum DebugSnapshot {
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay - 1.5)) {
                 let pane = env["LUNA_SNAPSHOT_SETTINGS"].flatMap(SettingsPane.init(rawValue:)) ?? .appearance
                 let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(initialPane: pane)))
-                window.setContentSize(NSSize(width: 820, height: 600))
+                let height = env["LUNA_SNAPSHOT_SETTINGS_HEIGHT"].flatMap(Double.init) ?? 600
+                window.setContentSize(NSSize(width: 820, height: height))
                 window.isReleasedWhenClosed = false
                 window.makeKeyAndOrderFront(nil)
             }

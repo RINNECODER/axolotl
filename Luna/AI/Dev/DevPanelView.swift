@@ -5,8 +5,9 @@ import SwiftUI
 ///
 /// The layout and styling mirror T3 Code's chat (https://github.com/pingdotgg/t3code, MIT License):
 /// a breadcrumb header (project / thread), a timeline of user bubbles, assistant prose and folded
-/// work-log rows, approvals inside the composer, and a rounded composer with the provider/model
-/// pickers in its footer and the project in a strip below it. ⌘↩ sends, Esc stops.
+/// work-log rows, approvals inside the composer, and a rounded composer with the harness, model and
+/// effort dropdowns (`DevDropdown`) in its footer. Chat | Terminal is a segmented control in the
+/// header; the project is picked from the header. ⌘↩ sends, Esc stops.
 struct DevPanelView: View {
     let fontSize: CGFloat
     var onOpenSettings: () -> Void
@@ -19,11 +20,13 @@ struct DevPanelView: View {
     @AppStorage(DevPrefs.agentKey) private var agentRaw: String = AgentCLIKind.claudeCode.rawValue
     @AppStorage(DevPrefs.projectKey) private var projectPath: String = ""
     @AppStorage(DevPrefs.modelKey) private var model: String = ""
-    @AppStorage(DevPrefs.resumeKey) private var resume: Bool = false
+    @AppStorage(DevPrefs.effortKey) private var effort: String = ""
     @AppStorage(DevPrefs.terminalKey) private var terminalMode: Bool = false
 
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var controller = DevSessionController.shared
+    @State private var settings = DevSettings.shared
     @State private var input = ""
     @State private var editorHeight: CGFloat = 36
     @State private var terminalGeneration = 0
@@ -31,7 +34,20 @@ struct DevPanelView: View {
     @State private var turnStartedAt: Date?
     /// "Worked for" durations, keyed by the index of the turn's user message.
     @State private var turnDurations: [Int: TimeInterval] = [:]
+    /// The open dropdown ("harness", "model", "effort", "project", "projectHero"), if any.
+    @State private var openDropdown: String?
+    @State private var harnesses: [HarnessInfo] = []
+    @State private var listing: ModelListing?
+    @State private var modelsLoading = false
+    @State private var modelError: String?
+    @State private var resumeOffer: DevResumeOffer?
+    @State private var projectSessions: [ExternalSession] = []
+    @State private var showingSessions = false
+    @Namespace private var viewSwitchNS
     @FocusState private var inputFocused: Bool
+
+    /// New panels apply Settings → Dev defaults (harness, terminal) once per launch.
+    @MainActor private static var appliedLaunchDefaults = false
 
     private var p: T3Palette { .of(scheme) }
     private var agent: AgentCLIKind { AgentCLIKind(rawValue: agentRaw) ?? .claudeCode }
@@ -39,35 +55,50 @@ struct DevPanelView: View {
     private var projectName: String? { projectURL?.lastPathComponent }
     private var trimmedInput: String { input.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var isTurnActive: Bool { controller.thread?.isTurnActive == true }
+    private var models: [HarnessModel] { listing?.harness == agent.harnessID ? listing?.models ?? [] : [] }
+    private var currentModel: HarnessModel? { DevComposerSelection.current(model: model, in: models) }
+    private var currentEffort: String? { DevComposerSelection.effectiveEffort(effort, for: currentModel) }
+    private var motion: Animation? { reduceMotion ? nil : .smooth(duration: 0.2) }
+
+    private func dropdownBinding(_ id: String) -> Binding<Bool> {
+        Binding(get: { openDropdown == id }, set: { open in
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.12)) { openDropdown = open ? id : nil }
+        })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            if terminalMode {
-                terminalArea
-            } else {
-                threadArea
-                composer
+            ZStack {
+                if terminalMode {
+                    terminalArea
+                        .transition(.opacity)
+                } else {
+                    VStack(spacing: 0) {
+                        threadArea
+                        composer
+                    }
+                    .transition(.opacity)
+                }
             }
+            .animation(motion, value: terminalMode)
         }
         .background(p.background)
+        .devDropdownHost()
         .onAppear {
+            applyLaunchDefaults()
             if controller.installed.isEmpty { controller.refreshInstalled() }
             if isTurnActive, turnStartedAt == nil { turnStartedAt = Date() }
             #if DEBUG
-            // Screenshots: approve the first pending request after the given delay.
-            if let delay = ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_DEV_ALLOW"].flatMap(Double.init) {
-                Task {
-                    for _ in 0..<120 {
-                        try? await Task.sleep(for: .seconds(delay))
-                        if let pending = pendingApproval {
-                            controller.respond(approvalID: pending.card.request.id, decision: .allow)
-                            return
-                        }
-                    }
-                }
-            }
+            snapshotHooks()
             #endif
+        }
+        .task { harnesses = await HarnessCatalog.shared.discover() }
+        .task(id: agent) { await loadModels(refresh: false) }
+        .task(id: "\(projectPath)|\(controller.thread == nil)|\(settings.liveSyncEnabled)") { await watchSessions() }
+        .onChange(of: terminalMode) { _, _ in openDropdown = nil }
+        .onChange(of: settings.defaultHarness) { _, kind in
+            if controller.thread == nil { adoptHarness(kind) }
         }
         .onChange(of: isTurnActive) { _, active in
             if active {
@@ -80,18 +111,80 @@ struct DevPanelView: View {
         }
     }
 
+    private func applyLaunchDefaults() {
+        guard !Self.appliedLaunchDefaults else { return }
+        Self.appliedLaunchDefaults = true
+        guard controller.thread == nil else { return }
+        if settings.showTerminalByDefault { terminalMode = true }
+        // The last harness used wins; the default only applies before the first pick.
+        if UserDefaults.standard.object(forKey: DevPrefs.agentKey) == nil { adoptHarness(settings.defaultHarness) }
+    }
+
+    #if DEBUG
+    private func snapshotHooks() {
+        let env = ProcessInfo.processInfo.environment
+        // Screenshots: approve the first pending request after the given delay.
+        if let delay = env["LUNA_SNAPSHOT_DEV_ALLOW"].flatMap(Double.init) {
+            Task {
+                for _ in 0..<120 {
+                    try? await Task.sleep(for: .seconds(delay))
+                    if let pending = pendingApproval {
+                        controller.respond(approvalID: pending.card.request.id, decision: .allow)
+                        return
+                    }
+                }
+            }
+        }
+        // Screenshots: open one of the dropdowns ("harness", "model", "effort", "project") or the sessions list.
+        if let open = env["LUNA_SNAPSHOT_DEV_OPEN"] {
+            Task {
+                try? await Task.sleep(for: .seconds(Double(env["LUNA_SNAPSHOT_DEV_OPEN_AFTER"] ?? "") ?? 2))
+                switch open {
+                case "sessions": showingSessions = true
+                case "follow": if let resumeOffer { self.open(resumeOffer) }
+                default: openDropdown = open
+                }
+            }
+        }
+    }
+    #endif
+
     // MARK: - Header (T3's ChatHeader: project badge / thread title, icon controls on the right)
 
     private var header: some View {
-        HStack(spacing: 6) {
-            modeSwitch
+        VStack(spacing: 0) {
             HStack(spacing: 6) {
-                if projectName != nil { projectBadge }
-                projectMenu(label: Text(projectName ?? "No project")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(projectName == nil ? p.mutedForeground : p.foreground)
-                    .padding(.horizontal, 4).frame(height: 24))
-                    .layoutPriority(1)
+                modeSwitch
+                Spacer(minLength: 4)
+                if controller.isMirroring { mirroringBadge }
+                T3IconButton(systemName: "square.and.pencil", help: "New thread", palette: p) { newThread() }
+                T3IconButton(systemName: "xmark", help: "Close (Esc)", palette: p) {
+                    // Esc stops a running turn before it closes the panel.
+                    if isTurnActive { controller.interrupt() } else { onClose() }
+                }
+                // The raw terminal needs Esc (it interrupts the CLI); an open dropdown takes it too.
+                .keyboardShortcut(terminalMode || openDropdown != nil ? nil : KeyboardShortcut(.escape, modifiers: []))
+            }
+            .frame(height: 38)
+            HStack(spacing: 4) {
+                projectDropdown(id: "project", edge: .below) {
+                    HStack(spacing: 6) {
+                        if projectName != nil { projectBadge }
+                        Text(projectName ?? "Choose project")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(projectName == nil ? p.mutedForeground : p.foreground)
+                            .lineLimit(1)
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 8.5, weight: .semibold))
+                            .foregroundStyle(p.mutedForeground)
+                    }
+                    .padding(.horizontal, 4)
+                    .frame(height: 26)
+                    .contentShape(Rectangle())
+                }
+                .fixedSize()
+                .layoutPriority(1)
+                .accessibilityLabel("Project: \(projectName ?? "none")")
                 Text("/").font(.system(size: 13)).foregroundStyle(p.mutedForeground.opacity(0.7))
                 Text(threadTitle)
                     .font(.system(size: 13))
@@ -99,23 +192,76 @@ struct DevPanelView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(threadTitle)
+                Spacer(minLength: 6)
+                viewSwitch
             }
-            .padding(.leading, 2)
-            Spacer(minLength: 2)
-            T3IconButton(systemName: "terminal", help: terminalMode ? "Show thread" : "Show terminal (raw CLI)",
-                         palette: p, isOn: terminalMode) { terminalMode.toggle() }
-            T3IconButton(systemName: "square.and.pencil", help: "New Session", palette: p) { controller.stop() }
-            T3IconButton(systemName: "xmark", help: "Close (Esc)", palette: p) {
-                // Esc stops a running turn before it closes the panel.
-                if isTurnActive { controller.interrupt() } else { onClose() }
-            }
-            // The raw terminal needs Esc (it interrupts the CLI).
-            .keyboardShortcut(terminalMode ? nil : KeyboardShortcut(.escape, modifiers: []))
+            .frame(height: 36)
+            .padding(.bottom, 2)
         }
         .padding(.leading, 10)
         .padding(.trailing, 6)
-        .frame(height: 44)
         .overlay(alignment: .bottom) { Rectangle().fill(p.border).frame(height: 1) }
+    }
+
+    /// Chat | Terminal as a labeled segmented control (T3's toggle group).
+    private var viewSwitch: some View {
+        HStack(spacing: 0) {
+            ForEach([false, true], id: \.self) { terminal in
+                let selected = terminalMode == terminal
+                Button {
+                    guard terminalMode != terminal else { return }
+                    withAnimation(motion) { terminalMode = terminal }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: terminal ? "terminal" : "bubble.left")
+                            .font(.system(size: 10.5, weight: .medium))
+                        Text(terminal ? "Terminal" : "Chat")
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                    .foregroundStyle(selected ? p.foreground : p.mutedForeground)
+                    .padding(.horizontal, 8)
+                    .frame(height: 22)
+                    .background {
+                        if selected {
+                            RoundedRectangle(cornerRadius: T3Metrics.radiusSm, style: .continuous)
+                                .fill(p.isDark ? Color.white.opacity(0.09) : Color.white)
+                                .shadow(color: .black.opacity(p.isDark ? 0 : 0.08), radius: 1.5, y: 0.5)
+                                .matchedGeometryEffect(id: "viewSwitch", in: viewSwitchNS)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(terminal ? "Run \(agent.executableName) in a terminal" : "Chat with \(agent.displayName)")
+                .accessibilityLabel(terminal ? "Terminal" : "Chat")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(RoundedRectangle(cornerRadius: T3Metrics.radiusMd, style: .continuous)
+            .fill(p.isDark ? Color.white.opacity(0.03) : Color(hex: 0xF4F4F5)))
+        .overlay(RoundedRectangle(cornerRadius: T3Metrics.radiusMd, style: .continuous).strokeBorder(p.border, lineWidth: 1))
+        .fixedSize()
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("View")
+    }
+
+    private var mirroringBadge: some View {
+        HStack(spacing: 5) {
+            if controller.isReadOnly { PulsingDot(color: p.success) } else {
+                Image(systemName: "eye").font(.system(size: 9.5, weight: .medium))
+            }
+            Text("Mirroring")
+        }
+        .font(.system(size: T3Metrics.text2xs, weight: .medium))
+        .foregroundStyle(p.mutedForeground)
+        .padding(.horizontal, 7)
+        .frame(height: 20)
+        .overlay(Capsule().strokeBorder(p.border.opacity(p.isDark ? 1.5 : 1), lineWidth: 1))
+        .help(controller.isReadOnly
+              ? "Showing a session that is live in a terminal (read-only)"
+              : "Showing a terminal session; sending a message continues it in Luna")
+        .accessibilityElement(children: .combine)
     }
 
     private var threadTitle: String {
@@ -126,6 +272,7 @@ struct DevPanelView: View {
                 }
             }
         }
+        if let mirror = controller.mirror, !mirror.title.isEmpty { return mirror.title }
         return "New thread"
     }
 
@@ -145,27 +292,18 @@ struct DevPanelView: View {
         return String(letters).uppercased()
     }
 
-    private func projectMenu<L: View>(label: L, fixed: Bool = true) -> some View {
-        Menu {
-            Button("Choose Folder…") { chooseFolder() }
-            let recents = DevPrefs.recentProjects()
-            if !recents.isEmpty {
-                Section("Recent") {
-                    ForEach(recents, id: \.self) { path in
-                        Toggle((path as NSString).abbreviatingWithTildeInPath, isOn: Binding(
-                            get: { path == projectPath }, set: { if $0 { selectProject(path) } }))
-                    }
-                }
-            }
-        } label: {
-            label
+    /// Project picker: recent projects by name, then "Open folder…".
+    private func projectDropdown<L: View>(id: String, edge: DevDropdownEdge, @ViewBuilder label: @escaping () -> L) -> some View {
+        var items = DevPrefs.recentProjects().map { path in
+            DevDropdownItem(id: path, title: (path as NSString).lastPathComponent,
+                            subtitle: ((path as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath,
+                            icon: "folder", section: "Recent", keywords: [path])
         }
-        .menuStyle(.button)
-        .buttonStyle(T3GhostButtonStyle(palette: p, radius: T3Metrics.radiusSm))
-        .menuIndicator(.hidden)
-        .fixedSize(horizontal: fixed, vertical: true)
-        .help(projectPath.isEmpty ? "Project folder" : (projectPath as NSString).abbreviatingWithTildeInPath)
-        .accessibilityLabel("Project: \(projectName ?? "none")")
+        items.append(DevDropdownItem(id: "__open", title: "Open folder…", icon: "folder.badge.plus", role: .action))
+        return DevDropdown(isOpen: dropdownBinding(id), items: items, selectedID: projectPath, palette: p, edge: edge,
+                           width: 280, help: "Project", onSelect: { item in
+            if item.id == "__open" { chooseFolder() } else { selectProject(item.id) }
+        }, label: label)
     }
 
     // MARK: - Terminal
@@ -173,15 +311,26 @@ struct DevPanelView: View {
     @ViewBuilder
     private var terminalArea: some View {
         if let projectURL, controller.isInstalled(agent) != false {
-            DevTerminalView(kind: agent, projectDir: projectURL, isDark: p.isDark)
-                .id("\(agent.rawValue)|\(projectPath)|\(terminalGeneration)")
-                .padding(8)
-                .background(p.card)
-                .clipShape(RoundedRectangle(cornerRadius: T3Metrics.radiusLg, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: T3Metrics.radiusLg, style: .continuous).strokeBorder(p.border))
-                .padding(10)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel("\(agent.displayName) terminal")
+            VStack(spacing: 0) {
+                DevTerminalView(kind: agent, projectDir: projectURL, isDark: p.isDark)
+                    .id("\(agent.rawValue)|\(projectPath)|\(terminalGeneration)")
+                    .padding(8)
+                    .background(p.card)
+                    .clipShape(RoundedRectangle(cornerRadius: T3Metrics.radiusLg, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: T3Metrics.radiusLg, style: .continuous).strokeBorder(p.border))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .accessibilityLabel("\(agent.displayName) terminal")
+                HStack(spacing: 6) {
+                    harnessDropdown
+                    Spacer(minLength: 4)
+                    Text("Esc and arrows go to \(agent.executableName)")
+                        .font(.system(size: T3Metrics.text2xs))
+                        .foregroundStyle(p.mutedForeground)
+                        .lineLimit(1)
+                }
+                .padding(.top, 6)
+            }
+            .padding(10)
         } else {
             VStack(spacing: 10) {
                 Text(projectURL == nil
@@ -191,7 +340,7 @@ struct DevPanelView: View {
                     .foregroundStyle(p.mutedForeground)
                     .multilineTextAlignment(.center)
                 if projectURL == nil {
-                    Button("Choose Folder…") { chooseFolder() }
+                    Button("Open folder…") { chooseFolder() }
                         .buttonStyle(T3ButtonStyle(palette: p, variant: .outline))
                 }
             }
@@ -257,8 +406,30 @@ struct DevPanelView: View {
         }
     }
 
-    /// T3's draft hero: one quiet headline with the project as a dotted-underline picker.
+    /// T3's draft hero: one quiet headline with the project as a dotted-underline picker, under a
+    /// "Continue" row for the project's most recent session.
     private var emptyState: some View {
+        VStack(spacing: 0) {
+            if let resumeOffer, !showingSessions {
+                resumeRow(resumeOffer)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+            if showingSessions {
+                sessionsList
+                    .transition(.opacity)
+            } else {
+                hero
+                    .transition(.opacity)
+            }
+        }
+        .animation(motion, value: showingSessions)
+        .animation(motion, value: resumeOffer)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private var hero: some View {
         VStack(spacing: 10) {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 6) { heroText }
@@ -269,7 +440,7 @@ struct DevPanelView: View {
             .multilineTextAlignment(.center)
             Text(projectURL == nil
                  ? "\(agent.displayName) runs on this Mac with your own CLI login."
-                 : "Commands and file edits ask first.")
+                 : approvalSummary)
                 .font(.system(size: T3Metrics.textSm))
                 .foregroundStyle(p.mutedForeground)
                 .multilineTextAlignment(.center)
@@ -292,15 +463,239 @@ struct DevPanelView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    private var approvalSummary: String {
+        switch settings.approvalBehavior {
+        case .ask: return "Commands and file edits ask first."
+        case .allowEdits: return "File edits run without asking; commands ask first."
+        case .fullAuto: return "Full auto: commands and edits run without asking."
+        }
+    }
+
     @ViewBuilder
     private var heroText: some View {
         if let projectName {
             Text("What should we build in").foregroundStyle(p.foreground)
-            projectMenu(label: heroSelector(projectName + "?"))
+            projectDropdown(id: "projectHero", edge: .below) { heroSelector(projectName + "?") }
+                .fixedSize()
         } else {
-            projectMenu(label: heroSelector("Choose a project"))
+            projectDropdown(id: "projectHero", edge: .below) { heroSelector("Choose a project") }
+                .fixedSize()
             Text("to start").foregroundStyle(p.foreground)
         }
+    }
+
+    // MARK: - Resume
+
+    /// "Continue <title>" over "Claude Code · 12 min ago · from Terminal", with Resume, and
+    /// "All sessions" under it.
+    private func resumeRow(_ offer: DevResumeOffer) -> some View {
+        let s = offer.session
+        return VStack(alignment: .trailing, spacing: 4) {
+            HStack(spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: T3Metrics.radiusMd, style: .continuous)
+                        .fill(Self.providerColor(s.harness).opacity(p.isDark ? 0.18 : 0.12))
+                    Image(systemName: Self.providerIcon(s.harness))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Self.providerColor(s.harness))
+                }
+                .frame(width: 28, height: 28)
+                .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    (Text("Continue  ").foregroundStyle(p.mutedForeground)
+                     + Text(s.title.isEmpty ? "Last session" : s.title).foregroundStyle(p.foreground))
+                        .font(.system(size: T3Metrics.textXs, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    HStack(spacing: 5) {
+                        if s.isLive { PulsingDot(color: p.success) }
+                        Text(DevResumeOffer.caption(harness: s.harness, updatedAt: s.updatedAt,
+                                                    startedInLuna: s.startedInLuna, isLive: s.isLive))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
+                    .font(.system(size: T3Metrics.text2xs))
+                    .foregroundStyle(s.isLive ? p.success : p.mutedForeground)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                Button(offer.action == .follow ? "Follow" : "Resume") { open(offer) }
+                    .buttonStyle(T3ButtonStyle(palette: p, variant: offer.action == .unavailable ? .outline : .primary))
+                    .disabled(offer.action == .unavailable)
+                    .opacity(offer.action == .unavailable ? 0.5 : 1)
+                    .help(offer.action == .unavailable
+                          ? "Live in a terminal. Turn on Live session sync in Settings → Dev to follow it."
+                          : offer.action == .follow ? "Show this live session read-only" : "Continue this session in Luna")
+            }
+            .padding(.leading, 8)
+            .padding(.trailing, 8)
+            .padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: T3Metrics.radiusLg + 2, style: .continuous).fill(p.card))
+            .overlay(RoundedRectangle(cornerRadius: T3Metrics.radiusLg + 2, style: .continuous).strokeBorder(p.border, lineWidth: 1))
+            .shadow(color: .black.opacity(p.isDark ? 0 : 0.05), radius: 6, y: 2)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Continue \(s.title)")
+            Button { showingSessions = true } label: {
+                HStack(spacing: 3) {
+                    Text(listedSessions.count > 1 ? "All sessions (\(listedSessions.count))" : "All sessions")
+                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+                }
+                .font(.system(size: T3Metrics.text2xs, weight: .medium))
+                .padding(.horizontal, 6)
+                .frame(height: 20)
+            }
+            .buttonStyle(T3GhostButtonStyle(palette: p, radius: T3Metrics.radiusSm))
+            .accessibilityLabel("Show all sessions")
+        }
+    }
+
+    private var listedSessions: [ExternalSession] {
+        DevResumeOffer.listed(projectSessions, liveSync: settings.liveSyncEnabled)
+    }
+
+    /// Every session of this project (live dots first-class), from "Show all".
+    private var sessionsList: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Button { showingSessions = false } label: {
+                    Image(systemName: "chevron.left").font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 24)
+                }
+                .buttonStyle(T3GhostButtonStyle(palette: p, radius: T3Metrics.radiusSm))
+                .accessibilityLabel("Back")
+                Text("Sessions in \(projectName ?? "project")")
+                    .font(.system(size: T3Metrics.textSm, weight: .medium))
+                    .foregroundStyle(p.foreground)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if settings.liveSyncEnabled {
+                    Text("Live sync on")
+                        .font(.system(size: T3Metrics.text2xs, weight: .medium))
+                        .foregroundStyle(p.success)
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 40)
+            Rectangle().fill(p.border).frame(height: 1)
+            if listedSessions.isEmpty {
+                Text(settings.liveSyncEnabled ? "No sessions yet for this project."
+                     : "No Luna sessions yet. Turn on Live session sync in Settings → Dev to see terminal sessions too.")
+                    .font(.system(size: T3Metrics.textXs))
+                    .foregroundStyle(p.mutedForeground)
+                    .multilineTextAlignment(.center)
+                    .padding(24)
+                    .frame(maxWidth: .infinity)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(listedSessions) { s in sessionRow(s) }
+                    }
+                    .padding(6)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+
+    private func sessionRow(_ s: ExternalSession) -> some View {
+        Button { open(s) } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Group {
+                    if s.isLive { PulsingDot(color: p.success) } else {
+                        Circle().fill(p.mutedForeground.opacity(0.35)).frame(width: 6, height: 6)
+                    }
+                }
+                .frame(width: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(s.title.isEmpty ? "Untitled session" : s.title)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(p.foreground)
+                        .lineLimit(1)
+                    Text(DevResumeOffer.caption(harness: s.harness, updatedAt: s.updatedAt,
+                                                startedInLuna: s.startedInLuna, isLive: s.isLive))
+                        .font(.system(size: T3Metrics.text2xs))
+                        .foregroundStyle(s.isLive ? p.success : p.mutedForeground)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 6)
+                Text("\(s.messageCount)")
+                    .font(.system(size: T3Metrics.text2xs))
+                    .foregroundStyle(p.mutedForeground)
+                    .monospacedDigit()
+                    .help("\(s.messageCount) messages")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(T3GhostButtonStyle(palette: p, radius: T3Metrics.radiusMd))
+        .disabled(s.isLive && !settings.liveSyncEnabled)
+        .help(s.isLive ? (settings.liveSyncEnabled ? "Follow this live session read-only" : "Live in a terminal")
+              : "Resume this session in Luna")
+        .accessibilityLabel("\(s.title), \(s.harness.displayName)\(s.isLive ? ", live in terminal" : "")")
+    }
+
+    /// Polls this project's sessions while the thread is empty (live dots go stale otherwise).
+    private func watchSessions() async {
+        guard let projectURL, controller.thread == nil else { resumeOffer = nil; return }
+        while !Task.isCancelled {
+            let excluding = Set([controller.activeSessionID].compactMap { $0 })
+            let found = await SessionSync.shared.sessions(projectDir: projectURL, excluding: excluding, limit: 30)
+            var best = DevResumeOffer.listed(found, liveSync: settings.liveSyncEnabled).first.map {
+                ResumableSession(harness: $0.harness, id: $0.id, title: $0.title, updatedAt: $0.updatedAt,
+                                 startedInLuna: $0.startedInLuna, isLive: $0.isLive)
+            }
+            if best == nil { best = await SessionSync.shared.mostRecentResumable(projectDir: projectURL, excluding: excluding) }
+            guard !Task.isCancelled else { return }
+            projectSessions = found
+            resumeOffer = DevResumeOffer.make(best, liveSync: settings.liveSyncEnabled, activeSessionID: controller.activeSessionID)
+            try? await Task.sleep(for: .seconds(8))
+        }
+    }
+
+    private func open(_ offer: DevResumeOffer) {
+        if let external = projectSessions.first(where: { $0.id == offer.session.id }) {
+            open(external)
+        } else if offer.action == .resume, let projectURL {
+            resume(kind: offer.session.harness, id: offer.session.id, projectDir: projectURL)
+        }
+    }
+
+    /// Live (sync on): mirror read-only. Otherwise resume it, keeping its history when sync can read it.
+    private func open(_ s: ExternalSession) {
+        showingSessions = false
+        adoptHarness(s.harness)
+        if s.isLive {
+            guard settings.liveSyncEnabled else { return }
+            controller.mirror(s)
+        } else if settings.liveSyncEnabled {
+            controller.mirror(s)
+            Task {
+                // Let the mirror read the history first, so it stays on screen after the take-over.
+                for _ in 0..<20 where controller.thread?.items.isEmpty ?? true {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                await controller.takeOver(model: model.isEmpty ? nil : model)
+            }
+        } else {
+            resume(kind: s.harness, id: s.id, projectDir: s.projectDir)
+        }
+    }
+
+    private func resume(kind: AgentCLIKind, id: String, projectDir: URL) {
+        adoptHarness(kind)
+        Task {
+            await controller.start(kind: kind, projectDir: projectDir, model: model.isEmpty ? nil : model,
+                                   resumeID: id, effort: currentEffort)
+        }
+    }
+
+    /// Points the pickers at `kind` without stopping anything.
+    private func adoptHarness(_ kind: AgentCLIKind) {
+        guard kind != agent else { return }
+        let next = DevComposerSelection(harness: agent, model: model, effort: effort)
+            .switching(to: kind, defaultModel: settings.defaultModel(for:))
+        agentRaw = next.harness.rawValue
+        model = next.model
+        effort = next.effort
     }
 
     private func heroSelector(_ text: String) -> some View {
@@ -535,7 +930,45 @@ struct DevPanelView: View {
         return first.map { ($0, count) }
     }
 
+    @ViewBuilder
     private var composer: some View {
+        if controller.isReadOnly {
+            liveBar
+                .padding(.horizontal, 12)
+                .padding(.bottom, 10)
+                .padding(.top, 4)
+                .transition(.opacity)
+        } else {
+            editableComposer
+        }
+    }
+
+    /// Replaces the composer while a mirrored session is live in a terminal.
+    private var liveBar: some View {
+        HStack(spacing: 10) {
+            PulsingDot(color: p.success)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Live in Terminal")
+                    .font(.system(size: T3Metrics.textXs, weight: .medium))
+                    .foregroundStyle(p.foreground)
+                Text("Read-only while \(controller.mirror?.harness.executableName ?? "the CLI") is writing it.")
+                    .font(.system(size: T3Metrics.text2xs))
+                    .foregroundStyle(p.mutedForeground)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 6)
+            Button("Take over") { Task { await controller.takeOver(model: nil) } }
+                .buttonStyle(T3ButtonStyle(palette: p, variant: .primary))
+                .help("Continue it in Luna. If the terminal keeps going too, the two histories diverge.")
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 52)
+        .background(RoundedRectangle(cornerRadius: T3Metrics.radius2xl, style: .continuous).fill(p.card))
+        .overlay(RoundedRectangle(cornerRadius: T3Metrics.radius2xl, style: .continuous).strokeBorder(p.composerOutline, lineWidth: 1))
+        .accessibilityElement(children: .contain)
+    }
+
+    private var editableComposer: some View {
         VStack(spacing: 0) {
             if controller.isInstalled(agent) == false { installBanner }
             VStack(alignment: .leading, spacing: 0) {
@@ -583,9 +1016,9 @@ struct DevPanelView: View {
 
     private var composerFooter: some View {
         HStack(spacing: 2) {
-            modelPicker
-            Rectangle().fill(p.border).frame(width: 1, height: 14).padding(.horizontal, 3)
-            resumePicker
+            harnessDropdown
+            modelDropdown
+            if agent == .codex, let efforts = currentModel?.efforts, !efforts.isEmpty { effortDropdown(efforts) }
             Spacer(minLength: 4)
             if isTurnActive {
                 Button(action: controller.interrupt) {
@@ -614,102 +1047,153 @@ struct DevPanelView: View {
                 .accessibilityLabel("Send")
             }
         }
-        .padding(.leading, 8)
+        .padding(.leading, 6)
         .padding(.trailing, 8)
         .padding(.bottom, 8)
         .padding(.top, 2)
     }
 
-    /// One picker for provider and model, like T3's ProviderModelPicker.
-    private var modelPicker: some View {
-        let current = DevModelCatalog.models(for: agent).first { $0.id == model }?.name
-        let label = agent == .claudeCode ? (current.map { "Claude \($0)" } ?? "Claude Code") : (current ?? "Codex")
-        return Menu {
-            ForEach(AgentCLIKind.allCases, id: \.self) { kind in
-                Section(kind.displayName + (controller.isInstalled(kind) == false ? " (not installed)" : "")) {
-                    modelItem(kind: kind, id: "", name: "Default")
-                    ForEach(DevModelCatalog.models(for: kind), id: \.id) { modelItem(kind: kind, id: $0.id, name: $0.name) }
-                    if kind == agent, !model.isEmpty, !DevModelCatalog.models(for: kind).contains(where: { $0.id == model }) {
-                        modelItem(kind: kind, id: model, name: model)
-                    }
-                }
-            }
-        } label: {
-            footerControl(icon: Self.providerIcon(agent), iconColor: Self.providerColor(agent), text: label,
-                          dimmed: controller.isInstalled(agent) == false)
+    // MARK: - Harness / model / effort pickers
+
+    /// Installed harnesses, each from its own discovery; unsupported ones are listed but disabled.
+    private var harnessItems: [DevDropdownItem] {
+        var items: [DevDropdownItem] = []
+        for h in harnesses {
+            let signedOut = h.supported && h.signedIn == false
+            items.append(DevDropdownItem(
+                id: h.id.rawValue, title: h.name,
+                subtitle: signedOut ? "Sign in in terminal (\(h.id.executableName) login)" : nil,
+                detail: h.version.map { "v" + $0 },
+                icon: h.id.agentKind.map(Self.providerIcon) ?? "shippingbox",
+                iconColor: h.id.agentKind.map(Self.providerColor),
+                section: h.supported ? "Harnesses" : "Installed, not supported yet",
+                isEnabled: h.supported, disabledReason: "Not supported yet", keywords: [h.id.executableName]))
         }
-        .menuStyle(.button)
-        .buttonStyle(T3GhostButtonStyle(palette: p))
-        .menuIndicator(.hidden)
+        for kind in AgentCLIKind.allCases where !harnesses.contains(where: { $0.id == kind.harnessID }) {
+            items.append(DevDropdownItem(
+                id: kind.harnessID.rawValue, title: kind.displayName,
+                subtitle: harnesses.isEmpty ? nil : DevModelCatalog.installCommand(kind),
+                icon: Self.providerIcon(kind), iconColor: Self.providerColor(kind), section: "Harnesses",
+                isEnabled: harnesses.isEmpty, disabledReason: "Not installed"))
+        }
+        return items.sorted { ($0.section == "Harnesses" ? 0 : 1) < ($1.section == "Harnesses" ? 0 : 1) }
+    }
+
+    private var harnessDropdown: some View {
+        let info = harnesses.first { $0.id == agent.harnessID }
+        return DevDropdown(isOpen: dropdownBinding("harness"), items: harnessItems, selectedID: agent.harnessID.rawValue,
+                           palette: p, width: 290,
+                           footnote: info?.signedIn == false ? "Signed out. Run `\(agent.executableName) login` in a terminal." : nil,
+                           help: "Harness", onSelect: { item in
+            if let kind = HarnessID(rawValue: item.id)?.agentKind { switchAgent(kind) }
+        }) {
+            DevPickerLabel(icon: Self.providerIcon(agent), iconColor: Self.providerColor(agent), text: agent.displayName,
+                           dimmed: controller.isInstalled(agent) == false, palette: p)
+        }
         .fixedSize()
-        .help("Agent and model for the next session")
-        .accessibilityLabel("Agent: \(agent.displayName), model: \(current ?? "default")")
+        .accessibilityLabel("Harness: \(agent.displayName)")
     }
 
-    private func modelItem(kind: AgentCLIKind, id: String, name: String) -> some View {
-        Toggle(name, isOn: Binding(get: { kind == agent && id == model }, set: { on in
-            guard on else { return }
-            switchAgent(kind)
-            switchModel(id)
-        }))
-    }
-
-    private var resumePicker: some View {
-        Menu {
-            Toggle("New session", isOn: Binding(get: { !resume }, set: { if $0 { resume = false } }))
-            Toggle("Resume last session", isOn: Binding(get: { resume }, set: { if $0 { resume = true } }))
-        } label: {
-            footerControl(icon: resume ? "arrow.counterclockwise" : "plus.bubble", iconColor: nil,
-                          text: resume ? "Resume last" : "New session", dimmed: false)
+    private var modelItems: [DevDropdownItem] {
+        var items = models.map { m in
+            DevDropdownItem(id: m.id, title: m.displayName, subtitle: m.description,
+                            detail: agent == .codex ? m.defaultEffort : nil,
+                            badge: m.isDefault ? "Default" : nil, section: agent.displayName + " models",
+                            keywords: [m.id, m.resolvedModel ?? ""])
         }
-        .menuStyle(.button)
-        .buttonStyle(T3GhostButtonStyle(palette: p))
-        .menuIndicator(.hidden)
+        if !model.isEmpty, !models.contains(where: { $0.id == model }) {
+            items.insert(DevDropdownItem(id: model, title: model, subtitle: "Not in the harness's list", section: "Current"), at: 0)
+        }
+        items.append(DevDropdownItem(id: "__refresh", title: modelsLoading ? "Refreshing…" : "Refresh models",
+                                     icon: "arrow.clockwise", isEnabled: !modelsLoading, role: .action))
+        return items
+    }
+
+    private var modelFootnote: String? {
+        if modelsLoading, listing == nil { return "Asking \(agent.executableName) for its models…" }
+        if let modelError, models.isEmpty { return modelError }
+        if case .lastKnown(let date)? = listing?.source {
+            return "Last known list · \(DevResumeOffer.relative(date)). \(agent.executableName) did not answer."
+        }
+        return nil
+    }
+
+    private var modelDropdown: some View {
+        let label = Self.shortModelName(currentModel?.displayName ?? (model.isEmpty ? (modelsLoading ? "Loading…" : "Default") : model))
+        return DevDropdown(isOpen: dropdownBinding("model"), items: modelItems,
+                           selectedID: currentModel?.id ?? (model.isEmpty ? nil : model),
+                           palette: p, width: 300, footnote: modelFootnote, help: "Model for the next session",
+                           onSelect: { item in
+            if item.id == "__refresh" { Task { await loadModels(refresh: true) } } else { switchModel(item.id) }
+        }) {
+            DevPickerLabel(text: label, dimmed: controller.isInstalled(agent) == false, maxTextWidth: 130, palette: p)
+        }
         .fixedSize()
-        .help("Continue this project's last \(agent.displayName) session")
-        .accessibilityLabel(resume ? "Resume last session" : "New session")
+        .accessibilityLabel("Model: \(label)")
     }
 
-    private func footerControl(icon: String, iconColor: Color?, text: String, dimmed: Bool) -> some View {
-        HStack(spacing: 5) {
-            Image(systemName: icon)
-                .font(.system(size: 11.5, weight: .medium))
-                .foregroundStyle(iconColor ?? (dimmed ? p.mutedForeground : p.foreground.opacity(0.8)))
-            Text(text)
-                .font(.system(size: 12.5, weight: .medium))
-                .foregroundStyle(dimmed ? p.mutedForeground : p.foreground.opacity(0.9))
-                .lineLimit(1)
-            Image(systemName: "chevron.down")
-                .font(.system(size: 8.5, weight: .semibold))
-                .foregroundStyle(p.mutedForeground)
+    /// "xhigh" → "Extra high", "low" → "Low".
+    static func effortName(_ effort: String) -> String {
+        switch effort.lowercased() {
+        case "xhigh": return "Extra high"
+        case "xlow": return "Extra low"
+        default: return effort.prefix(1).uppercased() + effort.dropFirst()
         }
-        .padding(.horizontal, 7)
-        .frame(height: 26)
-        .contentShape(Rectangle())
     }
 
-    static func providerIcon(_ kind: AgentCLIKind) -> String {
+    /// "Default (recommended)" → "Default": the footer has no room for asides.
+    static func shortModelName(_ name: String) -> String {
+        guard let paren = name.firstIndex(of: "("), paren > name.startIndex else { return name }
+        return name[..<paren].trimmingCharacters(in: .whitespaces)
+    }
+
+    private func effortDropdown(_ efforts: [String]) -> some View {
+        let items = efforts.map { e in
+            DevDropdownItem(id: e, title: Self.effortName(e), badge: e == currentModel?.defaultEffort ? "Default" : nil,
+                            section: "Reasoning effort")
+        }
+        return DevDropdown(isOpen: dropdownBinding("effort"), items: items, selectedID: currentEffort, palette: p,
+                           width: 200, help: "Reasoning effort", onSelect: { item in switchEffort(item.id) }) {
+            DevPickerLabel(icon: "brain", text: Self.effortName(currentEffort ?? "default"), maxTextWidth: 80, palette: p)
+        }
+        .fixedSize()
+        .accessibilityLabel("Reasoning effort: \(currentEffort ?? "default")")
+    }
+
+    private func loadModels(refresh: Bool) async {
+        let harness = agent.harnessID
+        modelsLoading = true
+        defer { modelsLoading = false }
+        do {
+            let result = try await HarnessModelCatalog.shared.listing(for: harness, refresh: refresh)
+            guard harness == agent.harnessID else { return }
+            listing = result
+            modelError = nil
+        } catch {
+            guard harness == agent.harnessID else { return }
+            modelError = error.localizedDescription
+        }
+    }
+
+    nonisolated static func providerIcon(_ kind: AgentCLIKind) -> String {
         kind == .claudeCode ? "asterisk" : "hexagon"
     }
 
-    static func providerColor(_ kind: AgentCLIKind) -> Color {
+    nonisolated static func providerColor(_ kind: AgentCLIKind) -> Color {
         kind == .claudeCode ? Color(hex: 0xD97757) : Color(hex: 0x10A37F)
     }
 
-    /// T3's context strip under the composer: workspace on the left, session state on the right.
+    /// T3's context strip under the composer: approval mode on the left, session state on the right.
     private var contextStrip: some View {
         HStack(spacing: 8) {
-            projectMenu(label: HStack(spacing: 5) {
-                Image(systemName: "folder").font(.system(size: 11))
-                Text(projectURL.map { ($0.path as NSString).abbreviatingWithTildeInPath } ?? "Choose project")
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+            HStack(spacing: 4) {
+                Image(systemName: settings.approvalBehavior == .fullAuto ? "exclamationmark.shield" : "checkmark.shield")
+                    .font(.system(size: 10))
+                Text(settings.approvalBehavior == .ask ? "Ask first" : settings.approvalBehavior.displayName)
             }
-            .font(.system(size: T3Metrics.textXs))
-            .foregroundStyle(p.mutedForeground)
-            .padding(.horizontal, 5).frame(height: 22), fixed: false)
-            .layoutPriority(-1)
+            .font(.system(size: T3Metrics.text2xs))
+            .foregroundStyle(settings.approvalBehavior == .fullAuto ? p.warningForeground : p.mutedForeground)
+            .help("Approval behavior (Settings → Dev)")
             Spacer(minLength: 4)
             if controller.hasBrowserTools {
                 HStack(spacing: 4) {
@@ -848,23 +1332,40 @@ struct DevPanelView: View {
             return
         }
         Task {
-            await controller.start(kind: agent, projectDir: projectURL, model: model, resume: resume)
+            await controller.start(kind: agent, projectDir: projectURL, model: model, resumeID: nil, effort: currentEffort)
             if controller.thread?.isAlive == true { controller.send(text) } else { input = text }
         }
     }
 
     private func switchAgent(_ kind: AgentCLIKind) {
         guard kind != agent else { return }
-        agentRaw = kind.rawValue
-        model = ""
+        let next = DevComposerSelection(harness: agent, model: model, effort: effort)
+            .switching(to: kind, defaultModel: settings.defaultModel(for:))
+        agentRaw = next.harness.rawValue
+        model = next.model
+        effort = next.effort
         controller.stop()
     }
 
     private func switchModel(_ id: String) {
         guard id != model else { return }
-        model = id
+        let next = DevComposerSelection(harness: agent, model: model, effort: effort).picking(model: id, in: models)
+        model = next.model
+        effort = next.effort
         // The model is fixed per session; the next send starts a new one.
-        if controller.thread != nil, !isTurnActive { controller.stop() }
+        if controller.thread != nil, !isTurnActive, !controller.isMirroring { controller.stop() }
+    }
+
+    private func switchEffort(_ value: String) {
+        guard value != currentEffort else { return }
+        effort = value
+        if controller.thread != nil, !isTurnActive, !controller.isMirroring { controller.stop() }
+    }
+
+    private func newThread() {
+        controller.stop()
+        showingSessions = false
+        input = ""
     }
 
     private func selectProject(_ path: String) {
@@ -889,37 +1390,10 @@ struct DevPanelView: View {
     }
 }
 
-// MARK: - Models
+// MARK: - Install hints
 
-/// The models offered in Dev mode's model menu, so nobody types a model ID.
+/// Install commands for the supported harnesses (models come from `HarnessModelCatalog`).
 enum DevModelCatalog {
-    typealias Model = (id: String, name: String)
-
-    /// Claude Code accepts these aliases for the current models.
-    static let claudeModels: [Model] = [("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")]
-
-    static func models(for kind: AgentCLIKind) -> [Model] {
-        switch kind {
-        case .claudeCode: return claudeModels
-        case .codex: return codexModels()
-        }
-    }
-
-    /// Codex keeps the models it offers in ~/.codex/models_cache.json; empty when it has not run yet.
-    static func codexModels(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> [Model] {
-        guard let data = try? Data(contentsOf: home.appending(path: ".codex/models_cache.json")) else { return [] }
-        return parseCodexModels(data)
-    }
-
-    static func parseCodexModels(_ data: Data) -> [Model] {
-        guard let root = try? JSONDecoder().decode(JSONValue.self, from: data),
-              case .array(let list)? = root["models"] else { return [] }
-        return list.compactMap { m in
-            guard let slug = m["slug"]?.stringValue, m["visibility"]?.stringValue != "hide" else { return nil }
-            return (slug, m["display_name"]?.stringValue ?? slug)
-        }
-    }
-
     static func installCommand(_ kind: AgentCLIKind) -> String {
         switch kind {
         case .claudeCode: return "npm install -g @anthropic-ai/claude-code"
@@ -1106,7 +1580,7 @@ private struct DevErrorView: View {
 }
 
 /// T3's status pulse for the live "Working for" line.
-private struct PulsingDot: View {
+struct PulsingDot: View {
     let color: Color
     @State private var on = false
 
