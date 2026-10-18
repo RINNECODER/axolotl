@@ -4,7 +4,7 @@ import Foundation
 // MARK: - Normalized events
 
 /// Which coding-agent CLI a Dev session drives.
-enum AgentCLIKind: String, CaseIterable, Codable {
+nonisolated enum AgentCLIKind: String, CaseIterable, Codable {
     case claudeCode
     case codex
 
@@ -66,6 +66,9 @@ struct CLIExit: Equatable {
 enum CLIEvent: Equatable {
     /// Session (Claude) or thread (Codex) id; save it to resume later. Emitted once per session.
     case sessionStarted(id: String)
+    /// A user message read back from a session transcript (history replay / live sync).
+    /// Adapters never emit it for Luna's own sends; `DevThreadState.userSent` covers those.
+    case userMessage(String)
     /// Streaming assistant text.
     case textDelta(String)
     /// One finished assistant message (the full text of what the deltas built).
@@ -124,12 +127,22 @@ protocol AgentCLISession: AnyObject {
 }
 
 enum AgentCLISessions {
-    /// A new session wired to Luna's MCP bridge when it is on.
-    static func make(_ kind: AgentCLIKind) -> AgentCLISession {
-        let mcp = LunaMCPBridge.shared.devAttachment()
+    /// A new session configured from `DevSettings` (approval behavior; Luna's MCP bridge
+    /// attached when the bridge is on and `autoWireBrowserTools` is set).
+    static func make(_ kind: AgentCLIKind, settings: DevSettings? = nil) -> AgentCLISession {
+        let settings = settings ?? .shared
+        let mcp = settings.autoWireBrowserTools ? LunaMCPBridge.shared.devAttachment() : nil
+        let behavior = settings.approvalBehavior
         switch kind {
-        case .claudeCode: return ClaudeCodeAdapter(mcp: mcp)
-        case .codex: return CodexAdapter(mcp: mcp)
+        case .claudeCode:
+            let adapter = ClaudeCodeAdapter(mcp: mcp)
+            adapter.permissionMode = behavior.claudePermissionMode
+            return adapter
+        case .codex:
+            let adapter = CodexAdapter(mcp: mcp)
+            adapter.approvalPolicy = behavior.codexApprovalPolicy
+            adapter.sandbox = behavior.codexSandbox
+            return adapter
         }
     }
 }
@@ -152,6 +165,56 @@ nonisolated struct AgentCLIResumeStore {
 
     func save(_ id: String, kind: AgentCLIKind, projectDir: URL) {
         defaults.set(id, forKey: Self.key(kind: kind, projectDir: projectDir))
+        upsert(id: id, kind: kind, projectDir: projectDir) { _ in }
+    }
+
+    // MARK: Sessions started in Luna (for resume identification)
+
+    /// A session Luna started (or took over) in a project.
+    struct Record: Codable, Equatable {
+        let id: String
+        let kind: AgentCLIKind
+        var updatedAt: Date
+        /// First user message, truncated (`SessionSync.titleLimit`).
+        var title: String?
+    }
+
+    static let historyLimit = 20
+
+    static func historyKey(projectDir: URL) -> String {
+        let path = projectDir.standardizedFileURL.resolvingSymlinksInPath().path
+        let digest = SHA256.hash(data: Data(path.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
+        return "devCLI.history.\(digest)"
+    }
+
+    /// Newest first, both CLIs.
+    func history(projectDir: URL) -> [Record] {
+        guard let data = defaults.data(forKey: Self.historyKey(projectDir: projectDir)),
+              let records = try? JSONDecoder().decode([Record].self, from: data) else { return [] }
+        return records.sorted { $0.updatedAt > $1.updatedAt }
+    }
+
+    func isLunaSession(_ id: String, projectDir: URL) -> Bool {
+        history(projectDir: projectDir).contains { $0.id == id }
+    }
+
+    /// Records the first prompt as the title (later calls keep the first one) and bumps `updatedAt`.
+    func noteActivity(id: String, kind: AgentCLIKind, projectDir: URL, prompt: String?) {
+        upsert(id: id, kind: kind, projectDir: projectDir) { record in
+            if record.title == nil, let prompt { record.title = SessionSync.title(from: prompt) }
+        }
+    }
+
+    private func upsert(id: String, kind: AgentCLIKind, projectDir: URL, _ change: (inout Record) -> Void) {
+        var records = history(projectDir: projectDir)
+        var record = records.first { $0.id == id } ?? Record(id: id, kind: kind, updatedAt: Date(), title: nil)
+        records.removeAll { $0.id == id }
+        record.updatedAt = Date()
+        change(&record)
+        records.insert(record, at: 0)
+        if let data = try? JSONEncoder().encode(Array(records.prefix(Self.historyLimit))) {
+            defaults.set(data, forKey: Self.historyKey(projectDir: projectDir))
+        }
     }
 
     func forget(kind: AgentCLIKind, projectDir: URL) {

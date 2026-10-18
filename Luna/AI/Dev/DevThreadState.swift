@@ -94,6 +94,10 @@ struct DevThreadState: Equatable {
         case .sessionStarted(let id):
             sessionID = id
 
+        case .userMessage(let text):
+            closeStreamingText()
+            items.append(.user(text))
+
         case .textDelta(let delta):
             if case .assistant(let text, true)? = items.last {
                 items[items.count - 1] = .assistant(text: text + delta, streaming: true)

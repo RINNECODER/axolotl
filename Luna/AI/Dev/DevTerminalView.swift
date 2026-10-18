@@ -11,6 +11,12 @@ struct DevTerminalView: NSViewRepresentable {
     var isDark = true
     var onExit: (Int32?) -> Void = { _ in }
 
+    /// True when a Dev terminal is the window's first responder, so window-level key
+    /// monitors should pass plain keys (Esc, arrows, Return) through to it.
+    static func hasKeyboardFocus(in window: NSWindow?) -> Bool {
+        window?.firstResponder is TerminalView
+    }
+
     func makeCoordinator() -> Coordinator { Coordinator(onExit: onExit) }
 
     func makeNSView(context: Context) -> TerminalView {
@@ -49,8 +55,23 @@ struct DevTerminalView: NSViewRepresentable {
 
         init(onExit: @escaping (Int32?) -> Void) { self.onExit = onExit }
 
+        private var pendingLaunch: (kind: AgentCLIKind, projectDir: URL)?
+        private weak var view: TerminalView?
+
+        /// Launches once the view has its real size. Starting at the placeholder frame made
+        /// the CLI draw its first screen for ~50 columns and then reflow on the first resize,
+        /// which leaves stale lines behind in Ink / ratatui TUIs.
         func start(kind: AgentCLIKind, projectDir: URL, in view: TerminalView) {
-            let pty = PTYSession(executable: kind.executableName, workingDirectory: projectDir)
+            pendingLaunch = (kind, projectDir)
+            self.view = view
+            // Fallback if no layout pass reports a usable size.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.launchIfPending() }
+        }
+
+        private func launchIfPending() {
+            guard let (kind, projectDir) = pendingLaunch, let view else { return }
+            pendingLaunch = nil
+            let pty = PTYSession(executable: DevSettings.executable(for: kind), workingDirectory: projectDir)
             let terminal = view.getTerminal()
             do {
                 let onExit = self.onExit
@@ -73,6 +94,7 @@ struct DevTerminalView: NSViewRepresentable {
         }
 
         func stop() {
+            pendingLaunch = nil
             reader?.cancel()
             reader = nil
             pty?.terminate()
@@ -86,6 +108,11 @@ struct DevTerminalView: NSViewRepresentable {
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+            if pty == nil, pendingLaunch != nil, newCols >= 20, newRows >= 5 {
+                // Let SwiftUI finish this layout pass, then launch at the settled size.
+                DispatchQueue.main.async { [weak self] in self?.launchIfPending() }
+                return
+            }
             pty?.resize(columns: UInt16(max(newCols, 1)), rows: UInt16(max(newRows, 1)))
         }
 

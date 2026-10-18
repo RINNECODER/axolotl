@@ -372,6 +372,9 @@ struct BrowserShellView: View {
                         return nil
                     }
                 }
+                // Dev mode's raw terminal owns plain keys while focused: Esc, arrows and Return go to
+                // the CLI (a stale address-bar focus flag used to swallow Esc there).
+                if DevTerminalView.hasKeyboardFocus(in: host) { return event }
                 // Address bar suggestions: Down/Up/Enter when dropdown is visible (keyboard selection + autofill)
                 if addressBarKeyState.visible {
                     if event.keyCode == 125 { // Down
