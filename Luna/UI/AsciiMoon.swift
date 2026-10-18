@@ -37,7 +37,7 @@ struct AsciiMoon: View {
 
 /// Reports whether the hosting window is actually on screen (not occluded,
 /// minimized or hidden), from AppKit notifications rather than app focus.
-private struct WindowVisibilityReader: NSViewRepresentable {
+struct WindowVisibilityReader: NSViewRepresentable {
     @Binding var isVisible: Bool
 
     func makeNSView(context: Context) -> ProbeView { ProbeView() }
