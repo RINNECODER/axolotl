@@ -86,6 +86,8 @@ final class DevSyncTests: XCTestCase {
         XCTAssertEqual(HarnessCatalog.parseClaudeAuthStatus(#"{"loggedIn":false}"#), false)
         XCTAssertNil(HarnessCatalog.parseClaudeAuthStatus("not json"))
         XCTAssertEqual(HarnessCatalog.parseCodexLoginStatus(status: 0, output: "Logged in using ChatGPT"), true)
+        // Codex writes the status line to stderr, so captured stdout is empty when signed in.
+        XCTAssertEqual(HarnessCatalog.parseCodexLoginStatus(status: 0, output: ""), true)
         XCTAssertEqual(HarnessCatalog.parseCodexLoginStatus(status: 1, output: "Not logged in"), false)
     }
 

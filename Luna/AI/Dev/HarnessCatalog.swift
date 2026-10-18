@@ -178,9 +178,10 @@ actor HarnessCatalog {
         return loggedIn
     }
 
-    /// `codex login status`: exit 0 with "Logged in …" when signed in, non-zero otherwise.
+    /// `codex login status`: exit 0 when signed in, non-zero otherwise. Codex prints
+    /// "Logged in using …" to stderr, so stdout is usually empty; the exit status decides.
     static func parseCodexLoginStatus(status: Int32, output: String) -> Bool? {
-        if status == 0 { return output.localizedCaseInsensitiveContains("logged in") && !output.localizedCaseInsensitiveContains("not logged in") }
+        if status == 0 { return !output.localizedCaseInsensitiveContains("not logged in") }
         return output.localizedCaseInsensitiveContains("not logged in") ? false : nil
     }
 
