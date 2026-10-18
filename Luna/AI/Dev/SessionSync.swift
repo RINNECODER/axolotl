@@ -23,6 +23,48 @@ nonisolated struct ExternalSession: Identifiable, Hashable, Sendable {
     let messageCount: Int
     /// Started (or taken over) by Luna rather than in a terminal.
     let startedInLuna: Bool
+    /// Where the session is live right now: `.luna` (a Luna terminal or headless run, see
+    /// `LunaActiveSessions`), `.externalTerminal` (a CLI outside Luna; its pid when libproc
+    /// found the process, nil when only the recent write gave it away), nil = not live.
+    var liveLocation: SessionLocation? = nil
+    /// Last model the transcript recorded (Claude `message.model`, Codex `turn_context.model`).
+    var model: String? = nil
+
+    /// Live in Luna or outside it. (`isLive` alone means "outside Luna": the read-only case.)
+    var isLiveAnywhere: Bool { liveLocation != nil }
+    var ref: DevSessionRef { DevSessionRef(harness: harness, id: id, projectDir: projectDir) }
+}
+
+/// Where a session is being written right now.
+nonisolated enum SessionLocation: Equatable, Hashable, Sendable {
+    /// Luna runs it (its terminal or a headless adapter).
+    case luna
+    /// A CLI outside Luna (Terminal, iTerm, an IDE). pid nil = found only by a recent write.
+    case externalTerminal(pid: pid_t?)
+}
+
+/// Enough to resume a session: harness, id and the folder it runs in.
+nonisolated struct DevSessionRef: Equatable, Hashable, Sendable {
+    let harness: AgentCLIKind
+    let id: String
+    let projectDir: URL
+}
+
+/// Session ids Luna is running right now (terminal or headless), readable from any thread.
+/// `DevSession` registers and unregisters ids; `SessionSync` reports them as `.luna`.
+nonisolated final class LunaActiveSessions: @unchecked Sendable {
+    static let shared = LunaActiveSessions()
+    private let lock = NSLock()
+    private var ids: [String: Int] = [:]
+
+    func register(_ id: String) { lock.lock(); ids[id, default: 0] += 1; lock.unlock() }
+    func unregister(_ id: String) {
+        lock.lock(); defer { lock.unlock() }
+        guard let n = ids[id] else { return }
+        if n <= 1 { ids[id] = nil } else { ids[id] = n - 1 }
+    }
+    func contains(_ id: String) -> Bool { lock.lock(); defer { lock.unlock() }; return ids[id] != nil }
+    var all: Set<String> { lock.lock(); defer { lock.unlock() }; return Set(ids.keys) }
 }
 
 /// The session the UI should offer to resume for a project.
@@ -85,19 +127,106 @@ actor SessionSync {
         let codex = codexSessions(projectDir: projectDir, limit: limit)
         var out: [ExternalSession] = []
         for (kind, found) in [(AgentCLIKind.claudeCode, claude), (.codex, codex)] {
-            let processInProject = live.contains { $0.harness == kind && Self.samePath($0.cwd, projectDir) }
             let newest = found.max { $0.1.updatedAt < $1.1.updatedAt }?.1.id
+            let pid = live.first { $0.harness == kind && Self.samePath($0.cwd, projectDir) }?.pid
             for (file, summary) in found where !excluding.contains(summary.id) {
-                let startedInLuna = resumeStore.isLunaSession(summary.id, projectDir: projectDir) || summary.originatedInLuna
-                let isLive = Self.isLive(updatedAt: summary.updatedAt, now: now(), processInProject: processInProject,
-                                         isNewest: summary.id == newest, startedInLuna: startedInLuna)
-                out.append(ExternalSession(harness: kind, id: summary.id, file: file, projectDir: projectDir,
-                                           title: summary.title, firstPrompt: summary.firstPrompt,
-                                           updatedAt: summary.updatedAt, isLive: isLive,
-                                           messageCount: summary.messageCount, startedInLuna: startedInLuna))
+                out.append(makeSession(kind: kind, file: file, projectDir: projectDir, summary: summary,
+                                       processPID: pid, isNewest: summary.id == newest))
             }
         }
         return Array(out.sorted { $0.updatedAt > $1.updatedAt }.prefix(limit))
+    }
+
+    /// Every session across both harnesses and all projects, newest first (T3 Code's
+    /// AgentSessionScanner does the same walk: Claude project folders + Codex rollouts, grouped
+    /// by the transcript's own `cwd`; MIT, apps/server/src/project/AgentSessionScanner.ts).
+    /// Only titles / first prompts (truncated) are kept in memory; nothing is written or logged.
+    func allSessions(limit: Int = 50) -> [ExternalSession] {
+        var files: [(URL, AgentCLIKind)] = []
+        let fm = FileManager.default
+        for dir in (try? fm.contentsOfDirectory(at: claudeRoot, includingPropertiesForKeys: nil)) ?? [] {
+            for file in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            where file.pathExtension == "jsonl" { files.append((file, .claudeCode)) }
+        }
+        files += codexRollouts(since: now().addingTimeInterval(-Self.codexLookback)).map { ($0, .codex) }
+        let newestFiles = files.compactMap { pair in FileStamp(pair.0).map { (pair.0, pair.1, $0.modified) } }
+            .sorted { $0.2 > $1.2 }
+            .prefix(limit)
+        let live = processes()
+        var found: [(URL, AgentCLIKind, URL, TranscriptSummary)] = []
+        for (file, kind, _) in newestFiles {
+            guard let summary = summary(of: file, harness: kind) else { continue }
+            let cwd = summary.cwd ?? (kind == .codex ? codexHead(file)?.cwd : nil)
+                ?? ProjectFinder.decodeClaudeFolderName(file.deletingLastPathComponent().lastPathComponent).first
+            guard let cwd else { continue }
+            found.append((file, kind, URL(fileURLWithPath: cwd, isDirectory: true), summary))
+        }
+        var newestPerProject: [String: String] = [:]
+        for (_, kind, dir, summary) in found {
+            let key = "\(kind.rawValue)|\(dir.standardizedFileURL.path)"
+            if newestPerProject[key] == nil { newestPerProject[key] = summary.id } // `found` is newest first
+        }
+        return found.map { file, kind, dir, summary in
+            let pid = live.first { $0.harness == kind && Self.samePath($0.cwd, dir) }?.pid
+            return makeSession(kind: kind, file: file, projectDir: dir, summary: summary, processPID: pid,
+                               isNewest: newestPerProject["\(kind.rawValue)|\(dir.standardizedFileURL.path)"] == summary.id)
+        }
+    }
+
+    private func makeSession(kind: AgentCLIKind, file: URL, projectDir: URL, summary: TranscriptSummary,
+                             processPID: pid_t?, isNewest: Bool) -> ExternalSession {
+        let startedInLuna = resumeStore.isLunaSession(summary.id, projectDir: projectDir) || summary.originatedInLuna
+        let inLuna = LunaActiveSessions.shared.contains(summary.id)
+        let isLive = !inLuna && Self.isLive(updatedAt: summary.updatedAt, now: now(), processInProject: processPID != nil,
+                                            isNewest: isNewest, startedInLuna: startedInLuna)
+        let location: SessionLocation? = inLuna ? .luna : (isLive ? .externalTerminal(pid: processPID) : nil)
+        return ExternalSession(harness: kind, id: summary.id, file: file, projectDir: projectDir,
+                               title: summary.title, firstPrompt: summary.firstPrompt,
+                               updatedAt: summary.updatedAt, isLive: isLive,
+                               messageCount: summary.messageCount, startedInLuna: startedInLuna,
+                               liveLocation: location, model: summary.model)
+    }
+
+    /// Where `session` is live now (`.luna`, an outside CLI, or nil = resumable).
+    func liveLocation(of session: ExternalSession) -> SessionLocation? {
+        if LunaActiveSessions.shared.contains(session.id) { return .luna }
+        guard isStillLive(session) else { return nil }
+        let pid = processes().first { $0.harness == session.harness && Self.samePath($0.cwd, session.projectDir) }?.pid
+        return .externalTerminal(pid: pid)
+    }
+
+    /// The transcript for a known id: Claude `<project folder>/<id>.jsonl`, Codex
+    /// `rollout-…-<id>.jsonl`. nil until the CLI has written it.
+    func sessionFile(harness: AgentCLIKind, id: String, projectDir: URL) -> URL? {
+        switch harness {
+        case .claudeCode:
+            for path in Self.pathVariants(projectDir) {
+                let file = claudeRoot.appendingPathComponent(Self.claudeProjectFolderName(path), isDirectory: true)
+                    .appendingPathComponent("\(id).jsonl")
+                if FileManager.default.fileExists(atPath: file.path) { return file }
+            }
+            return nil
+        case .codex:
+            return codexRollouts(since: .distantPast).first { $0.lastPathComponent.hasSuffix("-\(id).jsonl") }
+        }
+    }
+
+    /// Rollout files modified since `since`.
+    private func codexRollouts(since: Date) -> [URL] {
+        guard let enumerator = FileManager.default.enumerator(at: codexRoot, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        var out: [URL] = []
+        for case let url as URL in enumerator where url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" {
+            if since == .distantPast || (FileStamp(url)?.modified ?? .distantPast) >= since { out.append(url) }
+        }
+        return out
+    }
+
+    private func codexHead(_ url: URL) -> CodexHead? {
+        guard let stamp = FileStamp(url) else { return nil }
+        if let cached = codexHeads[url.path], cached.stamp.modified == stamp.modified || cached.head != nil { return cached.head }
+        let head = Self.readCodexHead(url)
+        codexHeads[url.path] = (stamp, head)
+        return head
     }
 
     /// The most recent session to offer for "Resume" in `projectDir`, from disk, else from
@@ -124,9 +253,13 @@ actor SessionSync {
     /// History first, then new entries as they are appended (polled every `interval`).
     /// Ends when the consumer stops iterating.
     nonisolated func follow(_ session: ExternalSession, interval: TimeInterval = 0.4) -> AsyncStream<CLIEvent> {
+        follow(file: session.file, harness: session.harness, interval: interval)
+    }
+
+    /// Tails any transcript file; waits for it to appear (a new Claude session writes its
+    /// file only after the first prompt).
+    nonisolated func follow(file: URL, harness: AgentCLIKind, interval: TimeInterval = 0.4) -> AsyncStream<CLIEvent> {
         let (stream, continuation) = AsyncStream.makeStream(of: CLIEvent.self, bufferingPolicy: .unbounded)
-        let file = session.file
-        let harness = session.harness
         let task = Task.detached(priority: .utility) {
             var tailer = TranscriptTailer(harness: harness)
             var offset: UInt64 = 0
@@ -190,7 +323,7 @@ actor SessionSync {
 
     // MARK: Codex storage
 
-    private struct CodexHead: Sendable { let id: String; let cwd: String; let originator: String? }
+    struct CodexHead: Sendable { let id: String; let cwd: String; let originator: String? }
 
     private func codexSessions(projectDir: URL, limit: Int) -> [(URL, TranscriptSummary)] {
         let cutoff = now().addingTimeInterval(-Self.codexLookback)
@@ -218,7 +351,7 @@ actor SessionSync {
     }
 
     /// Reads `session_meta` from the first line (which can be long: it embeds instructions).
-    private static func readCodexHead(_ url: URL) -> CodexHead? {
+    static func readCodexHead(_ url: URL) -> CodexHead? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var data = Data()
@@ -313,6 +446,10 @@ nonisolated struct TranscriptSummary: Equatable, Sendable {
     let updatedAt: Date
     /// Codex `originator == "luna"` (Luna's app-server clientInfo name).
     let originatedInLuna: Bool
+    /// Working directory the CLI recorded (Claude entries' `cwd`, Codex `session_meta.cwd`).
+    var cwd: String? = nil
+    /// Last model recorded.
+    var model: String? = nil
 
     struct Builder {
         let harness: AgentCLIKind
@@ -321,6 +458,8 @@ nonisolated struct TranscriptSummary: Equatable, Sendable {
         private var aiTitle: String?
         private var count = 0
         private var originatedInLuna = false
+        private var cwd: String?
+        private var model: String?
 
         init(harness: AgentCLIKind) { self.harness = harness }
 
@@ -334,6 +473,9 @@ nonisolated struct TranscriptSummary: Equatable, Sendable {
 
         private mutating func addClaude(_ o: [String: Any]) {
             if id == nil, let sid = o["sessionId"] as? String { id = sid }
+            if cwd == nil, let c = o["cwd"] as? String, !c.isEmpty { cwd = c }
+            if o["type"] as? String == "assistant", let m = (o["message"] as? [String: Any])?["model"] as? String,
+               !m.isEmpty, !m.hasPrefix("<") { model = m }
             if o["type"] as? String == "ai-title", let t = o["aiTitle"] as? String, !t.isEmpty { aiTitle = t }
             for entry in TranscriptMapper.claude(o) {
                 switch entry {
@@ -350,6 +492,10 @@ nonisolated struct TranscriptSummary: Equatable, Sendable {
             if o["type"] as? String == "session_meta", let p = o["payload"] as? [String: Any] {
                 if id == nil { id = p["id"] as? String }
                 if (p["originator"] as? String)?.lowercased() == "luna" { originatedInLuna = true }
+                if cwd == nil, let c = p["cwd"] as? String, !c.isEmpty { cwd = c }
+            }
+            if o["type"] as? String == "turn_context", let m = (o["payload"] as? [String: Any])?["model"] as? String, !m.isEmpty {
+                model = m
             }
             for entry in TranscriptMapper.codex(o) {
                 switch entry {
@@ -367,7 +513,7 @@ nonisolated struct TranscriptSummary: Equatable, Sendable {
             let prompt = firstPrompt.map(SessionSync.title(from:)) ?? ""
             let title = aiTitle.map(SessionSync.title(from:)) ?? prompt
             return TranscriptSummary(id: id, title: title, firstPrompt: prompt, messageCount: count,
-                                     updatedAt: updatedAt, originatedInLuna: originatedInLuna)
+                                     updatedAt: updatedAt, originatedInLuna: originatedInLuna, cwd: cwd, model: model)
         }
     }
 }

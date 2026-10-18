@@ -32,7 +32,7 @@ struct DevTerminalView: NSViewRepresentable {
         Self.applyColors(to: nsView, isDark: isDark)
     }
 
-    private static func applyColors(to view: TerminalView, isDark: Bool) {
+    static func applyColors(to view: TerminalView, isDark: Bool) {
         let bg = isDark ? NSColor(srgbRed: 0x11 / 255, green: 0x11 / 255, blue: 0x11 / 255, alpha: 1) : .white
         guard view.nativeBackgroundColor != bg else { return }
         view.nativeBackgroundColor = bg

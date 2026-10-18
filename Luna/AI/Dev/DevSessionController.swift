@@ -3,7 +3,7 @@ import Foundation
 import Observation
 
 /// Dev mode settings, shared by the panel views (UserDefaults keys).
-enum DevPrefs {
+nonisolated enum DevPrefs {
     static let panelModeKey = "luna_ai_panel_mode"
     static let agentKey = "luna_dev_agent"
     static let projectKey = "luna_dev_project"
