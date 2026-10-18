@@ -197,7 +197,32 @@ nonisolated enum DevTerminalScreen {
         "Do you want to proceed?", "Do you want to make this edit", "Do you want to create",
         "Do you want to allow", "Would you like to run the following command", "Would you like to make the following edits",
         "Allow command?", "Approve this", "Yes, and don't ask again",
+    ] + trustMarkers
+
+    /// Claude Code's / Codex's "trust this folder?" screen on a project's first run.
+    static let trustMarkers = [
+        "Do you trust the files in this folder", "Is this a project you created or one you trust",
+        "Do you trust the contents of this directory", "Yes, I trust this folder",
     ]
+
+    /// What the terminal emulator answers on its own to the program's queries (device
+    /// attributes `ESC[?…c`, cursor position `ESC[…R`, keyboard protocol `ESC[?…u`, OSC / DCS
+    /// replies, focus in / out). Claude Code asks these at startup; they are not the user typing.
+    static func isTerminalReply(_ data: Data) -> Bool {
+        let bytes = [UInt8](data)
+        guard bytes.count >= 3, bytes[0] == 0x1B else { return false }
+        if bytes[1] == 0x5D || bytes[1] == 0x50 { return true } // OSC, DCS
+        guard bytes[1] == 0x5B, let last = bytes.last else { return false }
+        if bytes.count == 3 { return last == 0x49 || last == 0x4F } // ESC[I / ESC[O focus
+        let params = bytes[2..<(bytes.count - 1)]
+        guard params.allSatisfy({ (0x30...0x3F).contains($0) }) else { return false }
+        return [0x63, 0x52, 0x6E, 0x75, 0x74, 0x79].contains(last) // c R n u t y
+    }
+
+    static func showsTrustPrompt(_ text: String) -> Bool {
+        let flat = text.filter { !$0.isWhitespace }
+        return trustMarkers.contains { flat.contains($0.filter { !$0.isWhitespace }) }
+    }
 
     /// Printable text of terminal output, escape sequences removed.
     static func plainText(_ data: Data) -> String {
@@ -229,6 +254,53 @@ nonisolated enum DevTerminalScreen {
     }
 }
 
+/// When a freshly launched CLI can take typed input. Text typed while the TUI is still drawing
+/// its first screen is dropped, so `DevTerminalController.send(text:)` queues until this says
+/// ready: some output has arrived and gone quiet, not before `minimum` after launch, and never
+/// while a trust prompt is on screen. After `maximum` it is ready anyway (no output to wait on).
+nonisolated struct DevCLIReadiness: Equatable, Sendable {
+    var launchedAt: Date
+    var firstOutputAt: Date?
+    var lastOutputAt: Date?
+    var showsTrustPrompt = false
+    /// Once ready, stays ready (later output is the CLI working, not starting).
+    private(set) var latched = false
+    var quiet: TimeInterval = 1.0
+    var minimum: TimeInterval = 2
+    var maximum: TimeInterval = 12
+
+    init(launchedAt: Date) { self.launchedAt = launchedAt }
+
+    /// A shell is ready at once.
+    static func immediate(_ now: Date = Date()) -> DevCLIReadiness {
+        var r = DevCLIReadiness(launchedAt: now)
+        r.latched = true
+        return r
+    }
+
+    /// `visible`: the chunk printed something (mode switches and cursor moves alone don't count,
+    /// so a CLI that sets up the screen and then loads for a while is not taken as ready).
+    mutating func noteOutput(screen: String, visible: Bool = true, at now: Date) {
+        showsTrustPrompt = DevTerminalScreen.showsTrustPrompt(screen)
+        guard visible else { return }
+        if firstOutputAt == nil { firstOutputAt = now }
+        lastOutputAt = now
+    }
+
+    /// The user answered what was on screen (any keystroke).
+    mutating func noteUserInput() { showsTrustPrompt = false }
+
+    mutating func isReady(at now: Date) -> Bool {
+        if showsTrustPrompt { return false }
+        if latched { return true }
+        let age = now.timeIntervalSince(launchedAt)
+        var ready = age >= maximum
+        if let last = lastOutputAt, age >= minimum, now.timeIntervalSince(last) >= quiet { ready = true }
+        if ready { latched = true }
+        return ready
+    }
+}
+
 // MARK: - Controller
 
 /// One real terminal that outlives its view: the PTY and the SwiftTerm view are owned here, so
@@ -255,6 +327,12 @@ final class DevTerminalController {
     private(set) var isShowingApprovalPrompt = false
     /// The exact launch (for tests and a "command" tooltip; contains no secrets).
     private(set) var lastLaunch: DevTerminalLaunch?
+    /// The CLI can take typed text (see `DevCLIReadiness`); sends before that are queued.
+    private(set) var isReady = false
+    /// Chat messages waiting for the CLI to be ready.
+    private(set) var queuedSends: [String] = []
+    /// Claude's / Codex's folder trust question is on screen (answer it in the terminal).
+    private(set) var isShowingTrustPrompt = false
 
     /// Called once the session id is known (`sessionID` set). `DevSession` uses it to follow the file.
     @ObservationIgnored var onSessionDiscovered: ((String, URL?) -> Void)?
@@ -267,6 +345,8 @@ final class DevTerminalController {
     @ObservationIgnored private var mcpConfig: URL?
     @ObservationIgnored private var screenTail = Data()
     @ObservationIgnored private var pendingLaunch: DevTerminalLaunch?
+    @ObservationIgnored private var readiness = DevCLIReadiness.immediate()
+    @ObservationIgnored private var flushTask: Task<Void, Never>?
     @ObservationIgnored private var bridge: TerminalBridge?
     @ObservationIgnored private var _view: TerminalView?
     @ObservationIgnored private let watcher: SessionStoreWatcher
@@ -315,6 +395,15 @@ final class DevTerminalController {
         sessionID = nil
         sessionFile = nil
         isShowingApprovalPrompt = false
+        isShowingTrustPrompt = false
+        queuedSends = []
+        if mode.harness != nil {
+            readiness = DevCLIReadiness(launchedAt: Date())
+            isReady = false
+        } else {
+            readiness = .immediate()
+            isReady = true
+        }
         if mode.harness != nil {
             mcp = mcpProvider()
             if let mcp, mode.harness == .claudeCode { mcpConfig = try? mcp.writeClaudeConfig() }
@@ -355,6 +444,7 @@ final class DevTerminalController {
             return
         }
         self.pty = pty
+        scheduleFlush() // also flips `isReady` once the CLI has drawn its first screen
         reader = Task { @MainActor [weak self] in
             for await chunk in pty.output {
                 guard let self, self.pty === pty else { return }
@@ -386,14 +476,47 @@ final class DevTerminalController {
     private func noteScreen(_ chunk: Data) {
         screenTail.append(chunk)
         if screenTail.count > 8_192 { screenTail = screenTail.suffix(8_192) }
-        let showing = DevTerminalScreen.showsApprovalPrompt(DevTerminalScreen.plainText(screenTail))
+        let screen = DevTerminalScreen.plainText(screenTail)
+        let showing = DevTerminalScreen.showsApprovalPrompt(screen)
         if showing != isShowingApprovalPrompt { isShowingApprovalPrompt = showing }
+        let visible = DevTerminalScreen.plainText(chunk).contains { !$0.isWhitespace }
+        readiness.noteOutput(screen: screen, visible: visible, at: Date())
+        if readiness.showsTrustPrompt != isShowingTrustPrompt { isShowingTrustPrompt = readiness.showsTrustPrompt }
+    }
+
+    private func checkReady() -> Bool {
+        let ready = readiness.isReady(at: Date())
+        if ready != isReady { isReady = ready }
+        return ready
+    }
+
+    /// Sends queued messages once the CLI is ready, one at a time.
+    private func scheduleFlush() {
+        guard flushTask == nil else { return }
+        flushTask = Task { @MainActor [weak self] in
+            while let self, self.isRunning, !Task.isCancelled {
+                if self.checkReady() {
+                    if self.queuedSends.isEmpty { break }
+                    self.type(self.queuedSends.removeFirst())
+                    try? await Task.sleep(for: .milliseconds(600))
+                    continue
+                }
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            self?.flushTask = nil
+        }
     }
 
     /// Any keystroke answers / dismisses what is on screen; detection restarts from new output.
     fileprivate func userTyped(_ data: Data) {
+        if DevTerminalScreen.isTerminalReply(data) {
+            pty?.write(data)
+            return
+        }
         screenTail.removeAll()
         if isShowingApprovalPrompt { isShowingApprovalPrompt = false }
+        readiness.noteUserInput()
+        if isShowingTrustPrompt { isShowingTrustPrompt = false }
         pty?.write(data)
     }
 
@@ -408,7 +531,18 @@ final class DevTerminalController {
     /// Types `text` into the running program and presses Return (bracketed paste for multi-line).
     /// The Return goes separately after a short pause: Ink and ratatui treat a burst ending in
     /// "\r" as pasted text and would not submit it.
+    /// Queued (in order) until the CLI is ready to take input.
     func send(text: String) {
+        guard isRunning else { return }
+        if !queuedSends.isEmpty || !checkReady() {
+            queuedSends.append(text)
+            scheduleFlush()
+            return
+        }
+        type(text)
+    }
+
+    private func type(_ text: String) {
         guard let pty, isRunning else { return }
         let keys = DevTerminalCommand.keystrokes(for: text)
         screenTail.removeAll()
@@ -429,6 +563,9 @@ final class DevTerminalController {
     /// SIGHUP to the program (SIGKILL after 2 s), like closing a Terminal tab.
     func terminate() {
         pendingLaunch = nil
+        flushTask?.cancel()
+        flushTask = nil
+        queuedSends = []
         watcherTask?.cancel()
         watcherTask = nil
         reader?.cancel()

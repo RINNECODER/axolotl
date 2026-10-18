@@ -194,6 +194,14 @@ final class DevSession: Identifiable {
 
     func interrupt() { headless?.interrupt() }
 
+    /// New model / effort / approval for this session. An idle headless adapter is closed so the
+    /// next send resumes the same id with the new setup; a running terminal keeps its own.
+    func updateSetup(_ next: DevSessionSetup) {
+        guard next != setup else { return }
+        setup = next
+        if headlessAlive, !timeline.isTurnActive { closeHeadless() }
+    }
+
     func respond(approvalID: String, decision: CLIApprovalDecision) {
         headless?.respond(approvalID: approvalID, decision: decision)
         timeline.decided(approvalID: approvalID, decision)

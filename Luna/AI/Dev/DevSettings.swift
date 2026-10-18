@@ -80,8 +80,9 @@ nonisolated struct DevSessionSetup: Codable, Equatable, Hashable, Sendable {
 
 /// Named accent colors for Dev mode (the UI maps each to its palette).
 nonisolated enum DevAccent: String, CaseIterable, Codable, Sendable {
-    case blue, violet, green, orange, pink, graphite
-    var displayName: String { rawValue.capitalized }
+    /// Luna's own moonlight steel blue (the default).
+    case moon, blue, violet, green, orange, pink, graphite
+    var displayName: String { self == .moon ? "Moonlight" : rawValue.capitalized }
 }
 
 nonisolated enum DevDensity: String, CaseIterable, Codable, Sendable {
@@ -139,10 +140,16 @@ final class DevSettings {
         static let timelineStyle = "luna_dev.timelineStyle"
     }
 
-    /// Folders `ProjectFinder` scans (shallowly) for git repos when none are configured.
-    nonisolated static var defaultProjectSearchRoots: [String] {
+    /// Folders `ProjectFinder` scans (shallowly) for git repos when none are configured: none.
+    /// Until the user adds roots in Settings → Dev → Projects, projects come from Claude / Codex
+    /// session stores and Luna's recents only, so Dev never triggers a Documents access prompt.
+    nonisolated static var defaultProjectSearchRoots: [String] { [] }
+
+    /// Common folders offered as one-click roots in Settings (not scanned until added).
+    nonisolated static var suggestedProjectSearchRoots: [String] {
         let home = NSHomeDirectory()
-        return [home] + ["Developer", "Documents", "Projects", "code"].map { home + "/" + $0 }
+        return ["Developer", "Projects", "code", "Documents"].map { home + "/" + $0 }
+            .filter { FileManager.default.fileExists(atPath: $0) }
     }
 
     /// Open straight into the last session instead of the Dev home view.
@@ -252,7 +259,7 @@ final class DevSettings {
             ?? DevSessionSetup(harness: harness, model: models[harness.harnessID], approvalBehavior: approval)
         hiddenProjects = Self.storedHiddenProjects(defaults)
         projectSearchRoots = Self.storedProjectSearchRoots(defaults)
-        accent = defaults.string(forKey: Key.accent).flatMap(DevAccent.init(rawValue:)) ?? .blue
+        accent = defaults.string(forKey: Key.accent).flatMap(DevAccent.init(rawValue:)) ?? .moon
         density = defaults.string(forKey: Key.density).flatMap(DevDensity.init(rawValue:)) ?? .comfortable
         fontScale = defaults.string(forKey: Key.fontScale).flatMap(DevFontScale.init(rawValue:)) ?? .medium
         showToolDetails = defaults.object(forKey: Key.toolDetails) as? Bool ?? true

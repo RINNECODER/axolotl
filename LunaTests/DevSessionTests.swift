@@ -381,7 +381,7 @@ final class DevSessionTests: XCTestCase {
     private func harness(store: URL) throws -> Harness {
         let bin = try scratchDir("bin")
         let fake = bin.appendingPathComponent("fakecli")
-        try "#!/bin/sh\nexec /bin/cat\n".write(to: fake, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nprintf 'fake> '\nexec /bin/cat\n".write(to: fake, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
         var made: FakeHeadless?
         let location = LockedBox<SessionLocation?>(nil)
@@ -487,12 +487,12 @@ final class DevSessionTests: XCTestCase {
         let defaults = scratchDefaults()
         let settings = DevSettings(defaults: defaults)
         XCTAssertFalse(settings.skipHome)
-        XCTAssertEqual(settings.accent, .blue)
+        XCTAssertEqual(settings.accent, .moon)
         XCTAssertEqual(settings.density, .comfortable)
         XCTAssertEqual(settings.fontScale, .medium)
         XCTAssertTrue(settings.showToolDetails)
         XCTAssertEqual(settings.timelineStyle, .bubbles)
-        XCTAssertEqual(settings.projectSearchRoots, DevSettings.defaultProjectSearchRoots)
+        XCTAssertEqual(settings.projectSearchRoots, [], "no scan roots until the user adds some")
 
         settings.skipHome = true
         settings.defaultSetup = DevSessionSetup(harness: .codex, model: "gpt-x", effort: "high", approvalBehavior: .fullAuto,

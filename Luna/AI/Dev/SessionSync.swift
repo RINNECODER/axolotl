@@ -90,7 +90,7 @@ nonisolated struct ResumableSession: Equatable, Sendable {
 /// and neither sees the other's until it reloads, so the histories diverge. Luna therefore
 /// stays a read-only mirror while `isLive`, and "Take over" is an explicit user action.
 actor SessionSync {
-    static let shared = SessionSync()
+    static let shared = SessionSync(indexURL: SessionIndexStore.defaultURL)
 
     /// Titles and first prompts are cut to this many characters.
     static let titleLimit = 80
@@ -106,12 +106,17 @@ actor SessionSync {
     private let resumeStore: AgentCLIResumeStore
     private var summaries: [String: (stamp: FileStamp, summary: TranscriptSummary)] = [:]
     private var codexHeads: [String: (stamp: FileStamp, head: CodexHead?)] = [:]
+    private let indexURL: URL?
+    private var indexLoaded = false
+    private var indexDirty = false
 
     init(claudeRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects", isDirectory: true),
          codexRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions", isDirectory: true),
          processes: @escaping @Sendable () -> [AgentProcess] = { LiveProcessScanner.agentProcesses() },
          now: @escaping @Sendable () -> Date = { Date() },
-         resumeStore: AgentCLIResumeStore = AgentCLIResumeStore()) {
+         resumeStore: AgentCLIResumeStore = AgentCLIResumeStore(),
+         indexURL: URL? = nil) {
+        self.indexURL = indexURL
         self.claudeRoot = claudeRoot
         self.codexRoot = codexRoot
         self.processes = processes
@@ -122,6 +127,8 @@ actor SessionSync {
     /// Sessions for `projectDir`, newest first, both harnesses. `excluding` drops ids Luna is
     /// running itself right now (pass `DevSessionController.shared.activeSessionID`).
     func sessions(projectDir: URL, excluding: Set<String> = [], limit: Int = 30) -> [ExternalSession] {
+        loadIndexIfNeeded()
+        defer { saveIndexIfNeeded() }
         let live = processes()
         let claude = claudeSessions(projectDir: projectDir, limit: limit)
         let codex = codexSessions(projectDir: projectDir, limit: limit)
@@ -142,21 +149,23 @@ actor SessionSync {
     /// by the transcript's own `cwd`; MIT, apps/server/src/project/AgentSessionScanner.ts).
     /// Only titles / first prompts (truncated) are kept in memory; nothing is written or logged.
     func allSessions(limit: Int = 50) -> [ExternalSession] {
-        var files: [(URL, AgentCLIKind)] = []
+        loadIndexIfNeeded()
+        defer { saveIndexIfNeeded() }
+        var files: [(URL, AgentCLIKind, FileStamp)] = []
         let fm = FileManager.default
         for dir in (try? fm.contentsOfDirectory(at: claudeRoot, includingPropertiesForKeys: nil)) ?? [] {
-            for file in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-            where file.pathExtension == "jsonl" { files.append((file, .claudeCode)) }
+            for file in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey])) ?? []
+            where file.pathExtension == "jsonl" {
+                if let stamp = FileStamp(file) { files.append((file, .claudeCode, stamp)) }
+            }
         }
-        files += codexRollouts(since: now().addingTimeInterval(-Self.codexLookback)).map { ($0, .codex) }
-        let newestFiles = files.compactMap { pair in FileStamp(pair.0).map { (pair.0, pair.1, $0.modified) } }
-            .sorted { $0.2 > $1.2 }
-            .prefix(limit)
+        files += codexRollouts(since: now().addingTimeInterval(-Self.codexLookback)).map { ($0.0, .codex, $0.1) }
+        let newestFiles = files.sorted { $0.2.modified > $1.2.modified }.prefix(limit)
         let live = processes()
         var found: [(URL, AgentCLIKind, URL, TranscriptSummary)] = []
-        for (file, kind, _) in newestFiles {
-            guard let summary = summary(of: file, harness: kind) else { continue }
-            let cwd = summary.cwd ?? (kind == .codex ? codexHead(file)?.cwd : nil)
+        for (file, kind, stamp) in newestFiles {
+            guard let summary = summary(of: file, harness: kind, stamp: stamp) else { continue }
+            let cwd = summary.cwd ?? (kind == .codex ? codexHead(file, stamp: stamp)?.cwd : nil)
                 ?? ProjectFinder.decodeClaudeFolderName(file.deletingLastPathComponent().lastPathComponent).first
             guard let cwd else { continue }
             found.append((file, kind, URL(fileURLWithPath: cwd, isDirectory: true), summary))
@@ -207,25 +216,27 @@ actor SessionSync {
             }
             return nil
         case .codex:
-            return codexRollouts(since: .distantPast).first { $0.lastPathComponent.hasSuffix("-\(id).jsonl") }
+            return codexRollouts(since: .distantPast).first { $0.0.lastPathComponent.hasSuffix("-\(id).jsonl") }?.0
         }
     }
 
     /// Rollout files modified since `since`.
-    private func codexRollouts(since: Date) -> [URL] {
-        guard let enumerator = FileManager.default.enumerator(at: codexRoot, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
-        var out: [URL] = []
+    private func codexRollouts(since: Date) -> [(URL, FileStamp)] {
+        guard let enumerator = FileManager.default.enumerator(at: codexRoot, includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey]) else { return [] }
+        var out: [(URL, FileStamp)] = []
         for case let url as URL in enumerator where url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" {
-            if since == .distantPast || (FileStamp(url)?.modified ?? .distantPast) >= since { out.append(url) }
+            guard let stamp = FileStamp(url) else { continue }
+            if since == .distantPast || stamp.modified >= since { out.append((url, stamp)) }
         }
         return out
     }
 
-    private func codexHead(_ url: URL) -> CodexHead? {
-        guard let stamp = FileStamp(url) else { return nil }
+    private func codexHead(_ url: URL, stamp: FileStamp? = nil) -> CodexHead? {
+        guard let stamp = stamp ?? FileStamp(url) else { return nil }
         if let cached = codexHeads[url.path], cached.stamp.modified == stamp.modified || cached.head != nil { return cached.head }
         let head = Self.readCodexHead(url)
         codexHeads[url.path] = (stamp, head)
+        indexDirty = true
         return head
     }
 
@@ -316,8 +327,8 @@ actor SessionSync {
                   let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { continue }
             files += items.filter { $0.pathExtension == "jsonl" }
         }
-        return newest(files, limit: limit).compactMap { file in
-            summary(of: file, harness: .claudeCode).map { (file, $0) }
+        return newest(files, limit: limit).compactMap { file, stamp in
+            summary(of: file, harness: .claudeCode, stamp: stamp).map { (file, $0) }
         }
     }
 
@@ -330,24 +341,24 @@ actor SessionSync {
         guard let enumerator = FileManager.default.enumerator(at: codexRoot, includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey]) else { return [] }
         var candidates: [URL] = []
         for case let url as URL in enumerator where url.lastPathComponent.hasPrefix("rollout-") && url.pathExtension == "jsonl" {
-            if let modified = FileStamp(url)?.modified, modified >= cutoff { candidates.append(url) }
+            if let stamp = FileStamp(url), stamp.modified >= cutoff { candidates.append(url) }
         }
         let variants = Set(Self.pathVariants(projectDir))
-        var matched: [URL] = []
-        for url in newest(candidates, limit: 400) {
-            guard let stamp = FileStamp(url) else { continue }
+        var matched: [(URL, FileStamp)] = []
+        for (url, stamp) in newest(candidates, limit: 400) {
             let head: CodexHead?
             if let cached = codexHeads[url.path], cached.stamp.modified == stamp.modified || cached.head != nil {
                 head = cached.head
             } else {
                 head = Self.readCodexHead(url)
                 codexHeads[url.path] = (stamp, head)
+                indexDirty = true
             }
             guard let head, variants.contains(head.cwd) || Self.samePath(head.cwd, projectDir) else { continue }
-            matched.append(url)
+            matched.append((url, stamp))
             if matched.count >= limit { break }
         }
-        return matched.compactMap { file in summary(of: file, harness: .codex).map { (file, $0) } }
+        return matched.compactMap { file, stamp in summary(of: file, harness: .codex, stamp: stamp).map { (file, $0) } }
     }
 
     /// Reads `session_meta` from the first line (which can be long: it embeds instructions).
@@ -368,21 +379,78 @@ actor SessionSync {
 
     // MARK: Summaries (cached by mtime + size)
 
-    private func summary(of file: URL, harness: AgentCLIKind) -> TranscriptSummary? {
-        guard let stamp = FileStamp(file) else { return nil }
-        if let cached = summaries[file.path], cached.stamp == stamp { return cached.summary }
+    private func summary(of file: URL, harness: AgentCLIKind, stamp known: FileStamp? = nil) -> TranscriptSummary? {
+        guard let stamp = known ?? FileStamp(file) else { return nil }
+        if let cached = summaries[file.path], cached.stamp.matches(stamp) {
+            var hit = cached.summary
+            hit.updatedAt = stamp.modified
+            return hit
+        }
         guard let summary = Self.summarize(file: file, harness: harness, modified: stamp.modified) else { return nil }
         summaries[file.path] = (stamp, summary)
+        indexDirty = true
         return summary
     }
+
+    // MARK: Persisted index
+
+    private func loadIndexIfNeeded() {
+        guard !indexLoaded else { return }
+        indexLoaded = true
+        guard let indexURL else { return }
+        let snapshot = SessionIndexStore(url: indexURL).load()
+        for (path, entry) in snapshot.summaries where summaries[path] == nil {
+            summaries[path] = (FileStamp(modified: Date(timeIntervalSinceReferenceDate: entry.mtime), size: entry.size), entry.summary)
+        }
+        for (path, entry) in snapshot.heads where codexHeads[path] == nil {
+            codexHeads[path] = (FileStamp(modified: Date(timeIntervalSinceReferenceDate: entry.mtime), size: entry.size), entry.head)
+        }
+    }
+
+    private func saveIndexIfNeeded() {
+        guard indexDirty, let indexURL else { return }
+        indexDirty = false
+        prune(&summaries, &codexHeads)
+        var snapshot = SessionIndexStore.Snapshot()
+        for (path, v) in summaries { snapshot.summaries[path] = .init(mtime: v.stamp.modified.timeIntervalSinceReferenceDate, size: v.stamp.size, summary: v.summary) }
+        for (path, v) in codexHeads { if let head = v.head { snapshot.heads[path] = .init(mtime: v.stamp.modified.timeIntervalSinceReferenceDate, size: v.stamp.size, head: head) } }
+        SessionIndexStore(url: indexURL).save(snapshot)
+    }
+
+    /// Drops in-memory entries for files that no longer exist (cheap: one stat each, only after a save).
+    private func prune(_ s: inout [String: (stamp: FileStamp, summary: TranscriptSummary)],
+                       _ h: inout [String: (stamp: FileStamp, head: CodexHead?)]) {
+        let fm = FileManager.default
+        for path in s.keys where !fm.fileExists(atPath: path) { s[path] = nil }
+        for path in h.keys where !fm.fileExists(atPath: path) { h[path] = nil }
+    }
+
+    /// Transcripts larger than this are summarized from their head and tail only (id, cwd and
+    /// first prompt sit at the start, the latest model and title near the end); their
+    /// `messageCount` is then a lower bound. Keeps a cold "All sessions" load to a few seconds.
+    static let fullParseLimit: UInt64 = 2 << 20
+    static let headTailBytes = 512 << 10
 
     static func summarize(file: URL, harness: AgentCLIKind, modified: Date) -> TranscriptSummary? {
         guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
         defer { try? handle.close() }
         var builder = TranscriptSummary.Builder(harness: harness)
         var framer = NDJSONFramer()
-        while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            for line in framer.append(chunk) { builder.add(line) }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: 0)
+        if size > fullParseLimit {
+            if let head = try? handle.read(upToCount: headTailBytes) {
+                for line in framer.append(head) { builder.add(line) } // the cut last line is dropped
+            }
+            framer = NDJSONFramer()
+            try? handle.seek(toOffset: size - UInt64(headTailBytes))
+            if let tail = try? handle.readToEnd(), let firstBreak = tail.firstIndex(of: 0x0A) {
+                for line in framer.append(tail[tail.index(after: firstBreak)...]) { builder.add(line) }
+            }
+        } else {
+            while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
+                for line in framer.append(chunk) { builder.add(line) }
+            }
         }
         if let rest = framer.finish() { builder.add(rest) }
         let fallbackID = harness == .claudeCode ? file.deletingPathExtension().lastPathComponent : nil
@@ -391,11 +459,11 @@ actor SessionSync {
 
     // MARK: Helpers
 
-    private func newest(_ files: [URL], limit: Int) -> [URL] {
-        files.compactMap { url in FileStamp(url).map { (url, $0.modified) } }
-            .sorted { $0.1 > $1.1 }
+    private func newest(_ files: [URL], limit: Int) -> [(URL, FileStamp)] {
+        files.compactMap { url in FileStamp(url).map { (url, $0) } }
+            .sorted { $0.1.modified > $1.1.modified }
             .prefix(limit)
-            .map(\.0)
+            .map { $0 }
     }
 
     /// The project path as written, standardized and with symlinks resolved. Foundation strips a
@@ -427,6 +495,16 @@ nonisolated struct FileStamp: Equatable, Sendable {
     let modified: Date
     let size: Int
 
+    init(modified: Date, size: Int) {
+        self.modified = modified
+        self.size = size
+    }
+
+    /// Same size and mtime within 1 ms (the persisted index stores mtime as a Double).
+    func matches(_ other: FileStamp) -> Bool {
+        size == other.size && abs(modified.timeIntervalSince(other.modified)) < 0.001
+    }
+
     init?(_ url: URL) {
         guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
               let modified = values.contentModificationDate else { return nil }
@@ -443,7 +521,7 @@ nonisolated struct TranscriptSummary: Equatable, Sendable {
     let title: String
     let firstPrompt: String
     let messageCount: Int
-    let updatedAt: Date
+    var updatedAt: Date
     /// Codex `originator == "luna"` (Luna's app-server clientInfo name).
     let originatedInLuna: Bool
     /// Working directory the CLI recorded (Claude entries' `cwd`, Codex `session_meta.cwd`).
@@ -751,5 +829,93 @@ nonisolated enum LiveProcessScanner {
             index += 1
         }
         return args
+    }
+}
+
+// MARK: - Persisted index
+
+/// Lightweight JSON index of transcript summaries, keyed by path and valid only while the file's
+/// mtime + size match. Stores titles only (never first prompts or transcript content).
+nonisolated struct SessionIndexStore: Sendable {
+    static let version = 1
+    static let maxEntries = 2000
+
+    let url: URL
+
+    static var defaultURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Luna/Dev/session-index.json")
+    }
+
+    struct SummaryEntry: Codable, Sendable {
+        var mtime: Double
+        var size: Int
+        var id: String
+        var title: String
+        var messageCount: Int
+        var originatedInLuna: Bool
+        var cwd: String?
+        var model: String?
+
+        init(mtime: Double, size: Int, summary: TranscriptSummary) {
+            self.mtime = mtime; self.size = size
+            id = summary.id; title = summary.title; messageCount = summary.messageCount
+            originatedInLuna = summary.originatedInLuna; cwd = summary.cwd; model = summary.model
+        }
+
+        /// `firstPrompt` is not persisted; it falls back to the title.
+        var summary: TranscriptSummary {
+            TranscriptSummary(id: id, title: title, firstPrompt: title, messageCount: messageCount,
+                              updatedAt: Date(timeIntervalSinceReferenceDate: mtime),
+                              originatedInLuna: originatedInLuna, cwd: cwd, model: model)
+        }
+    }
+
+    struct HeadEntry: Codable, Sendable {
+        var mtime: Double
+        var size: Int
+        var id: String
+        var cwd: String
+        var originator: String?
+
+        init(mtime: Double, size: Int, head: SessionSync.CodexHead) {
+            self.mtime = mtime; self.size = size
+            id = head.id; cwd = head.cwd; originator = head.originator
+        }
+
+        var head: SessionSync.CodexHead { .init(id: id, cwd: cwd, originator: originator) }
+    }
+
+    struct Snapshot: Codable, Sendable {
+        var version = SessionIndexStore.version
+        var summaries: [String: SummaryEntry] = [:]
+        var heads: [String: HeadEntry] = [:]
+    }
+
+    /// Empty on a missing file, decode failure or version mismatch.
+    func load() -> Snapshot {
+        guard let data = try? Data(contentsOf: url),
+              let snapshot = try? JSONDecoder().decode(Snapshot.self, from: data),
+              snapshot.version == Self.version else { return Snapshot() }
+        return snapshot
+    }
+
+    /// Atomic write, keeping the newest `maxEntries` of each kind. Failures are ignored.
+    func save(_ snapshot: Snapshot) {
+        var out = snapshot
+        out.version = Self.version
+        if out.summaries.count > Self.maxEntries {
+            let keep = out.summaries.sorted { $0.value.mtime > $1.value.mtime }.prefix(Self.maxEntries)
+            out.summaries = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+        }
+        if out.heads.count > Self.maxEntries {
+            let keep = out.heads.sorted { $0.value.mtime > $1.value.mtime }.prefix(Self.maxEntries)
+            out.heads = Dictionary(uniqueKeysWithValues: keep.map { ($0.key, $0.value) })
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(out) else { return }
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
     }
 }
