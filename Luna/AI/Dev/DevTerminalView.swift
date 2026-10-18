@@ -7,6 +7,8 @@ import SwiftUI
 struct DevTerminalView: NSViewRepresentable {
     let kind: AgentCLIKind
     let projectDir: URL
+    /// Follows the panel's appearance with T3 Code's terminal colors (MIT, apps/web/src/index.css).
+    var isDark = true
     var onExit: (Int32?) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator { Coordinator(onExit: onExit) }
@@ -15,14 +17,26 @@ struct DevTerminalView: NSViewRepresentable {
         let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
         view.terminalDelegate = context.coordinator
         view.font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
-        view.nativeBackgroundColor = NSColor(white: 0.07, alpha: 1)
-        view.nativeForegroundColor = NSColor(white: 0.9, alpha: 1)
-        view.caretColor = NSColor(white: 0.85, alpha: 1)
+        Self.applyColors(to: view, isDark: isDark)
         context.coordinator.start(kind: kind, projectDir: projectDir, in: view)
         return view
     }
 
-    func updateNSView(_ nsView: TerminalView, context: Context) {}
+    func updateNSView(_ nsView: TerminalView, context: Context) {
+        Self.applyColors(to: nsView, isDark: isDark)
+    }
+
+    private static func applyColors(to view: TerminalView, isDark: Bool) {
+        let bg = isDark ? NSColor(srgbRed: 0x11 / 255, green: 0x11 / 255, blue: 0x11 / 255, alpha: 1) : .white
+        guard view.nativeBackgroundColor != bg else { return }
+        view.nativeBackgroundColor = bg
+        view.nativeForegroundColor = isDark ? NSColor(srgbRed: 0.96, green: 0.96, blue: 0.96, alpha: 1)
+            : NSColor(srgbRed: 0x27 / 255, green: 0x27 / 255, blue: 0x2A / 255, alpha: 1)
+        view.caretColor = isDark ? NSColor(srgbRed: 180 / 255, green: 203 / 255, blue: 1, alpha: 1)
+            : NSColor(srgbRed: 0x1B / 255, green: 0x4E / 255, blue: 0xD8 / 255, alpha: 1)
+        view.selectedTextBackgroundColor = isDark ? NSColor(srgbRed: 180 / 255, green: 203 / 255, blue: 1, alpha: 0.25)
+            : NSColor(srgbRed: 0x1B / 255, green: 0x4E / 255, blue: 0xD8 / 255, alpha: 0.18)
+    }
 
     static func dismantleNSView(_ nsView: TerminalView, coordinator: Coordinator) {
         coordinator.stop()

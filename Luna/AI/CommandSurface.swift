@@ -32,6 +32,7 @@ struct CommandSurfaceView: View {
     @AppStorage(DevPrefs.panelModeKey) private var panelModeRaw: String = AIPanelMode.general.rawValue
     @AppStorage(DevPrefs.terminalKey) private var devTerminal: Bool = false
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.colorScheme) private var outerColorScheme
     @State private var inputText: String = ""
     @State private var errorMessage: String? = nil
     @State private var isSending: Bool = false
@@ -75,11 +76,15 @@ struct CommandSurfaceView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            panelHeader()
-            if DevMode.isDevBuild { modeSwitch() }
             if isDevMode {
-                DevPanelView(fontSize: chatFontSize, onOpenSettings: openConnectAgents, onOpenLink: openLinkInNewTab)
+                // Dev mode copies T3 Code: its own header (with the mode switch), surface and light/dark tokens.
+                DevPanelView(fontSize: chatFontSize, onOpenSettings: openConnectAgents, onOpenLink: openLinkInNewTab,
+                             modeSwitch: AnyView(modeSwitch()), onClose: close)
             } else {
+                panelHeader()
+                if DevMode.isDevBuild {
+                    modeSwitch().padding(.bottom, 6)
+                }
                 conversationStream()
                 MCPApprovalStack()
                 inputArea()
@@ -87,7 +92,8 @@ struct CommandSurfaceView: View {
         }
         // No surface of its own: the panel sits on the window chrome, like the
         // sidebar, so the browser, the page and the panel read as one piece.
-        .environment(\.colorScheme, .dark)
+        // Dev mode follows the app's appearance, like T3 Code.
+        .environment(\.colorScheme, isDevMode ? outerColorScheme : .dark)
         .overlay { if isDropTargeted { FileDropHint() } }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDocumentDrop(providers: providers)
@@ -187,25 +193,31 @@ struct CommandSurfaceView: View {
         DevMode.isDevBuild && DevMode.isAvailable && panelModeRaw == AIPanelMode.dev.rawValue
     }
 
-    /// General | Dev, like a chat / work toggle. Shown only in the Luna Dev build.
+    /// General | Dev as small text tabs (T3 Code-style toggle group). Shown only in the Luna Dev build.
     private func modeSwitch() -> some View {
-        VStack(spacing: 4) {
-            Picker("Mode", selection: $panelModeRaw) {
-                Text("General").tag(AIPanelMode.general.rawValue)
-                Text("Dev").tag(AIPanelMode.dev.rawValue)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 180)
-            .disabled(!DevMode.isAvailable)
-            .accessibilityLabel("Panel mode")
-            if !DevMode.isAvailable {
-                Text("Dev needs the unsandboxed Luna Dev build.")
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
+        HStack(spacing: 0) {
+            ForEach([AIPanelMode.general, .dev], id: \.self) { mode in
+                let selected = panelModeRaw == mode.rawValue
+                Button {
+                    panelModeRaw = mode.rawValue
+                } label: {
+                    Text(mode == .general ? "General" : "Dev")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 8)
+                        .frame(height: 22)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(selected ? Color.primary.opacity(0.09) : .clear))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }
-        .padding(.bottom, 8)
+        .disabled(!DevMode.isAvailable)
+        .help(DevMode.isAvailable ? "Panel mode" : "Dev needs the unsandboxed Luna Dev build.")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Panel mode")
     }
 
     private func openConnectAgents() {
