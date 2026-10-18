@@ -156,6 +156,16 @@ private struct AppearanceSettingsView: View {
             }
 
             Section {
+                LayoutTemplatePicker()
+            } header: {
+                Text("Layout template")
+            } footer: {
+                Text("A template changes several settings at once. It shows in Recent AI changes, where you can undo it; switching back to Luna restores your settings exactly.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
                 Picker("Browser layout", selection: layout) {
                     ForEach(BrowserLayout.allCases) { Text($0.title).tag($0) }
                 }
@@ -354,5 +364,127 @@ private struct AboutSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+// MARK: - Layout templates
+
+/// Template cards (Settings → Appearance). Applying goes through the Customizer, so it's validated,
+/// recorded in Recent AI changes and undoable like an agent's change.
+private struct LayoutTemplatePicker: View {
+    @AppStorage(LayoutTemplate.defaultsKey) private var templateRaw: String = LayoutTemplate.luna.rawValue
+    @State private var error: String?
+
+    var body: some View {
+        let current = LayoutTemplate(rawValue: templateRaw) ?? .luna
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                ForEach(LayoutTemplate.allCases) { template in
+                    Button { select(template) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            LayoutTemplateThumbnail(template: template)
+                                .frame(width: 168, height: 104)
+                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .strokeBorder(current == template ? Color.accentColor : Color.primary.opacity(0.12),
+                                                      lineWidth: current == template ? 2.5 : 1)
+                                )
+                            Text(template.title).font(.system(size: 12, weight: .semibold))
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(template.summary)
+                    .accessibilityLabel("\(template.title) layout template")
+                    .accessibilityAddTraits(current == template ? .isSelected : [])
+                }
+            }
+            Text(current.summary).font(.callout).foregroundStyle(.secondary)
+            if let error { Text(error).font(.callout).foregroundStyle(.red) }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func select(_ template: LayoutTemplate) {
+        guard template.rawValue != templateRaw else { return }
+        do {
+            let plan = CustomizationPlan(settings: [SettingChange(key: "layout.template", value: .string(template.rawValue))])
+            _ = try Customizer.shared.apply(plan, context: nil, source: "Settings")
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+/// A small drawing of the window each template gives.
+private struct LayoutTemplateThumbnail: View {
+    let template: LayoutTemplate
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        switch template {
+        case .luna: luna
+        case .chrome: chrome
+        }
+    }
+
+    private var luna: some View {
+        HStack(spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 3) { ForEach(0..<3) { _ in Circle().fill(Color.primary.opacity(0.25)).frame(width: 5, height: 5) } }
+                    .padding(.bottom, 4)
+                ForEach(0..<5) { i in
+                    RoundedRectangle(cornerRadius: 2).fill(Color.primary.opacity(i == 1 ? 0.22 : 0.1)).frame(height: 7)
+                }
+                Spacer()
+            }
+            .padding(6)
+            .frame(width: 46)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor))
+                .shadow(color: .black.opacity(0.15), radius: 1)
+                .padding([.vertical, .trailing], 5)
+        }
+        .background(Color.accentColor.opacity(0.08))
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var chrome: some View {
+        let p = ChromePalette.for(scheme)
+        return VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                HStack(spacing: 2.5) {
+                    Circle().fill(Color(chromeHex: 0xFF5F57)).frame(width: 5, height: 5)
+                    Circle().fill(Color(chromeHex: 0xFEBC2E)).frame(width: 5, height: 5)
+                    Circle().fill(Color(chromeHex: 0x28C840)).frame(width: 5, height: 5)
+                }
+                .padding(.leading, 6).padding(.trailing, 8)
+                ChromeTabShape(inset: 1, radius: 3, flare: 3).fill(p.toolbar).frame(width: 52, height: 11)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                Rectangle().fill(p.inactiveTitle.opacity(0.35)).frame(width: 30, height: 2).padding(.leading, 8)
+                Spacer()
+            }
+            .frame(height: 14)
+            .background(p.frame)
+            HStack(spacing: 4) {
+                ForEach(0..<3) { _ in Circle().fill(p.icon.opacity(0.5)).frame(width: 4, height: 4) }
+                Capsule().fill(p.omnibox).frame(height: 8)
+                Circle().fill(p.icon.opacity(0.5)).frame(width: 4, height: 4)
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 13)
+            .background(p.toolbar)
+            HStack(spacing: 5) {
+                ForEach(0..<3) { _ in Capsule().fill(p.inactiveTitle.opacity(0.3)).frame(width: 18, height: 3) }
+                Spacer()
+            }
+            .padding(.horizontal, 6)
+            .frame(height: 9)
+            .background(p.toolbar)
+            Rectangle().fill(p.contentSeparator).frame(height: 1)
+            Color(nsColor: .textBackgroundColor)
+        }
     }
 }
