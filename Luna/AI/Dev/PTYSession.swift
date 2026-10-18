@@ -35,9 +35,12 @@ nonisolated final class PTYSession: @unchecked Sendable {
         self.executable = executable
         self.arguments = arguments
         self.workingDirectory = workingDirectory
-        var env = environment ?? LoginShellEnvironment.environment()
-        env["TERM"] = env["TERM"] ?? "xterm-256color"
-        env["COLORTERM"] = env["COLORTERM"] ?? "truecolor"
+        // Always a clean login environment with TERM forced to what SwiftTerm emulates; see
+        // `LoginShellEnvironment.environment` for what inheriting Luna's own env broke.
+        var env = environment.map { LoginShellEnvironment.sanitized($0) } ?? LoginShellEnvironment.terminalEnvironment()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        if (env["LANG"] ?? "").isEmpty, (env["LC_ALL"] ?? "").isEmpty { env["LANG"] = "en_US.UTF-8" }
         self.environment = env
         (output, outputContinuation) = AsyncStream.makeStream(of: Data.self, bufferingPolicy: .unbounded)
     }

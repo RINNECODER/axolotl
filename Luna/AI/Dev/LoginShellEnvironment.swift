@@ -23,12 +23,97 @@ nonisolated enum LoginShellEnvironment {
         return resolved
     }
 
-    /// The child environment: this process's env with the login PATH and any extras.
+    /// The child environment for a CLI: what a fresh Terminal window would have (the login
+    /// shell's own environment, captured from a clean slate), with the login PATH and `extra`.
+    ///
+    /// Luna Dev is often launched from a terminal that is itself running an agent (`open`,
+    /// `xcodebuild`, a Claude Code or Codex session). Inheriting that process's env leaked
+    /// `CLAUDECODE` / `CLAUDE_CODE_*` (Claude then believes it is a nested child session:
+    /// transcript saving off, the parent's permission mode such as bypass), `CODEX_*` sandbox
+    /// markers, and the parent terminal's `TERM_PROGRAM` / `TERMINFO` (escape sequences meant
+    /// for Ghostty/iTerm sent to SwiftTerm). Those are dropped here.
     static func environment(adding extra: [String: String] = [:]) -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+        var env = sanitized(baseEnvironment())
         env["PATH"] = path()
+        if (env["LANG"] ?? "").isEmpty, (env["LC_ALL"] ?? "").isEmpty, (env["LC_CTYPE"] ?? "").isEmpty {
+            env["LANG"] = "en_US.UTF-8"
+        }
         for (k, v) in extra { env[k] = v }
         return env
+    }
+
+    /// Environment for an interactive TUI on Luna's pseudo-terminal (rendered by SwiftTerm).
+    /// TERM is forced: an inherited `xterm-ghostty` / `xterm-kitty` with no matching terminfo
+    /// makes Ink / ratatui TUIs draw garbage.
+    static func terminalEnvironment(adding extra: [String: String] = [:]) -> [String: String] {
+        var env = environment()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env["TERM_PROGRAM"] = "Luna"
+        for (k, v) in extra { env[k] = v }
+        return env
+    }
+
+    /// Variables that describe the *launching* process or terminal, never the user's setup.
+    static let droppedExact: Set<String> = [
+        "CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_AGENT_SDK_VERSION",
+        "CODEX_THREAD_ID", "CODEX_SANDBOX", "CODEX_SANDBOX_NETWORK_DISABLED", "CODEX_CI", "CODEX_MANAGED_BY_NPM",
+        "TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "TERM_SESSION_ID", "TERMINFO", "TERMINFO_DIRS",
+        "COLORTERM", "TMUX", "TMUX_PANE", "STY", "WINDOWID", "COLUMNS", "LINES",
+        "XPC_SERVICE_NAME", "XPC_FLAGS", "__CFBundleIdentifier", "OLDPWD", "PWD", "SHLVL", "_",
+        "APP_SANDBOX_CONTAINER_ID",
+    ]
+    static let droppedPrefixes = [
+        "CLAUDE_CODE_", "ITERM_", "KITTY_", "GHOSTTY_", "WEZTERM_", "VSCODE_", "ALACRITTY_",
+        "HERDR_", "WT_", "LC_TERMINAL", "__LUNA",
+    ]
+
+    /// `env` minus everything in `droppedExact` / `droppedPrefixes`.
+    static func sanitized(_ env: [String: String]) -> [String: String] {
+        env.filter { key, _ in
+            !droppedExact.contains(key) && !droppedPrefixes.contains { key.hasPrefix($0) }
+        }
+    }
+
+    nonisolated(unsafe) private static var cachedShellEnvironment: [String: String]??
+
+    /// The login shell's environment (cached), else this process's.
+    private static func baseEnvironment() -> [String: String] {
+        lock.lock()
+        if case .some(let cached) = cachedShellEnvironment { lock.unlock(); return cached ?? ProcessInfo.processInfo.environment }
+        lock.unlock()
+        let captured = runLoginShellEnvironment()
+        lock.lock(); cachedShellEnvironment = .some(captured); lock.unlock()
+        return captured ?? ProcessInfo.processInfo.environment
+    }
+
+    /// Minimal seed for the login shell: launchd-provided basics only, so nothing from the
+    /// process that launched Luna reaches the rc files.
+    static func cleanSeed(from env: [String: String] = ProcessInfo.processInfo.environment, home: String = NSHomeDirectory()) -> [String: String] {
+        var seed: [String: String] = ["HOME": home, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
+        for key in ["USER", "LOGNAME", "SHELL", "TMPDIR", "SSH_AUTH_SOCK", "__CF_USER_TEXT_ENCODING", "LANG", "LC_ALL", "LC_CTYPE"] {
+            if let v = env[key] { seed[key] = v }
+        }
+        return seed
+    }
+
+    /// Parses `env -0` output framed by the markers.
+    static func parseEnvironment(_ output: Data) -> [String: String]? {
+        guard let start = output.range(of: Data(startMarker.utf8)),
+              let end = output.range(of: Data(endMarker.utf8), in: start.upperBound..<output.endIndex) else { return nil }
+        var env: [String: String] = [:]
+        for entry in output[start.upperBound..<end.lowerBound].split(separator: 0) {
+            let text = String(decoding: entry, as: UTF8.self).trimmingCharacters(in: .newlines)
+            guard let eq = text.firstIndex(of: "="), eq != text.startIndex else { continue }
+            env[String(text[..<eq])] = String(text[text.index(after: eq)...])
+        }
+        return env.isEmpty ? nil : env
+    }
+
+    static func runLoginShellEnvironment(shell: String = "/bin/zsh", timeout: TimeInterval = 5) -> [String: String]? {
+        guard let data = runShell(shell: shell, script: "printf '\(startMarker)'; env -0; printf '\(endMarker)'",
+                                  environment: cleanSeed(), timeout: timeout) else { return nil }
+        return parseEnvironment(data)
     }
 
     /// Full path of `name` on the login PATH, or nil.
@@ -60,9 +145,17 @@ nonisolated enum LoginShellEnvironment {
     }
 
     static func runLoginShell(shell: String = "/bin/zsh", timeout: TimeInterval = 5) -> String? {
+        guard let data = runShell(shell: shell, script: "printf '\(startMarker)%s\(endMarker)' \"$PATH\"",
+                                  environment: cleanSeed(), timeout: timeout) else { return nil }
+        return parse(String(decoding: data, as: UTF8.self))
+    }
+
+    /// Runs `script` in an interactive login shell; stdout, or nil on failure / timeout.
+    static func runShell(shell: String, script: String, environment: [String: String]?, timeout: TimeInterval) -> Data? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: shell)
-        process.arguments = ["-lic", "printf '\(startMarker)%s\(endMarker)' \"$PATH\""]
+        process.arguments = ["-lic", script]
+        if let environment { process.environment = environment }
         let out = Pipe()
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
@@ -71,16 +164,17 @@ nonisolated enum LoginShellEnvironment {
         let done = DispatchSemaphore(value: 0)
         DispatchQueue.global().async { process.waitUntilExit(); done.signal() }
         // Read concurrently so a chatty rc file cannot fill the pipe and block the shell.
-        var data = Data()
-        let reader = DispatchQueue(label: "luna.loginshell.read")
+        let box = DataBox()
         let readDone = DispatchSemaphore(value: 0)
-        reader.async { data = out.fileHandleForReading.readDataToEndOfFile(); readDone.signal() }
+        DispatchQueue(label: "luna.loginshell.read").async { box.data = out.fileHandleForReading.readDataToEndOfFile(); readDone.signal() }
         if done.wait(timeout: .now() + timeout) == .timedOut {
             process.terminate()
             kill(process.processIdentifier, SIGKILL)
             return nil
         }
         _ = readDone.wait(timeout: .now() + 1)
-        return parse(String(decoding: data, as: UTF8.self))
+        return box.data
     }
+
+    private final class DataBox: @unchecked Sendable { var data = Data() }
 }
