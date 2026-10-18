@@ -94,6 +94,8 @@ struct BrowserShellView: View {
     @AppStorage(ChromePrefs.hideWindowButtons) private var hideWindowButtons = true
     @AppStorage(ChromePrefs.showToolbar) private var showToolbar = false
     @AppStorage(ChromePrefs.showBookmarksBar) private var showBookmarksBar = false
+    @AppStorage(LayoutTemplate.defaultsKey) private var templateRaw: String = LayoutTemplate.luna.rawValue
+    @Environment(\.colorScheme) private var colorScheme
     /// Top bar temporarily shown in frameless mode (hover at the top edge, or ⌘L).
     @State private var topBarPeeking = false
     /// Window buttons shown because the pointer is at the top edge (sidebar hidden).
@@ -112,17 +114,27 @@ struct BrowserShellView: View {
                 .animation(.easeInOut(duration: 0.3), value: activeProfile.colorId)
 
             TitlebarConfigurator(tabStripHeight: 0, isFullScreen: $isFullScreen, hostWindow: $hostWindow)
+            TrafficLightPositioner(enabled: chromeTemplate && !isFullScreen)
+                .frame(width: 0, height: 0)
 
             GeometryReader { geometry in
+              VStack(spacing: 0) {
+                // Chrome template: tab strip, toolbar and bookmarks bar span the window, the AI panel sits below them.
+                if chromeTemplate {
+                    topChrome(showsTabs: true)
+                    if showBookmarksBar { bookmarksBar }
+                }
                 HStack(spacing: 0) {
                     // Main browser content; the sliding sidebar sits over this padding when docked.
                     VStack(spacing: 0) {
-                        if showsTopChrome {
+                        if chromeTemplate {
+                            EmptyView()
+                        } else if showsTopChrome {
                             topChrome(showsTabs: !frameless && !usesSidebar)
                         } else if addressBarPeeks {
                             peekingTopBar
                         }
-                        if showBookmarksBar {
+                        if showBookmarksBar && !chromeTemplate {
                             bookmarksBar
                         }
                         framedContent
@@ -135,6 +147,7 @@ struct BrowserShellView: View {
                     // ─── AI side panel (hidden on start page and AI chat) ────────
                     if let currentId = tabManager.currentTab, tabsWithPanelOpen.contains(panelKey(for: currentId)), !isCurrentTabStartOrAIChat {
                         aiPanel(for: currentId, windowWidth: geometry.size.width)
+                            .background(chromeTemplate ? ChromePalette.for(colorScheme).toolbar : Color.clear)
                     }
                 }
                 .overlay(alignment: .leading) {
@@ -151,6 +164,7 @@ struct BrowserShellView: View {
                     }
                 }
                 .animation(Self.chromeAnimation, value: sidebarState)
+              }
             }
         }
         .ignoresSafeArea(.container, edges: .top)
@@ -215,10 +229,32 @@ struct BrowserShellView: View {
                 let urls = raw.split(separator: " ").compactMap { URL(string: String($0)) }
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     guard let first = urls.first else { return }
+                    // Side-by-side captures: start from just these tabs.
+                    if ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_ONLY_TABS"] != nil, let keep = tabManager.currentTab {
+                        for id in session.workspace.orderedTabIds where id != keep { closeTab(id) }
+                    }
                     navigateToURL(first)
                     let firstId = tabManager.currentTab
                     urls.dropFirst().forEach { newTabWithURL($0) }
                     if let firstId { switchToTab(firstId) }
+                }
+            }
+            // "Title|URL" entries separated by spaces, in a throwaway bookmarks store.
+            if let raw = ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_BOOKMARKS"] {
+                let entries = raw.split(separator: " ").map { $0.split(separator: "|", maxSplits: 1).map(String.init) }
+                BookmarkStore.useSnapshotStore(for: session.profileId, urls: entries.compactMap { $0.last.flatMap(URL.init(string:)) })
+                for entry in entries where entry.count == 2 {
+                    if let url = URL(string: entry[1]), let mark = bookmarks.bookmarks.first(where: { $0.url == url }) {
+                        bookmarks.rename(mark.id, to: entry[0].replacingOccurrences(of: "_", with: " "))
+                    }
+                }
+            }
+            // "WxH": resize the window (content size) for side-by-side captures.
+            if let raw = ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_WINDOW_SIZE"] {
+                let parts = raw.split(separator: "x").compactMap { Double($0) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    guard parts.count == 2, let window = hostWindow else { return }
+                    window.setFrame(NSRect(x: 60, y: 60, width: parts[0], height: parts[1]), display: true)
                 }
             }
             if let raw = ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_URL"], let url = URL(string: raw) {
@@ -539,6 +575,10 @@ struct BrowserShellView: View {
 
     private var layout: BrowserLayout { BrowserLayout(stored: layoutRaw) }
     private var usesSidebar: Bool { layout == .sidebar }
+    /// The Chrome layout template draws Chrome's window chrome (Classic layout, top bar showing).
+    private var chromeTemplate: Bool {
+        templateRaw == LayoutTemplate.chrome.rawValue && layout == .classic && showsTopChrome
+    }
     /// Frameless mode in the sidebar layout means the sidebar auto-hides.
     /// The docked sidebar steps aside while the top bar is down.
     private var sidebarShown: Bool { usesSidebar && sidebarVisible && !frameless && !topBarPeeking }
@@ -600,7 +640,8 @@ struct BrowserShellView: View {
         BookmarksBar(store: bookmarks, onOpen: { url, newTab in
             Usage.record(.bookmarkOpen)
             if newTab { newTabWithURL(url) } else { navigateToURL(url) }
-        }, onAddCurrentPage: isCurrentTabStartOrAIChat ? nil : { bookmarkCurrentPage() })
+        }, onAddCurrentPage: isCurrentTabStartOrAIChat ? nil : { bookmarkCurrentPage() },
+           chromeStyle: chromeTemplate, onApps: { topChromeActions.newTab() })
         // At the window's top edge (no toolbar, no docked sidebar) it clears the window buttons.
         .padding(.leading, !showsTopChrome && !topBarPeeking && !sidebarShown && !isFullScreen ? 70 : 0)
         .padding(.top, !showsTopChrome && !topBarPeeking ? 4 : 0)
@@ -628,7 +669,9 @@ struct BrowserShellView: View {
             showsTabs: showsTabs,
             profileControl: AnyView(profileControl),
             extensions: session.extensions,
-            actions: topChromeActions
+            actions: topChromeActions,
+            chromeStyle: chromeTemplate,
+            bookmarks: bookmarks
         )
     }
 
@@ -1011,7 +1054,7 @@ struct BrowserShellView: View {
         let point = event.locationInWindow
         let fromTop = (window.contentView?.bounds.height ?? 0) - point.y
         let overChrome = (sidebarShown && point.x <= sidebarWidth)
-            || (showsTopChrome && fromTop <= TopChromeView.height(for: layout, showsTabs: !frameless))
+            || (showsTopChrome && fromTop <= (chromeTemplate ? ChromeMetrics.height : TopChromeView.height(for: layout, showsTabs: !frameless)))
         guard overChrome, abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) * 1.5 || swipeTravel != 0 else { return false }
         guard !swipeConsumed else { return true }
         swipeTravel += event.scrollingDeltaX

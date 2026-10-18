@@ -31,7 +31,12 @@ struct TopChromeView: View {
     let profileControl: AnyView
     let extensions: ExtensionHost
     let actions: TopChromeActions
+    /// Chrome layout template (Classic layout only): Chrome's tab strip and toolbar.
+    var chromeStyle = false
+    /// For the omnibox star.
+    var bookmarks: BookmarkStore?
 
+    @Environment(\.colorScheme) private var scheme
     @AppStorage(ChromePrefs.centeredAddressBar) private var centeredAddressBar = false
     @AppStorage(ChromePrefs.showHomeButton) private var showHomeButton = false
 
@@ -51,6 +56,14 @@ struct TopChromeView: View {
     }
 
     var body: some View {
+        if chromeStyle && layout == .classic {
+            chromeBody.background(WindowDragRegionView())
+        } else {
+            lunaBody
+        }
+    }
+
+    private var lunaBody: some View {
         Group {
             switch layout {
             case .classic where showsTabs:
@@ -87,6 +100,67 @@ struct TopChromeView: View {
             }
         }
         .background(WindowDragRegionView())
+    }
+
+    // MARK: Chrome template
+
+    private var chromeBody: some View {
+        let palette = ChromePalette.for(scheme)
+        return VStack(spacing: 0) {
+            if showsTabs {
+                HStack(spacing: 0) {
+                    Spacer().frame(width: isFullScreen ? 8 : ChromeMetrics.tabSearchLeading)
+                    ChromeTabSearchButton(store: store, onActivate: actions.activate)
+                        .padding(.top, ChromeMetrics.tabTop)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .background(NonDraggableWindowView())
+                    Spacer().frame(width: 3)
+                    HorizontalTabStrip(
+                        store: store, web: web, height: ChromeMetrics.tabStripHeight,
+                        onActivate: actions.activate, onClose: actions.close, onNewTab: actions.newTab,
+                        onSplit: actions.split, onTearOff: actions.tearOff, chromeStyle: true
+                    )
+                    .padding(.trailing, 8)
+                }
+                .frame(height: ChromeMetrics.tabStripHeight)
+                .background(palette.frame)
+            }
+            HStack(spacing: 2) {
+                ChromeToolbarButton(systemName: "arrow.left", help: "Back (⌘[)", isEnabled: web.canGoBackForActiveTab) {
+                    if let id = store.activeTabId { web.goBack(in: id) }
+                }
+                ChromeToolbarButton(systemName: "arrow.right", help: "Forward (⌘])", isEnabled: web.canGoForwardForActiveTab) {
+                    if let id = store.activeTabId { web.goForward(in: id) }
+                }
+                ChromeToolbarButton(systemName: "arrow.clockwise", help: "Reload (⌘R)") {
+                    if let id = store.activeTabId { web.reload(in: id) }
+                }
+                if showHomeButton {
+                    ChromeToolbarButton(systemName: "house", help: "Home", action: actions.goHome)
+                }
+                AddressField(
+                    url: activeURL,
+                    text: $addressText,
+                    focused: addressFocused,
+                    loadingProgress: store.activeTabId.flatMap { web.loadingProgressByTab[$0] },
+                    height: ChromeMetrics.omniboxHeight,
+                    chromeStyle: true,
+                    trailing: AnyView(ChromeStar(url: activeURL, bookmarks: bookmarks, add: actions.bookmarkPage)),
+                    onSubmit: actions.submitAddress
+                )
+                .padding(.horizontal, 7)
+                ChromeToolbarButton(systemName: "sparkles", help: "Luna AI (⌘E)", action: actions.toggleAI)
+                ChromeExtensionsButton(extensions: extensions)
+                DownloadsButton()
+                profileControl
+                    .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
+                ChromeMenuButton(actions: actions, extensions: extensions)
+            }
+            .padding(.horizontal, 6)
+            .frame(height: ChromeMetrics.toolbarHeight)
+            .background(palette.toolbar)
+            .background(NonDraggableWindowView())
+        }
     }
 
     // MARK: Pieces
@@ -188,5 +262,101 @@ struct MoreMenu: View {
         .fixedSize()
         .background(PopupAnchor { extensions.menuAnchor = $0 })
         .help("More")
+    }
+}
+
+/// The omnibox star: filled blue when the page is bookmarked; click to add or remove it.
+private struct ChromeStar: View {
+    let url: URL?
+    let bookmarks: BookmarkStore?
+    let add: () -> Void
+
+    var body: some View {
+        if let bookmarks { Star(url: url, store: bookmarks, add: add) }
+    }
+
+    private struct Star: View {
+        let url: URL?
+        @ObservedObject var store: BookmarkStore
+        let add: () -> Void
+        @Environment(\.colorScheme) private var scheme
+        @State private var isHovering = false
+
+        var body: some View {
+            let palette = ChromePalette.for(scheme)
+            let saved = url.map(store.contains) ?? false
+            Button {
+                if saved, let url, let mark = store.bookmarks.first(where: { $0.url == url }) { store.remove(mark.id) } else { add() }
+            } label: {
+                Image(systemName: saved ? "star.fill" : "star")
+                    .font(.system(size: 14, weight: .regular))
+                    .foregroundStyle(saved ? palette.star : palette.icon)
+                    .frame(width: 24, height: 24)
+                    .background(Circle().fill(palette.hover.opacity(isHovering ? 1.5 : 0)))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovering = $0 }
+            .disabled(url == nil)
+            .help(saved ? "Remove Bookmark" : "Bookmark This Tab (⌘D)")
+        }
+    }
+}
+
+/// Chrome's extensions (puzzle piece) button.
+private struct ChromeExtensionsButton: View {
+    @ObservedObject var extensions: ExtensionHost
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        // Like Chrome, the puzzle piece shows once an extension is installed.
+        let _ = extensions.actionRevision
+        if !extensions.loaded.isEmpty { menu }
+    }
+
+    private var menu: some View {
+        Menu {
+            ExtensionsMenuItems(host: extensions)
+        } label: {
+            ChromeIcon(systemName: "puzzlepiece.extension", color: ChromePalette.for(scheme).icon)
+                .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
+                .contentShape(Circle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Extensions")
+    }
+}
+
+/// Chrome's vertical "⋮" menu, with Luna's commands.
+private struct ChromeMenuButton: View {
+    let actions: TopChromeActions
+    let extensions: ExtensionHost
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Menu {
+            Button("New Tab", action: actions.newTab)
+            Button("Ask on Page", action: actions.askOnPage)
+            Button("Bookmark This Page", action: actions.bookmarkPage)
+            Divider()
+            Button("History", action: actions.showHistory)
+            Button("Downloads", action: actions.showDownloads)
+            Divider()
+            ExtensionsMenuItems(host: extensions)
+            SettingsLink { Text("Settings…") }
+        } label: {
+            ChromeIcon(systemName: "ellipsis", color: ChromePalette.for(scheme).icon, rotation: .degrees(90))
+                .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
+                .contentShape(Circle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .background(PopupAnchor { extensions.menuAnchor = $0 })
+        .help("Customize and control Luna")
     }
 }

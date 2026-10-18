@@ -34,6 +34,16 @@ final class BookmarkStore: ObservableObject {
         return store
     }
 
+    #if DEBUG
+    /// Screenshots: a throwaway store (temp file) with these bookmarks, so the profile's real bookmarks are untouched.
+    static func useSnapshotStore(for id: UUID, urls: [URL]) {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("luna-snapshot-bookmarks-\(UUID().uuidString).json")
+        let store = BookmarkStore(fileURL: file)
+        for url in urls { _ = store.add(url: url, title: nil) }
+        stores[id] = store
+    }
+    #endif
+
     func contains(_ url: URL) -> Bool { bookmarks.contains { Self.same($0.url, url) } }
 
     /// Adds a bookmark unless the URL is already there; returns its id.
