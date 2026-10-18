@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Settings → Dev (Luna Dev build only): the coding-agent harnesses Dev mode finds on this Mac and
@@ -11,7 +12,7 @@ struct DevSettingsView: View {
     @State private var pathError: String?
     @Environment(\.colorScheme) private var scheme
 
-    private var p: T3Palette { .of(scheme) }
+    private var p: DevPalette { .of(scheme) }
     private var supported: [AgentCLIKind] { AgentCLIKind.allCases }
 
     var body: some View {
@@ -47,15 +48,141 @@ struct DevSettingsView: View {
             }
 
             Section {
-                LabeledContent {
-                    dropdown(id: "harness", items: harnessItems, selected: settings.defaultHarness.harnessID.rawValue,
-                             label: settings.defaultHarness.displayName) { item in
-                        if let kind = HarnessID(rawValue: item.id)?.agentKind { settings.defaultHarness = kind }
+                LabeledContent("Accent") {
+                    HStack(spacing: 8) {
+                        ForEach(DevAccent.allCases, id: \.self) { accent in
+                            accentSwatch(accent)
+                        }
                     }
-                } label: {
-                    Text("Default harness")
-                    Text("New threads start with this one.")
                 }
+                Picker("Density", selection: $settings.density) {
+                    ForEach(DevDensity.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Picker("Text size", selection: $settings.fontScale) {
+                    ForEach(DevFontScale.allCases, id: \.self) { scale in
+                        Text(scale == .small ? "S" : scale == .medium ? "M" : "L").tag(scale)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Picker("Timeline style", selection: $settings.timelineStyle) {
+                    ForEach(DevTimelineStyle.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Toggle(isOn: $settings.showToolDetails) {
+                    Text("Show tool details")
+                    Text("Show tool inputs and outputs in work rows.")
+                }
+            } header: {
+                Text("Appearance")
+            }
+
+            Section {
+                if settings.projectSearchRoots.isEmpty {
+                    Text("No search folders added.").foregroundStyle(.secondary)
+                }
+                ForEach(settings.projectSearchRoots, id: \.self) { root in
+                    HStack {
+                        Image(systemName: "folder").foregroundStyle(.secondary)
+                        Text((root as NSString).abbreviatingWithTildeInPath)
+                            .lineLimit(1).truncationMode(.middle).help(root)
+                        Spacer()
+                        Button {
+                            settings.projectSearchRoots.removeAll { $0 == root }
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Stop searching this folder")
+                        .accessibilityLabel("Remove \((root as NSString).abbreviatingWithTildeInPath)")
+                    }
+                }
+                HStack(spacing: 8) {
+                    Button("Add folder…") {
+                        for path in pickFolders(multiple: true) { addSearchRoot(path) }
+                    }
+                    ForEach(suggestedRoots, id: \.self) { root in
+                        Button("+ " + (root as NSString).abbreviatingWithTildeInPath) { addSearchRoot(root) }
+                            .controlSize(.small)
+                    }
+                }
+                Text("Projects come from your Claude Code and Codex sessions. Add folders to also find git repos in them.")
+                    .font(.caption).foregroundStyle(.secondary)
+                if settings.hiddenProjects.isEmpty {
+                    Text("No hidden projects. Hide one from the project menu.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    LabeledContent("Hidden projects") { EmptyView() }
+                    ForEach(settings.hiddenProjects.sorted(), id: \.self) { path in
+                        HStack {
+                            Text((path as NSString).abbreviatingWithTildeInPath)
+                                .lineLimit(1).truncationMode(.middle).help(path)
+                            Spacer()
+                            Button("Unhide") { settings.unhideProject(path) }.controlSize(.small)
+                        }
+                    }
+                }
+            } header: {
+                Text("Projects")
+            }
+
+            Section {
+                Toggle(isOn: $settings.skipHome) {
+                    Text("Skip home")
+                    Text("Open Dev straight into your last session, or a new one with the default setup.")
+                }
+                LabeledContent("Harness") {
+                    dropdown(id: "setup-harness", items: installedHarnessItems,
+                             selected: settings.defaultSetup.harness.harnessID.rawValue,
+                             label: settings.defaultSetup.harness.displayName) { item in
+                        if let kind = HarnessID(rawValue: item.id)?.agentKind {
+                            settings.defaultSetup.harness = kind
+                            settings.defaultSetup.model = nil
+                            settings.defaultSetup.effort = nil
+                            settings.defaultHarness = kind
+                        }
+                    }
+                }
+                LabeledContent("Model") { setupModelDropdown }
+                if let efforts = setupEfforts {
+                    LabeledContent("Effort") {
+                        dropdown(id: "setup-effort",
+                                 items: [DevDropdownItem(id: "", title: "Default")]
+                                    + efforts.map { DevDropdownItem(id: $0, title: $0.capitalized) },
+                                 selected: settings.defaultSetup.effort ?? "",
+                                 label: settings.defaultSetup.effort?.capitalized ?? "Default") { item in
+                            settings.defaultSetup.effort = item.id.isEmpty ? nil : item.id
+                        }
+                    }
+                }
+                Picker("Approval", selection: $settings.defaultSetup.approvalBehavior) {
+                    ForEach(DevApprovalBehavior.allCases, id: \.self) { Text($0.displayName).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                LabeledContent("Project") {
+                    HStack(spacing: 8) {
+                        Picker("Project", selection: specificProjectBinding) {
+                            Text("Last used").tag(false)
+                            Text("Specific folder").tag(true)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .fixedSize()
+                        if case .specific(let path) = settings.defaultSetup.project {
+                            Button((path as NSString).abbreviatingWithTildeInPath) {
+                                if let chosen = pickFolders(multiple: false).first {
+                                    settings.defaultSetup.project = .specific(chosen)
+                                }
+                            }
+                            .lineLimit(1).truncationMode(.middle).frame(maxWidth: 220).help(path)
+                        }
+                    }
+                }
+            } header: {
+                Text("Home & default setup")
+            }
+
+            Section {
                 ForEach(supported, id: \.self) { kind in
                     LabeledContent {
                         modelDropdown(kind)
@@ -65,7 +192,7 @@ struct DevSettingsView: View {
                     }
                 }
             } header: {
-                Text("New sessions")
+                Text("Default model per harness")
             }
 
             Section {
@@ -111,7 +238,89 @@ struct DevSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .tint(p.primary)
         .task { await scan(refresh: false) }
+    }
+
+    // MARK: Appearance / projects / default setup helpers
+
+    private func accentSwatch(_ accent: DevAccent) -> some View {
+        let c = accent.colors
+        let selected = settings.accent == accent
+        return Button {
+            settings.accent = accent
+        } label: {
+            Circle()
+                .fill(scheme == .dark ? c.dark : c.light)
+                .frame(width: 16, height: 16)
+                .padding(3)
+                .overlay(Circle().strokeBorder(selected ? Color.primary.opacity(0.8) : .clear, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
+        .help(accent.displayName)
+        .accessibilityLabel(accent.displayName)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var suggestedRoots: [String] {
+        DevSettings.suggestedProjectSearchRoots.filter { !settings.projectSearchRoots.contains($0) }
+    }
+
+    private func addSearchRoot(_ path: String) {
+        let std = (path as NSString).standardizingPath
+        if !settings.projectSearchRoots.contains(std) { settings.projectSearchRoots.append(std) }
+    }
+
+    private func pickFolders(multiple: Bool) -> [String] {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = multiple
+        panel.prompt = "Choose"
+        guard panel.runModal() == .OK else { return [] }
+        return panel.urls.map { ($0.path as NSString).standardizingPath }
+    }
+
+    private var specificProjectBinding: Binding<Bool> {
+        Binding(
+            get: { if case .specific = settings.defaultSetup.project { return true } else { return false } },
+            set: { wantsSpecific in
+                if !wantsSpecific { settings.defaultSetup.project = .last; return }
+                if let chosen = pickFolders(multiple: false).first { settings.defaultSetup.project = .specific(chosen) }
+            })
+    }
+
+    private var installedHarnessItems: [DevDropdownItem] {
+        let installed = harnessItems.filter { item in
+            harnesses.isEmpty || harnesses.contains { $0.id.rawValue == item.id }
+        }
+        return installed.isEmpty ? harnessItems : installed
+    }
+
+    private var setupModels: [HarnessModel] {
+        listings[settings.defaultSetup.harness.harnessID]?.models ?? []
+    }
+
+    private var setupEfforts: [String]? {
+        guard let id = settings.defaultSetup.model,
+              let efforts = setupModels.first(where: { $0.id == id })?.efforts, !efforts.isEmpty else { return nil }
+        return efforts
+    }
+
+    private var setupModelDropdown: some View {
+        let stored = settings.defaultSetup.model
+        var items = [DevDropdownItem(id: "", title: "Default")]
+        items += setupModels.map { DevDropdownItem(id: $0.id, title: $0.displayName, subtitle: $0.description) }
+        if let stored, !setupModels.contains(where: { $0.id == stored }) {
+            items.append(DevDropdownItem(id: stored, title: stored))
+        }
+        let label = stored.map { id in setupModels.first { $0.id == id }?.displayName ?? id } ?? "Default"
+        return dropdown(id: "setup-model", items: items, selected: stored ?? "", label: label) { item in
+            settings.defaultSetup.model = item.id.isEmpty ? nil : item.id
+            if let efforts = setupModels.first(where: { $0.id == item.id })?.efforts,
+               let e = settings.defaultSetup.effort, efforts.contains(e) { return }
+            settings.defaultSetup.effort = nil
+        }
     }
 
     // MARK: Harness rows
@@ -192,7 +401,7 @@ struct DevSettingsView: View {
         DevDropdown(isOpen: binding(id), items: items, selectedID: selected, palette: p, edge: .below, width: 280,
                     footnote: footnote, presentation: .popover, onSelect: onSelect) {
             DevPickerLabel(text: label, maxTextWidth: 180, palette: p)
-                .background(RoundedRectangle(cornerRadius: T3Metrics.radiusMd).strokeBorder(p.input, lineWidth: 1))
+                .background(RoundedRectangle(cornerRadius: DevMetrics.radiusMd).strokeBorder(p.input, lineWidth: 1))
         }
         .fixedSize()
     }

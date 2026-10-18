@@ -118,9 +118,10 @@ enum DebugSnapshot {
             #if LUNA_DEV
             if let prompt = env["LUNA_SNAPSHOT_DEV_PROMPT"], let dir = env["LUNA_SNAPSHOT_DEV_DIR"] {
                 Task {
-                    let c = DevSessionController.shared
-                    await c.start(kind: .claudeCode, projectDir: URL(fileURLWithPath: dir), model: "haiku", resume: false)
-                    c.send(prompt)
+                    var setup = DevSettings.shared.defaultSetup
+                    setup.model = "haiku"
+                    DevWorkspace.shared.startNew(harness: .claudeCode, projectDir: URL(fileURLWithPath: dir), setup: setup)
+                    _ = DevWorkspace.shared.session?.send(prompt)
                 }
             }
             #endif

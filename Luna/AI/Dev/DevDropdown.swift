@@ -119,7 +119,7 @@ struct DevDropdownList: View {
     @State private var model: DevDropdownModel
     private let items: [DevDropdownItem]
     private let selectedID: String?
-    let palette: T3Palette
+    let palette: DevPalette
     let width: CGFloat
     let maxHeight: CGFloat
     var footnote: String?
@@ -128,7 +128,7 @@ struct DevDropdownList: View {
 
     @FocusState private var focused: Bool
 
-    init(items: [DevDropdownItem], selectedID: String?, palette: T3Palette, width: CGFloat, maxHeight: CGFloat = 340,
+    init(items: [DevDropdownItem], selectedID: String?, palette: DevPalette, width: CGFloat, maxHeight: CGFloat = 340,
          footnote: String? = nil, onSelect: @escaping (DevDropdownItem) -> Void, onDismiss: @escaping () -> Void) {
         _model = State(initialValue: DevDropdownModel(items: items, selectedID: selectedID))
         self.items = items
@@ -141,8 +141,8 @@ struct DevDropdownList: View {
         self.onDismiss = onDismiss
     }
 
-    private var p: T3Palette { palette }
-    static func popoverFill(_ p: T3Palette) -> Color { p.isDark ? Color(hex: 0x161616) : .white }
+    private var p: DevPalette { palette }
+    static func popoverFill(_ p: DevPalette) -> Color { p.isDark ? Color(hex: 0x161616) : .white }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -166,7 +166,7 @@ struct DevDropdownList: View {
             if let footnote {
                 Rectangle().fill(p.border).frame(height: 1)
                 Text(footnote)
-                    .font(.system(size: T3Metrics.text2xs))
+                    .font(.system(size: DevMetrics.text2xs))
                     .foregroundStyle(p.mutedForeground)
                     .lineLimit(1)
                     .padding(.horizontal, 10)
@@ -221,7 +221,7 @@ struct DevDropdownList: View {
                 }
                 if let title = section.title {
                     Text(title)
-                        .font(.system(size: T3Metrics.text2xs, weight: .medium))
+                        .font(.system(size: DevMetrics.text2xs, weight: .medium))
                         .foregroundStyle(p.mutedForeground)
                         .padding(.horizontal, 8)
                         .padding(.top, index == 0 ? 2 : 0)
@@ -232,7 +232,7 @@ struct DevDropdownList: View {
             }
             if model.hasNoMatches {
                 Text("No matches")
-                    .font(.system(size: T3Metrics.textXs))
+                    .font(.system(size: DevMetrics.textXs))
                     .foregroundStyle(p.mutedForeground)
                     .padding(.horizontal, 8)
                     .frame(height: 28)
@@ -270,7 +270,7 @@ struct DevDropdownList: View {
                     }
                     if let subtitle = item.subtitle {
                         Text(subtitle)
-                            .font(.system(size: T3Metrics.text2xs))
+                            .font(.system(size: DevMetrics.text2xs))
                             .foregroundStyle(p.mutedForeground)
                             .lineLimit(1)
                             .truncationMode(.tail)
@@ -279,7 +279,7 @@ struct DevDropdownList: View {
                 Spacer(minLength: 6)
                 if let trailing = item.isEnabled ? item.detail : (item.disabledReason ?? item.detail) {
                     Text(trailing)
-                        .font(.system(size: T3Metrics.text2xs))
+                        .font(.system(size: DevMetrics.text2xs))
                         .foregroundStyle(p.mutedForeground)
                         .lineLimit(1)
                 }
@@ -293,7 +293,7 @@ struct DevDropdownList: View {
             .padding(.horizontal, 8)
             .padding(.vertical, item.subtitle == nil ? 0 : 5)
             .frame(minHeight: 28)
-            .background(RoundedRectangle(cornerRadius: T3Metrics.radiusSm, style: .continuous)
+            .background(RoundedRectangle(cornerRadius: DevMetrics.radiusSm, style: .continuous)
                 .fill(highlighted ? p.accent.opacity(p.isDark ? 1.6 : 1) : .clear))
             .opacity(item.isEnabled ? 1 : 0.45)
             .contentShape(Rectangle())
@@ -347,7 +347,7 @@ struct DevDropdown<Label: View>: View {
     @Binding var isOpen: Bool
     let items: [DevDropdownItem]
     let selectedID: String?
-    let palette: T3Palette
+    let palette: DevPalette
     var edge: DevDropdownEdge = .above
     var width: CGFloat = 260
     var footnote: String?
@@ -358,8 +358,8 @@ struct DevDropdown<Label: View>: View {
 
     var body: some View {
         Button { isOpen.toggle() } label: { label() }
-            .buttonStyle(T3GhostButtonStyle(palette: palette))
-            .background(RoundedRectangle(cornerRadius: T3Metrics.radiusMd).fill(isOpen ? palette.accent : .clear))
+            .buttonStyle(DevGhostButtonStyle(palette: palette))
+            .background(RoundedRectangle(cornerRadius: DevMetrics.radiusMd).fill(isOpen ? palette.accent : .clear))
             .help(help ?? "")
             .modifier(Presented(owner: self))
     }
@@ -450,7 +450,7 @@ struct DevPickerLabel: View {
     let text: String
     var dimmed = false
     var maxTextWidth: CGFloat = 150
-    let palette: T3Palette
+    let palette: DevPalette
 
     var body: some View {
         HStack(spacing: 5) {

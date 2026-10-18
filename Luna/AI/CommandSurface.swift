@@ -48,6 +48,7 @@ struct CommandSurfaceView: View {
     @State private var streamGeneration: Int = 0
     /// A `/grab` paused on a sign-in page; Resume runs it again.
     @State private var composerMode: ComposerMode = .chat
+    @State private var modeMenuOpen = false
     @AppStorage("luna_grab_service") private var grabServiceID: String = KeyService.registry[0].id
     @FocusState private var isInputFocused: Bool
 
@@ -97,6 +98,8 @@ struct CommandSurfaceView: View {
                     MCPApprovalStack()
                     inputArea()
                 }
+                // Draws the composer's mode dropdown above the composer (not inside a scroll view).
+                .devDropdownHost()
                 // No surface of its own: the panel sits on the window chrome, like the
                 // sidebar, so the browser, the page and the panel read as one piece.
                 .environment(\.colorScheme, .dark)
@@ -118,6 +121,9 @@ struct CommandSurfaceView: View {
             if ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_NEW_CHAT"] != nil { messages = [] }
             if let mode = ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_COMPOSER"].flatMap(ComposerMode.init(rawValue:)) {
                 composerMode = mode
+            }
+            if ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_MODE_MENU"] != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { modeMenuOpen = true }
             }
             if let text = ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_SEND"] {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) { inputText = text; sendCommand() }
@@ -184,8 +190,8 @@ struct CommandSurfaceView: View {
             Spacer(minLength: 0)
             PanelIconButton(systemName: "xmark", help: "Close (Esc)") {
                 // Esc stops a running reply, agent run or Dev turn before it closes the panel.
-                if isDevMode, DevSessionController.shared.thread?.isTurnActive == true {
-                    DevSessionController.shared.interrupt()
+                if isDevMode, DevWorkspace.shared.isTurnActive {
+                    DevWorkspace.shared.interrupt()
                 } else if !isDevMode, isSending {
                     stopStreaming()
                 } else {
@@ -257,7 +263,7 @@ struct CommandSurfaceView: View {
     }
 
     private func startNewChat() {
-        if isDevMode { DevSessionController.shared.stop(); return }
+        if isDevMode { DevWorkspace.shared.goHome(); return }
         streamingTask?.cancel()
         streamingTask = nil
         isSending = false
@@ -402,6 +408,25 @@ struct CommandSurfaceView: View {
             }
         }
 
+        /// One-line description for the mode dropdown (no slash command).
+        var subtitle: String {
+            switch self {
+            case .chat: return "Ask about this page"
+            case .agent: return "Do a task on this tab"
+            case .grab: return "Create an API key into the Keychain"
+            case .personalize: return "Set up Luna from how you use it"
+            }
+        }
+
+        var slashCommand: String? {
+            switch self {
+            case .chat: return nil
+            case .agent: return "/agent"
+            case .grab: return "/grab"
+            case .personalize: return "/personalize"
+            }
+        }
+
         var placeholder: String {
             switch self {
             case .chat: return "Ask anything…"
@@ -530,21 +555,22 @@ struct CommandSurfaceView: View {
 
     /// Chat / Agent / Grab key. Same circle as the "+" button; the icon shows the mode.
     private func modeMenu() -> some View {
-        Menu {
-            Picker("Mode", selection: Binding(get: { composerMode }, set: { setMode($0) })) {
-                ForEach(ComposerMode.allCases, id: \.self) { mode in
-                    Label {
-                        Text(mode.title)
-                        Text(mode.detail)
-                    } icon: {
-                        Image(systemName: mode.systemImage)
-                    }
-                    .tag(mode)
-                }
+        DevDropdown(
+            isOpen: $modeMenuOpen,
+            items: ComposerMode.allCases.map { mode in
+                DevDropdownItem(id: mode.rawValue, title: mode.title, subtitle: mode.subtitle,
+                                detail: mode.slashCommand, icon: mode.systemImage,
+                                iconColor: mode == composerMode ? ChatTokens.accent : nil)
+            },
+            selectedID: composerMode.rawValue,
+            palette: .general,
+            edge: .above,
+            width: 290,
+            presentation: .inWindow,
+            onSelect: { item in
+                if let mode = ComposerMode(rawValue: item.id) { setMode(mode) }
             }
-            .pickerStyle(.inline)
-            .labelsHidden()
-        } label: {
+        ) {
             Image(systemName: composerMode.systemImage)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(composerMode == .chat ? ChatTokens.textSecondary : ChatTokens.accent)
@@ -552,7 +578,6 @@ struct CommandSurfaceView: View {
                 .background(Circle().fill(Color.white.opacity(composerMode == .chat ? 0 : 0.12)))
                 .contentShape(Circle())
         }
-        .chatMenuStyle()
         .disabled(isSending)
         .help("Mode: \(composerMode.title) — chat, run an agent task, or grab an API key")
         .accessibilityLabel("Mode: \(composerMode.title)")
