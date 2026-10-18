@@ -228,6 +228,13 @@ final class DevSyncTests: XCTestCase {
         XCTAssertEqual(SessionSync.claudeProjectFolderName("/Users/me/my.app_v2"), "-Users-me-my-app-v2")
     }
 
+    func testPathVariantsKeepThePrivatePrefixTheCLIsRecord() {
+        // Foundation drops "/private" when standardizing; Claude Code names the folder after the real path.
+        let variants = SessionSync.pathVariants(URL(fileURLWithPath: "/private/tmp/luna-proj", isDirectory: true))
+        XCTAssertTrue(variants.contains("/private/tmp/luna-proj"))
+        XCTAssertTrue(SessionSync.samePath("/tmp/luna-proj", URL(fileURLWithPath: "/private/tmp/luna-proj")))
+    }
+
     func testListsSessionsForProject() async throws {
         let f = try makeFixture()
         let store = AgentCLIResumeStore(defaults: scratchDefaults())

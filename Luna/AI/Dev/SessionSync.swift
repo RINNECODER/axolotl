@@ -265,11 +265,17 @@ actor SessionSync {
             .map(\.0)
     }
 
-    /// The project path as written (standardized) and with symlinks resolved (`/tmp` → `/private/tmp`).
+    /// The project path as written, standardized and with symlinks resolved. Foundation strips a
+    /// leading `/private` when it standardizes or resolves, but the CLIs record the real path
+    /// (`/private/tmp/…`), so that form is added back for `/tmp`, `/var` and `/etc`.
     static func pathVariants(_ url: URL) -> [String] {
-        let standardized = url.standardizedFileURL.path
+        var out: [String] = []
         let resolved = url.standardizedFileURL.resolvingSymlinksInPath().path
-        return standardized == resolved ? [standardized] : [standardized, resolved]
+        for path in [url.path, url.standardizedFileURL.path, resolved] where !out.contains(path) { out.append(path) }
+        for path in out where ["/tmp/", "/var/", "/etc/"].contains(where: { path.hasPrefix($0) }) {
+            if !out.contains("/private" + path) { out.append("/private" + path) }
+        }
+        return out
     }
 
     static func samePath(_ path: String, _ url: URL) -> Bool {
