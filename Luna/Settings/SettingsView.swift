@@ -42,6 +42,7 @@ struct SettingsView: View {
                 case .ai: ModelsSettingsView()
                 case .lunaMax: LunaMaxSettingsView()
                 case .passwords: PasswordsSettingsView()
+                case .importData: BrowserImportView()
                 case .extensions: ExtensionsSettingsView()
                 case .search: SearchSettingsView()
                 case .about: AboutSettingsView()
@@ -59,7 +60,7 @@ struct SettingsView: View {
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
-    case profiles, appearance, tabs, passwords, extensions, ai, lunaMax, search, about
+    case profiles, appearance, tabs, passwords, importData = "import", extensions, ai, lunaMax, search, about
 
     var id: String { rawValue }
 
@@ -71,6 +72,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .ai: return "AI & Models"
         case .lunaMax: return "Luna Max"
         case .passwords: return "Passwords"
+        case .importData: return "Import"
         case .extensions: return "Extensions"
         case .search: return "Search"
         case .about: return "About Luna"
@@ -85,6 +87,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .ai: return "sparkles"
         case .lunaMax: return "wand.and.stars"
         case .passwords: return "key.fill"
+        case .importData: return "square.and.arrow.down"
         case .extensions: return "puzzlepiece.extension"
         case .search: return "magnifyingglass"
         case .about: return "info.circle"
@@ -101,6 +104,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .ai: return ["model", "gemini", "ollama", "openai", "chatgpt", "anthropic", "claude", "api key"]
         case .extensions: return ["extension", "add-on", "plugin", "chrome web store", "ublock", "adblock"]
         case .passwords: return ["password", "login", "keychain", "autofill", "import", "touch id"]
+        case .importData: return ["import", "chrome", "firefox", "safari", "brave", "edge", "arc", "vivaldi", "bookmarks", "history", "sync"]
         case .lunaMax: return ["ask on page", "preview", "tidy", "rename", "downloads", "arc max", "folders"]
         case .search: return ["suggestions", "search engine", "privacy"]
         case .about: return ["version", "license"]
