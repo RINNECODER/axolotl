@@ -27,6 +27,7 @@ struct SettingsView: View {
             if liquidGlass { nativeLayout } else { solidLayout }
         }
         .frame(minWidth: 860, idealWidth: 900, minHeight: 520, idealHeight: 600)
+        .background(SettingsInitialFocus())
         .onChange(of: query) { _, _ in
             if let selection, !visiblePanes.contains(selection) { self.selection = visiblePanes.first }
         }
@@ -44,8 +45,9 @@ struct SettingsView: View {
                 Label(pane.title, systemImage: pane.icon)
                     .tag(pane)
             }
-            .navigationSplitViewColumnWidth(min: 270, ideal: 290, max: 330)
             .searchable(text: $query, placement: .sidebar, prompt: "Search settings")
+            // After .searchable: applied inside it, the sidebar search container drops the width.
+            .navigationSplitViewColumnWidth(min: 270, ideal: 290, max: 330)
         } detail: {
             detail.navigationTitle((selection ?? .general).title)
         }
@@ -88,6 +90,9 @@ struct SettingsView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .ignoresSafeArea(.container, edges: .top)
+        // The pane header is the title: no window title or titlebar material over it.
+        .toolbar(removing: .title)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
     }
 
     private var detail: some View {
@@ -104,6 +109,46 @@ struct SettingsView: View {
                 case .about: AboutSettingsView()
                 }
             }
+    }
+}
+
+/// AppKit focuses the window's first text field (General's profile name) each time Settings
+/// opens. Start with nothing focused instead, like System Settings: once when the window
+/// appears and again whenever it reopens after closing (the window is reused).
+private struct SettingsInitialFocus: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { FocusView() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class FocusView: NSView {
+        private var observers: [NSObjectProtocol] = []
+        private var reopening = false
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+        override func viewDidMoveToWindow() {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            guard let window else { return }
+            clearTextFocus()
+            let center = NotificationCenter.default
+            observers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
+                self?.reopening = true
+            })
+            observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self] _ in
+                guard let self, self.reopening else { return }
+                self.reopening = false
+                self.clearTextFocus()
+            })
+        }
+
+        private func clearTextFocus() {
+            DispatchQueue.main.async { [weak self] in
+                guard let window = self?.window, window.firstResponder is NSText else { return }
+                window.makeFirstResponder(nil)
+            }
+        }
+
+        deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     }
 }
 
