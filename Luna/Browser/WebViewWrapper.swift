@@ -44,10 +44,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     var loadingProgressByTab: [UUID: Double] { tabRuntime.loadingProgressByTab }
     @Published var canGoBackForActiveTab: Bool = false
     /// Tabs showing Luna's native error page (failed load or crashed web process).
-    @Published private(set) var pageErrorByTab: [UUID: PageError] = [:]
-    /// Tabs with audible media (unmuted, playing <audio>/<video>), and tabs the user muted.
+    var pageErrorByTab: [UUID: PageError] { tabRuntime.pageErrorByTab }
+    /// Tabs with audible media (unmuted, playing <audio>/<video>).
     var audibleTabs: Set<UUID> { tabRuntime.audibleTabs }
-    @Published private(set) var mutedTabs: Set<UUID> = []
     private var developerToolsObserver: NSObjectProtocol?
     /// Audible frames per tab, keyed by a token each frame's media script picks.
     private var audibleFramesByTab: [UUID: Set<String>] = [:]
@@ -60,13 +59,13 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Retried downloads, mapped to the list item they replace.
     private var retryItemByDownload: [ObjectIdentifier: UUID] = [:]
     private var resumeWebView: WKWebView?
+    /// Downloads running on `resumeWebView`; it is released when the last one ends.
+    private var resumeDownloads: Set<ObjectIdentifier> = []
     /// Tabs created for `target="_blank"` / `window.open()` popups.
     private var popupTabIds: Set<UUID> = []
     /// Recent popup times per opener tab, for the popup cap.
     private var popupTimes: [UUID: [Date]] = [:]
 
-    /// Per-tab zoom (1.0 = 100%). Applied via WKWebView.pageZoom.
-    @Published private var zoomByTab: [UUID: CGFloat] = [:]
     /// Chrome's per-site zoom; private windows keep it in memory only.
     lazy var siteZoom: SiteZoomStore = isPrivate ? SiteZoomStore(fileURL: nil) : .forProfile(profileId)
     private let zoomMin: CGFloat = 0.5
@@ -79,7 +78,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Last find-in-page query per tab so Next/Previous work even after the selection changes.
     var lastFindQueryByTab: [UUID: String] = [:]
     /// Find-bar match count per tab ("3 of 17"), set by FindInPage.
-    @Published var findResultByTab: [UUID: FindInPage.Result] = [:]
+    var findResultByTab: [UUID: FindInPage.Result] { tabRuntime.findResultByTab }
     /// Tabs whose page looks like an article (reader button shown), and the tabs showing Reader.
     @Published private(set) var readerableTabs: Set<UUID> = []
     @Published private(set) var readerArticleByTab: [UUID: ReaderMode.Article] = [:]
@@ -133,7 +132,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
     @Published var passwordFillOffer: PasswordFillOffer?
     /// Camera / microphone / location prompts waiting for the user, one per tab.
-    @Published var pendingPermissions: [UUID: SitePermissionRequest] = [:]
+    var pendingPermissions: [UUID: SitePermissionRequest] { tabRuntime.pendingPermissions }
     /// This profile's site settings; a non-persistent (private) data store keeps them in memory only.
     lazy var sitePermissions: SitePermissionStore = websiteDataStore.isPersistent
         ? .forProfile(profileId) : SitePermissionStore(fileURL: nil)
@@ -516,9 +515,13 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
                 debounceTimer = setTimeout(function() { sampleTheme(); debounceTimer = null; }, 100);
             }
             try {
+                // html/body (and the theme-color meta) only, not their subtrees: a busy page
+                // mutating deep nodes must not wake this.
                 var mo = new MutationObserver(scheduleSample);
-                mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'content'], subtree: true });
-                if (document.body) mo.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'], subtree: true });
+                mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+                if (document.body) mo.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'] });
+                var meta = document.querySelector('meta[name="theme-color"]');
+                if (meta) mo.observe(meta, { attributes: true, attributeFilter: ['content'] });
             } catch(e) {}
             setTimeout(sampleTheme, 300);
             setTimeout(sampleTheme, 900);
@@ -580,29 +583,42 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         // Web Inspector + "Inspect Element" (Debug, or Settings → Enable Developer Tools).
         Self.applyDeveloperTools(to: config)
-        config.userContentController.add(themeMessageHandler, name: "lumaPageTheme")
-        // Inject only at documentEnd (and didFinish fallback). No atDocumentStart — early injection is detectable as DOM tampering.
-        let themeScript = WKUserScript(source: WebViewWrapper.themeScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-        config.userContentController.addUserScript(themeScript)
-        // Passwords: form detection and filling live in an isolated content world, so page
-        // scripts can neither read saved passwords nor fake a submit.
-        config.userContentController.add(passwordHandler, contentWorld: .defaultClient, name: "lunaPasswords")
-        config.userContentController.addUserScript(WKUserScript(source: WebViewWrapper.passwordScriptSource, injectionTime: .atDocumentEnd,
-                                                                forMainFrameOnly: true, in: .defaultClient))
-        // Link previews run in an isolated content world: page scripts can't see or spoof this channel.
-        config.userContentController.add(linkPreviewHandler, contentWorld: .defaultClient, name: "lunaLinkPreview")
-        config.userContentController.addUserScript(WKUserScript(source: WebViewWrapper.linkPreviewScriptSource, injectionTime: .atDocumentEnd,
-                                                                forMainFrameOnly: true, in: .defaultClient))
-        config.userContentController.add(mediaHandler, contentWorld: .defaultClient, name: "lunaMedia")
-        config.userContentController.addUserScript(WKUserScript(source: WebViewWrapper.mediaScriptSource, injectionTime: .atDocumentEnd,
-                                                                forMainFrameOnly: false, in: .defaultClient))
-        // An exception to the documentEnd rule: GPC must be set before page scripts read it (on by default, Brave).
-        if PrivacyPrefs.isOn(PrivacyPrefs.globalPrivacyControl) { config.userContentController.addUserScript(PrivacyPrefs.gpcScript()) }
+        installUserScripts(in: config.userContentController)
         let wv = LunaWebView(frame: .zero, configuration: config)
         // Use Safari UA for all requests to avoid bot detection on Akamai-protected sites.
         wv.customUserAgent = WebViewWrapper.safariUserAgent
         register(webView: wv, for: tabId)
         return wv
+    }
+
+    /// Page theme sampling (MutationObserver script per tab). Off: no Luna UI is tinted by the page
+    /// since the page-tinted tab strip was removed; turn on for a feature that reads `pageTheme(for:)`.
+    static var samplesPageTheme = false
+
+    /// Every user script and message handler a tab gets. A feature that is off adds neither,
+    /// so it costs nothing per tab; changing its setting applies to tabs opened afterwards.
+    private func installUserScripts(in controller: WKUserContentController) {
+        if Self.samplesPageTheme {
+            controller.add(themeMessageHandler, name: "lumaPageTheme")
+            // Inject only at documentEnd (and didFinish fallback). No atDocumentStart — early injection is detectable as DOM tampering.
+            controller.addUserScript(WKUserScript(source: WebViewWrapper.themeScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        }
+        // Passwords: form detection and filling live in an isolated content world, so page
+        // scripts can neither read saved passwords nor fake a submit. Private windows keep it for filling.
+        controller.add(passwordHandler, contentWorld: .defaultClient, name: "lunaPasswords")
+        controller.addUserScript(WKUserScript(source: WebViewWrapper.passwordScriptSource, injectionTime: .atDocumentEnd,
+                                              forMainFrameOnly: true, in: .defaultClient))
+        if LunaMaxPrefs.isOn(LunaMaxPrefs.linkPreviews) {
+            // Link previews run in an isolated content world: page scripts can't see or spoof this channel.
+            controller.add(linkPreviewHandler, contentWorld: .defaultClient, name: "lunaLinkPreview")
+            controller.addUserScript(WKUserScript(source: WebViewWrapper.linkPreviewScriptSource, injectionTime: .atDocumentEnd,
+                                                  forMainFrameOnly: true, in: .defaultClient))
+        }
+        controller.add(mediaHandler, contentWorld: .defaultClient, name: "lunaMedia")
+        controller.addUserScript(WKUserScript(source: WebViewWrapper.mediaScriptSource, injectionTime: .atDocumentEnd,
+                                              forMainFrameOnly: false, in: .defaultClient))
+        // An exception to the documentEnd rule: GPC must be set before page scripts read it (on by default, Brave).
+        if PrivacyPrefs.isOn(PrivacyPrefs.globalPrivacyControl) { controller.addUserScript(PrivacyPrefs.gpcScript()) }
     }
 
     /// Shared setup for both regular tabs and popup webviews: delegates, bookkeeping, KVO.
@@ -753,7 +769,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         activeTab = tabId
         // A tab showing an error page is on the page that failed, not the one underneath
         // (about:blank or nothing for a first load), as in didFailProvisionalNavigation.
-        currentURL = pageErrorByTab[tabId]?.url ?? webViews[tabId]?.url
+        currentURL = tabRuntime.state(for: tabId).pageError?.url ?? webViews[tabId]?.url
         updatePageThemeForActiveTab()
         updateBackForwardForActiveTab()
     }
@@ -787,9 +803,15 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         return https
     }
 
+    private func takePageError(_ tabId: UUID) -> PageError? {
+        let error = tabRuntime.state(for: tabId).pageError
+        tabRuntime.setPageError(nil, for: tabId)
+        return error
+    }
+
     /// The error page's "Continue to http": loads the http page and stops upgrading its host.
     func continueToHTTP(in tabId: UUID) {
-        guard let url = pageErrorByTab.removeValue(forKey: tabId)?.httpFallback else { return }
+        guard let url = takePageError(tabId)?.httpFallback else { return }
         if let host = url.host?.lowercased() { httpAllowedHosts.insert(host) }
         load(url: url, in: tabId)
     }
@@ -1000,20 +1022,20 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func zoomIn(_ tabId: UUID?) {
         guard let id = tabId ?? activeTab else { return }
-        let current = zoomByTab[id] ?? 1.0
+        let current = tabRuntime.state(for: id).zoom
         setZoom(min(current + zoomStep, zoomMax), for: id)
     }
 
     func zoomOut(_ tabId: UUID?) {
         guard let id = tabId ?? activeTab else { return }
-        let current = zoomByTab[id] ?? 1.0
+        let current = tabRuntime.state(for: id).zoom
         setZoom(max(current - zoomStep, zoomMin), for: id)
     }
 
     /// The tab's zoom (1.0 = 100%).
     func zoomLevel(_ tabId: UUID?) -> CGFloat {
         guard let id = tabId ?? activeTab else { return 1 }
-        return zoomByTab[id] ?? 1.0
+        return tabRuntime.state(for: id).zoom
     }
 
     func zoomReset(_ tabId: UUID?) {
@@ -1024,19 +1046,19 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Zoom follows the site: every open tab on the same host changes with it, like Chrome.
     private func setZoom(_ zoom: CGFloat, for tabId: UUID) {
         guard let host = webViews[tabId]?.url?.host else {
-            zoomByTab[tabId] = zoom
+            tabRuntime.setZoom(zoom, for: tabId)
             return applyZoom(to: tabId)
         }
         siteZoom.set(zoom, for: host)
         for (id, wv) in webViews where wv.url?.host == host {
-            zoomByTab[id] = zoom
+            tabRuntime.setZoom(zoom, for: id)
             applyZoom(to: id)
         }
     }
 
     private func applyZoom(to tabId: UUID) {
         guard let wv = webViews[tabId] else { return }
-        let zoom = zoomByTab[tabId] ?? 1.0
+        let zoom = tabRuntime.state(for: tabId).zoom
         wv.pageZoom = Double(zoom)
     }
 
@@ -1209,21 +1231,19 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         webViews.removeValue(forKey: tabId)
         popupTabIds.remove(tabId)
         popupTimes.removeValue(forKey: tabId)
-        pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
+        tabRuntime.setPendingPermission(nil, for: tabId)?.respond(allow: false, remember: false)
         faviconOriginByTab.removeValue(forKey: tabId)
         faviconWorkByTab.removeValue(forKey: tabId)?.cancel()
         tabRuntime.setLoadingProgress(nil, for: tabId)
-        pageErrorByTab.removeValue(forKey: tabId)
+        tabRuntime.setPageError(nil, for: tabId)
         clearReader(tabId)
         audibleFramesByTab.removeValue(forKey: tabId)
         tabRuntime.setAudible(false, for: tabId)
-        mutedTabs.remove(tabId)
         if !keepMetadata {
             ViewSourceStore.html[tabId] = nil
             tabRuntime.remove(tabId)
             primaryTintByTab.removeValue(forKey: tabId)
             pageThemeByTab.removeValue(forKey: tabId)
-            zoomByTab.removeValue(forKey: tabId)
             canGoBackByTab.removeValue(forKey: tabId)
             canGoForwardByTab.removeValue(forKey: tabId)
         }
@@ -1292,21 +1312,21 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
         guard let tabId = tabId(for: webView), var pageError = PageError.classify(error, url: webView.url) else { return }
         if let http = httpsUpgrades.removeValue(forKey: tabId) { pageError.httpFallback = http }
-        pageErrorByTab[tabId] = pageError
+        tabRuntime.setPageError(pageError, for: tabId)
         // The address bar shows the page that failed, not the one still underneath.
         if tabId == activeTab, let failed = pageError.url { currentURL = failed }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard let tabId = tabId(for: webView) else { return }
-        pageErrorByTab[tabId] = PageError(kind: .crashed, url: webView.url, code: nil)
+        tabRuntime.setPageError(PageError(kind: .crashed, url: webView.url, code: nil), for: tabId)
         tabRuntime.setLoadingProgress(nil, for: tabId)
         setAudible(false, frame: nil, in: tabId)
     }
 
     /// The error page's Reload: retries the page that failed (a crashed tab reloads in a new process).
     func reloadAfterError(in tabId: UUID) {
-        guard let error = pageErrorByTab.removeValue(forKey: tabId) else { return reload(in: tabId) }
+        guard let error = takePageError(tabId) else { return reload(in: tabId) }
         if error.kind != .crashed, let url = error.url, url != webViews[tabId]?.url {
             load(url: url, in: tabId)
         } else {
@@ -1411,20 +1431,20 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard let tabId = tabId(for: webView) else { return }
         httpsUpgrades.removeValue(forKey: tabId)
-        findResultByTab.removeValue(forKey: tabId)
+        tabRuntime.setFindResult(nil, for: tabId)
         clearReader(tabId)
         shieldsCounter.navigationCommitted(tabId)
         if let host = webView.url?.host {
             let zoom = siteZoom.zoom(for: host)
-            if zoomByTab[tabId] != zoom { zoomByTab[tabId] = zoom }
+            tabRuntime.setZoom(zoom, for: tabId)
             applyZoom(to: tabId)
         }
-        if pageErrorByTab[tabId] != nil { pageErrorByTab.removeValue(forKey: tabId) }
+        tabRuntime.setPageError(nil, for: tabId)
         // The old document's media is gone; frames of the new one report again.
         setAudible(false, frame: nil, in: tabId)
         if passwordFillOffer?.tabId == tabId { passwordFillOffer = nil }
         // Chrome drops an unanswered prompt when the page navigates away.
-        pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
+        tabRuntime.setPendingPermission(nil, for: tabId)?.respond(allow: false, remember: false)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -1452,6 +1472,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
                 self?.readerableTabs.insert(tabId)
             }
         }
+        guard Self.samplesPageTheme else { return }
         // Fallback: sample theme again at load end (documentEnd script may have already run).
         let script = """
         (function(){
@@ -1587,11 +1608,13 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
 
     func downloadDidFinish(_ download: WKDownload) {
+        releaseResumeWebViewIfIdle(after: download)
         guard let id = downloadItemByID.removeValue(forKey: ObjectIdentifier(download)) else { return }
         DownloadManager.shared.finish(id)
     }
 
     func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {
+        releaseResumeWebViewIfIdle(after: download)
         downloadLog.error("Download failed: \(download.originalRequest?.url?.absoluteString ?? "(unknown)", privacy: .public) \(String(describing: error), privacy: .public)")
         guard let id = downloadItemByID.removeValue(forKey: ObjectIdentifier(download)) else { return }
         DownloadManager.shared.fail(id, error: error, resumeData: resumeData)
@@ -1609,10 +1632,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         return wv
     }
 
+    private func releaseResumeWebViewIfIdle(after download: WKDownload) {
+        guard resumeDownloads.remove(ObjectIdentifier(download)) != nil, resumeDownloads.isEmpty else { return }
+        resumeWebView = nil
+    }
+
     func resumeDownload(from data: Data, item: UUID) {
         downloadWebView.resumeDownload(fromResumeData: data) { [weak self] download in
             guard let self else { return }
             download.delegate = self
+            self.resumeDownloads.insert(ObjectIdentifier(download))
             self.downloadItemByID[ObjectIdentifier(download)] = item
             DownloadManager.shared.attach(download, to: item, owner: self)
         }
@@ -1622,6 +1651,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         downloadWebView.startDownload(using: URLRequest(url: url)) { [weak self] download in
             guard let self else { return }
             download.delegate = self
+            self.resumeDownloads.insert(ObjectIdentifier(download))
             self.menuDownloads.insert(ObjectIdentifier(download))
             self.retryItemByDownload[ObjectIdentifier(download)] = item
         }
@@ -1705,14 +1735,14 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             guard let tabId = tabId(for: webView) else { return decisionHandler(.deny) }
             let asking = permissions.filter { store.decision($0, host: host) == .ask }
             // shortcut: one prompt per tab; a newer request denies the older one. Queue them if sites need both.
-            pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
+            tabRuntime.setPendingPermission(nil, for: tabId)?.respond(allow: false, remember: false)
             var request: SitePermissionRequest!
             request = SitePermissionRequest(host: URL(string: host)?.host ?? host, permissions: asking) { [weak self] allow, remember in
-                if self?.pendingPermissions[tabId] === request { self?.pendingPermissions[tabId] = nil }
+                if self?.tabRuntime.state(for: tabId).pendingPermission === request { self?.tabRuntime.setPendingPermission(nil, for: tabId) }
                 if remember { for p in asking { store.set(allow ? .allow : .block, p, host: host) } }
                 decisionHandler(allow ? .grant : .deny)
             }
-            pendingPermissions[tabId] = request
+            tabRuntime.setPendingPermission(request, for: tabId)
         }
     }
 

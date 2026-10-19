@@ -121,7 +121,7 @@ extension WebViewWrapper {
 
     func clearFind(in tabId: UUID) {
         lastFindQueryByTab.removeValue(forKey: tabId)
-        findResultByTab.removeValue(forKey: tabId)
+        tabRuntime.setFindResult(nil, for: tabId)
         runFind("clear", query: "", dir: 0, in: tabId)
     }
 
@@ -133,7 +133,7 @@ extension WebViewWrapper {
             let dict = (try? result.get()) as? [String: Any]
             let count = (dict?["count"] as? NSNumber)?.intValue ?? 0
             let index = (dict?["index"] as? NSNumber)?.intValue ?? -1
-            self?.findResultByTab[tabId] = FindInPage.Result(index: max(0, index), count: count)
+            self?.tabRuntime.setFindResult(FindInPage.Result(index: max(0, index), count: count), for: tabId)
         }
     }
 }
