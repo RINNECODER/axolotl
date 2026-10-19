@@ -4,7 +4,7 @@ import Foundation
 enum AddressInput {
     /// Chrome-like: explicit schemes as typed; local hosts (localhost, *.local, private/loopback
     /// IPs) and any host:port open over http; other dotted hosts over https; the rest is a search.
-    static func url(for input: String, engine: SearchEngine = .current) -> URL? {
+    static func url(for input: String, engine: SearchEngine? = nil) -> URL? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
@@ -19,7 +19,7 @@ enum AddressInput {
             }
             if trimmed.contains(".") { return URL(string: "https://" + trimmed) }
         }
-        return engine.searchURL(for: trimmed)
+        return SearchEngine.url(searching: trimmed, engine: engine)
     }
 
     /// The host and optional port at the start of typed text ("host[:port][/path…]").

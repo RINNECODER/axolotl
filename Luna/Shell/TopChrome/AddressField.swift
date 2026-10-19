@@ -73,7 +73,7 @@ struct AddressField: View {
                     .accessibilityLabel("Connection is not secure")
             }
             ZStack(alignment: centered && !isFocused ? .center : .leading) {
-                TextField("Search \(SearchEngine(rawValue: searchEngineRaw)?.title ?? SearchEngine.google.title) or type a URL", text: $text)
+                TextField("Search \(SearchEngine.title(forSelection: searchEngineRaw)) or type a URL", text: $text)
                     .textFieldStyle(.plain)
                     .font(.system(size: fontSize))
                     .focused(focused)

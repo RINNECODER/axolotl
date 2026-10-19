@@ -369,7 +369,7 @@ struct BrowserShellView: View {
                         return nil
                     }
                     if event.keyCode == 48, event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
-                       acceptInlineCompletion() { // Tab
+                       acceptSearchKeyword() || acceptInlineCompletion() { // Tab
                         return nil
                     }
                 }
@@ -1260,6 +1260,16 @@ struct BrowserShellView: View {
     }
 
     /// Tab accepts the inline completion: caret to the end, completion becomes typed text.
+    /// Tab after a site-search keyword ("yt") adds the space that starts that engine's search.
+    private func acceptSearchKeyword() -> Bool {
+        let typed = omniTyped.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !typed.isEmpty, CustomSearchEngine.load().contains(where: { $0.keyword.lowercased() == typed }),
+              let editor = hostWindow?.firstResponder as? NSTextView else { return false }
+        editor.insertText(omniTyped.trimmingCharacters(in: .whitespaces) + " ",
+                          replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
+        return true
+    }
+
     private func acceptInlineCompletion() -> Bool {
         guard !omniCompletion.isEmpty, let editor = hostWindow?.firstResponder as? NSTextView,
               editor.string == omniTyped + omniCompletion else { return false }
@@ -1484,7 +1494,7 @@ struct BrowserShellView: View {
 
     /// Search phrases from the selected engine's suggest endpoint (opt-in, Settings → Search).
     private func fetchSearchSuggestions(for trimmed: String) {
-        guard searchSuggestionsEnabled, let url = SearchEngine.current.suggestURL(for: trimmed) else {
+        guard searchSuggestionsEnabled, let url = SearchEngine.suggestEngine?.suggestURL(for: trimmed) else {
             searchSuggestions = []
             return
         }
