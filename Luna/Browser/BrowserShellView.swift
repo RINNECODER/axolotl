@@ -69,6 +69,14 @@ struct BrowserShellView: View {
     @State private var suggestionDebounceTask: DispatchWorkItem?
     /// Set while arrow keys write the selected suggestion into the field, so that edit doesn't refetch.
     @State private var suppressSuggestionFetch = false
+    /// Omnibox: the text the user typed (without inline completion), the text before the last edit,
+    /// the inline-completed tail shown selected, and whether the user has typed since focusing.
+    @State private var omniTyped = ""
+    @State private var omniPrevious = ""
+    @State private var omniCompletion = ""
+    @State private var omniEdited = false
+    /// Field plus dropdown, in window content coordinates; a click outside closes the dropdown.
+    @State private var omniHitRect: CGRect = .zero
     @State private var showBrowserFindBar: Bool = false
     @State private var browserFindQuery: String = ""
     /// Luna Max "Ask on Page" card for the current tab.
@@ -314,6 +322,9 @@ struct BrowserShellView: View {
                     guard let host = hostWindow, event.window === host, let content = host.contentView else { return event }
                     let p = event.locationInWindow
                     let point = CGPoint(x: p.x, y: content.bounds.height - p.y)
+                    if addressBarKeyState.visible, !omniHitRect.contains(point) {
+                        DispatchQueue.main.async { closeOmnibox() }
+                    }
                     if let pane = paneFrames.first(where: { $0.value.contains(point) })?.key, pane != tabManager.currentTab {
                         DispatchQueue.main.async { switchToTab(pane) }
                     }
@@ -348,6 +359,10 @@ struct BrowserShellView: View {
                         DispatchQueue.main.async { addressBarKeyState.submitSelection = true }
                         return nil
                     }
+                    if event.keyCode == 48, event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
+                       acceptInlineCompletion() { // Tab
+                        return nil
+                    }
                 }
                 if event.keyCode == 53 { // Escape
                     if showBrowserFindBar {
@@ -377,12 +392,7 @@ struct BrowserShellView: View {
         .onChange(of: addressBarFocused) { _, focused in
             // ⌘L-revealed bar tucks away once editing ends, unless the pointer is on it.
             if !focused && !topBarHovering { topBarPeeking = false }
-            if !focused {
-                suggestionDebounceTask?.cancel()
-                searchSuggestions = []
-                urlSuggestions = []
-                addressBarKeyState.visible = false
-            }
+            closeOmnibox()
         }
         .onChange(of: hostWindow) { _, window in
             applyTrafficLights()
@@ -434,10 +444,10 @@ struct BrowserShellView: View {
         }
         .onChange(of: addressBarKeyState.selectedIndex) { _, newValue in
             guard addressBarKeyState.visible else { return }
-            let h = urlSuggestions.count
-            let total = h + searchSuggestions.count
-            guard newValue >= 0, newValue < total else { return }
-            let text = newValue < h ? urlSuggestions[newValue].url.absoluteString : searchSuggestions[newValue - h]
+            let rows = omniRows
+            guard newValue >= 0, newValue < rows.count else { return }
+            // Row 1 previews what was typed, including its inline completion.
+            let text = newValue == 0 ? omniTyped + omniCompletion : rows[newValue].fieldText
             if text != addressBarText {
                 suppressSuggestionFetch = true
                 addressBarText = text
@@ -446,6 +456,14 @@ struct BrowserShellView: View {
         .onChange(of: addressBarText) { _, newValue in
             if suppressSuggestionFetch { suppressSuggestionFetch = false; return }
             guard addressBarFocused else { return }
+            // Our own inline completion landing in the field.
+            if !omniCompletion.isEmpty, newValue == omniTyped + omniCompletion { return }
+            omniPrevious = omniTyped
+            omniTyped = newValue
+            omniCompletion = ""
+            omniEdited = true
+            addressBarKeyState.selectedIndex = 0
+            applyInlineCompletion(from: urlSuggestions)
             scheduleSuggestions(for: newValue)
         }
         .onChange(of: addressBarKeyState.submitSelection) { _, new in
@@ -454,17 +472,9 @@ struct BrowserShellView: View {
                 addressBarKeyState.submitSelection = false
             }
         }
-        .onChange(of: urlSuggestions.count) { _, _ in
-            if addressBarKeyState.visible {
-                addressBarKeyState.totalCount = urlSuggestions.count + searchSuggestions.count
-                addressBarKeyState.selectedIndex = min(addressBarKeyState.selectedIndex, max(0, addressBarKeyState.totalCount - 1))
-            }
-        }
-        .onChange(of: searchSuggestions.count) { _, _ in
-            if addressBarKeyState.visible {
-                addressBarKeyState.totalCount = urlSuggestions.count + searchSuggestions.count
-                addressBarKeyState.selectedIndex = min(addressBarKeyState.selectedIndex, max(0, addressBarKeyState.totalCount - 1))
-            }
+        .onChange(of: omniRows) { _, rows in
+            addressBarKeyState.totalCount = rows.count
+            addressBarKeyState.selectedIndex = min(addressBarKeyState.selectedIndex, max(0, rows.count - 1))
         }
         .onDisappear {
             sessionStore.flush()
@@ -1074,41 +1084,74 @@ struct BrowserShellView: View {
                 }
     }
 
-    /// Address suggestions, placed under whichever address field is on screen.
+    /// Address suggestions, hung under whichever address field is on screen, only while typing.
     @ViewBuilder
     private func suggestionsOverlay(anchor: Anchor<CGRect>?) -> some View {
-        let hasSuggestions = !urlSuggestions.isEmpty || !searchSuggestions.isEmpty
-        if let anchor, addressBarFocused,
-           !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty,
-           hasSuggestions {
+        let rows = omniRows
+        if let anchor, Omnibox.shouldShow(focused: addressBarFocused, edited: omniEdited, text: addressBarText), !rows.isEmpty {
             GeometryReader { proxy in
                 let field = proxy[anchor]
-                AddressBarSuggestionsList(
-                    urlItems: urlSuggestions,
-                    searchPhrases: Array(searchSuggestions.prefix(5)),
-                    selectedIndex: addressBarKeyState.selectedIndex,
-                    onSelectURL: { openSuggestion($0) },
-                    onSelectSearch: { phrase in
-                        addressBarText = phrase
-                        searchSuggestions = []
-                        urlSuggestions = []
-                        addressBarKeyState.visible = false
-                        navigateFromAddressBar()
+                let width = max(field.width, 360)
+                OmniboxDropdown(rows: rows, query: omniTyped, selectedIndex: addressBarKeyState.selectedIndex,
+                                onSelect: { openOmniboxRow($0) })
+                    .frame(width: width)
+                    .offset(x: field.minX, y: field.maxY + 1)
+                    .onChange(of: CGRect(x: field.minX, y: field.minY, width: width,
+                                         height: field.height + 9 + CGFloat(rows.count) * Omnibox.rowHeight), initial: true) { _, rect in
+                        omniHitRect = rect
                     }
-                )
-                .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 10, style: .continuous)))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
-                .frame(width: max(field.width, 440))
-                .offset(x: field.minX, y: field.maxY + 6)
-                .onAppear {
-                    addressBarKeyState.visible = true
-                    addressBarKeyState.totalCount = urlSuggestions.count + searchSuggestions.count
-                    addressBarKeyState.selectedIndex = 0
-                }
-                .onDisappear { addressBarKeyState.visible = false }
+                    .onAppear {
+                        addressBarKeyState.visible = true
+                        addressBarKeyState.totalCount = rows.count
+                        addressBarKeyState.selectedIndex = 0
+                    }
+                    .onDisappear { addressBarKeyState.visible = false }
             }
         }
+    }
+
+    private var omniRows: [OmniboxRow] {
+        Omnibox.rows(typed: omniTyped + omniCompletion, pages: urlSuggestions, phrases: searchSuggestions)
+    }
+
+    /// Hides the dropdown until the user types again (focus change, Escape, click outside, navigation).
+    private func closeOmnibox() {
+        suggestionDebounceTask?.cancel()
+        omniTyped = ""
+        omniPrevious = ""
+        omniCompletion = ""
+        omniEdited = false
+        searchSuggestions = []
+        urlSuggestions = []
+        addressBarKeyState.visible = false
+    }
+
+    /// Chrome inline autocomplete: appends the top page's host after the caret, selected, so typing on
+    /// replaces it, Backspace removes it and Tab/→ accepts it.
+    private func applyInlineCompletion(from pages: [AddressSuggestion]) {
+        guard omniCompletion.isEmpty, addressBarText == omniTyped,
+              let tail = Omnibox.inlineCompletion(typed: omniTyped, previous: omniPrevious, pages: pages) else { return }
+        let typed = omniTyped
+        DispatchQueue.main.async {
+            let start = (typed as NSString).length
+            guard omniTyped == typed, addressBarText == typed,
+                  let editor = hostWindow?.firstResponder as? NSTextView, editor.string == typed,
+                  editor.selectedRange() == NSRange(location: start, length: 0) else { return }
+            omniCompletion = tail
+            // insertText goes through the field's own edit path, so the binding follows it.
+            editor.insertText(tail, replacementRange: NSRange(location: start, length: 0))
+            editor.setSelectedRange(NSRange(location: start, length: (tail as NSString).length))
+        }
+    }
+
+    /// Tab accepts the inline completion: caret to the end, completion becomes typed text.
+    private func acceptInlineCompletion() -> Bool {
+        guard !omniCompletion.isEmpty, let editor = hostWindow?.firstResponder as? NSTextView,
+              editor.string == omniTyped + omniCompletion else { return false }
+        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        omniTyped += omniCompletion
+        omniCompletion = ""
+        return true
     }
 
     // MARK: - Profile switching
@@ -1228,20 +1271,28 @@ struct BrowserShellView: View {
     private func syncAddressBarFromCurrentTab() {
         if let id = tabManager.currentTab {
             if let url = tabManager.tabURL[id] ?? nil, InternalPage.isSettings(url) {
-                addressBarText = url.absoluteString
+                setAddressTextFromTab(url.absoluteString)
             } else if let url = web.currentURL {
                 tabManager.navigate(tab: id, to: url)
                 let hide = url.absoluteString == "about:blank" || (url.scheme == "luma" && url.host == "ai")
-                addressBarText = hide ? "" : url.absoluteString
+                setAddressTextFromTab(hide ? "" : url.absoluteString)
             } else if let url = tabManager.tabURL[id] ?? nil {
                 let hide = url.absoluteString == "about:blank" || (url.scheme == "luma" && url.host == "ai")
-                addressBarText = hide ? "" : url.absoluteString
+                setAddressTextFromTab(hide ? "" : url.absoluteString)
             } else {
-                addressBarText = ""
+                setAddressTextFromTab("")
             }
         } else {
-            addressBarText = ""
+            setAddressTextFromTab("")
         }
+    }
+
+    /// The tab's URL replacing the field is not typing: it must not open the dropdown.
+    private func setAddressTextFromTab(_ text: String) {
+        omniEdited = false
+        guard addressBarText != text else { return }
+        suppressSuggestionFetch = true
+        addressBarText = text
     }
 
     /// Selects the entire address bar contents when the user clicks/taps into it.
@@ -1255,10 +1306,11 @@ struct BrowserShellView: View {
     }
 
     /// Address-bar dropdown: refreshed 120 ms after the last keystroke; a newer keystroke cancels it.
+    /// Earlier rows stay up until the new ones arrive, so the list doesn't flicker.
     private func scheduleSuggestions(for query: String) {
         suggestionDebounceTask?.cancel()
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 2 else {
+        guard !trimmed.isEmpty else {
             urlSuggestions = []
             searchSuggestions = []
             return
@@ -1267,8 +1319,9 @@ struct BrowserShellView: View {
             Task {
                 let rows = await urlSuggestionRows(for: trimmed)
                 // A newer keystroke or closed dropdown makes this answer stale.
-                guard addressBarFocused, addressBarText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
+                guard addressBarFocused, omniEdited, omniTyped.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
                 urlSuggestions = rows
+                applyInlineCompletion(from: rows)
             }
             fetchSearchSuggestions(for: trimmed)
         }
@@ -1292,9 +1345,7 @@ struct BrowserShellView: View {
 
     /// Opens a URL row: switches to its tab when it's already open, otherwise navigates.
     private func openSuggestion(_ suggestion: AddressSuggestion) {
-        searchSuggestions = []
-        urlSuggestions = []
-        addressBarKeyState.visible = false
+        closeOmnibox()
         if case .openTab(let id) = suggestion.kind, session.workspace.tab(id) != nil {
             addressBarFocused = false
             switchToTab(id)
@@ -1334,7 +1385,7 @@ struct BrowserShellView: View {
             }
             DispatchQueue.main.async {
                 // Drop stale responses: only apply if the user is still typing this query.
-                guard self.addressBarText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
+                guard self.omniEdited, self.omniTyped.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
                 self.searchSuggestions = Array(phrases.prefix(5))
             }
         }.resume()
@@ -1342,37 +1393,31 @@ struct BrowserShellView: View {
 
     private func resolveToURL(_ input: String) -> URL? { AddressInput.url(for: input) }
 
-    /// Submit address bar: if first history suggestion matches typed prefix, go there; else resolve as URL or search.
+    /// Return with no dropdown: open exactly what is in the field (URL or search).
     private func applyAddressBarSubmit() {
         Usage.record(.addressBar)
-        let trimmed = addressBarText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if !trimmed.isEmpty,
-           let first = urlSuggestions.first,
-           first.display.lowercased().hasPrefix(trimmed)
-            || first.url.absoluteString.lowercased().contains(trimmed)
-            || (first.url.host?.lowercased().contains(trimmed) ?? false) {
-            openSuggestion(first)
-            return
-        }
-        searchSuggestions = []
-        urlSuggestions = []
-        addressBarKeyState.visible = false
+        closeOmnibox()
         navigateFromAddressBar()
     }
 
-    /// Apply the currently selected suggestion (keyboard Enter): navigate to URL or run search.
+    /// Return on the dropdown: open the selected row.
     private func applySelectionAtIndex(_ index: Int) {
-        let h = urlSuggestions.count
-        let total = h + searchSuggestions.count
-        guard index >= 0, index < total else { return }
-        if index < h {
-            openSuggestion(urlSuggestions[index])
-        } else {
-            let phrase = searchSuggestions[index - h]
-            searchSuggestions = []
-            urlSuggestions = []
-            addressBarKeyState.visible = false
-            addressBarText = phrase
+        let rows = omniRows
+        guard index >= 0, index < rows.count else { return applyAddressBarSubmit() }
+        openOmniboxRow(rows[index])
+    }
+
+    private func openOmniboxRow(_ row: OmniboxRow) {
+        Usage.record(.addressBar)
+        switch row.kind {
+        case .page(let page):
+            openSuggestion(page)
+        case .typedURL(let text, _), .typedSearch(let text), .search(let text), .chat(let text):
+            closeOmnibox()
+            if addressBarText != text {
+                suppressSuggestionFetch = true
+                addressBarText = text
+            }
             navigateFromAddressBar()
         }
     }
@@ -1703,93 +1748,6 @@ struct BrowserShellView: View {
 // MARK: - Profile window registry
 
 /// Keeps profile windows alive (isReleasedWhenClosed = false) and releases them on close.
-
-// MARK: - Address bar suggestions (history first, then search)
-
-private struct AddressBarSuggestionsList: View {
-    let urlItems: [AddressSuggestion]
-    let searchPhrases: [String]
-    var selectedIndex: Int = 0
-    let onSelectURL: (AddressSuggestion) -> Void
-    let onSelectSearch: (String) -> Void
-    @State private var hoveredSection: String? = nil  // "h-0", "s-0", etc.
-
-    private func isSelected(historyIndex: Int) -> Bool { selectedIndex == historyIndex }
-
-    private func isSelected(searchIndex: Int) -> Bool { selectedIndex == urlItems.count + searchIndex }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(urlItems.enumerated()), id: \.offset) { index, item in
-                let id = "h-\(index)"
-                let selected = isSelected(historyIndex: index)
-                Button(action: { onSelectURL(item) }) {
-                    HStack {
-                        Image(systemName: item.symbol)
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.display)
-                                .font(.system(size: 13))
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                            if let host = item.url.host, host != item.display {
-                                Text(host)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        if case .openTab = item.kind {
-                            Text("Switch to tab")
-                                .font(.system(size: 11))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(selected || hoveredSection == id ? Color.primary.opacity(0.06) : Color.clear)
-                    )
-                    .onHover { hovering in hoveredSection = hovering ? id : nil }
-                }
-                .buttonStyle(.plain)
-            }
-            ForEach(Array(searchPhrases.enumerated()), id: \.offset) { index, phrase in
-                let id = "s-\(index)"
-                let selected = isSelected(searchIndex: index)
-                Button(action: { onSelectSearch(phrase) }) {
-                    HStack {
-                        Image(systemName: "magnifyingglass")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 20)
-                        Text(phrase)
-                            .font(.system(size: 13))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(selected || hoveredSection == id ? Color.primary.opacity(0.06) : Color.clear)
-                    )
-                    .onHover { hovering in hoveredSection = hovering ? id : nil }
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-}
 
 // MARK: - Panel resize handle
 

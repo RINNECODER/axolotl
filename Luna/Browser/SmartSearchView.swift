@@ -549,12 +549,13 @@ struct SmartSearchView: View {
             .padding(.bottom, 8)
 
             // Inline suggestions (between rows)
-            if viewState == .idle && !trimmed.isEmpty {
-                inlineSuggestions
+            if viewState == .idle && !trimmed.isEmpty && isInputFocused {
+                OmniboxDropdown(rows: suggestionRows, query: trimmed, selectedIndex: selectedSuggestionIndex,
+                                drawsSurface: false, onSelect: applySuggestion)
             }
 
             // Divider when suggestions are showing
-            if viewState == .idle && !trimmed.isEmpty {
+            if viewState == .idle && !trimmed.isEmpty && isInputFocused {
                 Rectangle()
                     .fill(Color.white.opacity(0.06))
                     .frame(height: 1)
@@ -639,71 +640,9 @@ struct SmartSearchView: View {
         return !trimmed.isEmpty
     }
 
-    private var suggestionRows: [SmartSuggestionRow] {
-        let trimmed = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-
-        var rows: [SmartSuggestionRow] = []
-
-        if currentIntent == .ai {
-            rows.append(SmartSuggestionRow(id: "chat", icon: "bubble.left.fill", label: trimmed, suffix: "Chat", action: .chat))
-            rows.append(SmartSuggestionRow(id: "search", icon: "magnifyingglass", label: trimmed, suffix: "Google", action: .search))
-        } else {
-            rows.append(SmartSuggestionRow(id: "search", icon: "magnifyingglass", label: trimmed, suffix: "Google", action: .search))
-            rows.append(SmartSuggestionRow(id: "chat", icon: "bubble.left.fill", label: trimmed, suffix: "Chat  \u{2318}\u{21A9}", action: .chat))
-        }
-
-        for (i, page) in urlRows.enumerated() {
-            let switchesTab: Bool = { if case .openTab = page.kind { return true } else { return false } }()
-            rows.append(SmartSuggestionRow(id: "url-\(i)", icon: page.symbol, label: page.display,
-                                           suffix: switchesTab ? "Switch to tab" : nil, action: .open(page)))
-        }
-
-        for (i, s) in searchSuggestions.prefix(6).enumerated() {
-            let lower = s.lowercased()
-            if lower == trimmed.lowercased() { continue }
-            rows.append(SmartSuggestionRow(id: "sug-\(i)", icon: "magnifyingglass", label: s, suffix: nil, action: .fillAndSearch(s)))
-        }
-        return rows
-    }
-
-    @ViewBuilder
-    private var inlineSuggestions: some View {
-        VStack(spacing: 0) {
-            let rows = suggestionRows
-            ForEach(Array(rows.enumerated()), id: \.element.id) { idx, row in
-                Button(action: { applySuggestion(row) }) {
-                    HStack(spacing: 10) {
-                        Image(systemName: row.icon)
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(ChatTokens.textTertiary)
-                            .frame(width: 18)
-                        Text(row.label)
-                            .font(.system(size: 14))
-                            .foregroundColor(ChatTokens.textPrimary)
-                            .lineLimit(1)
-                        if let suffix = row.suffix {
-                            Spacer()
-                            Text("— \(suffix)")
-                                .font(.system(size: 12))
-                                .foregroundColor(ChatTokens.textTertiary)
-                        } else {
-                            Spacer()
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 9)
-                    .background(
-                        idx == selectedSuggestionIndex
-                            ? Color.white.opacity(0.08)
-                            : Color.clear
-                    )
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(.vertical, 4)
-        .transition(.opacity)
+    /// The address bar's rows plus "Ask Luna" (Chrome omnibox order, at most 6).
+    private var suggestionRows: [OmniboxRow] {
+        Omnibox.rows(typed: inputText, pages: urlRows, phrases: searchSuggestions, chat: true)
     }
 
     /// Time-of-day greeting for the start page.
@@ -716,22 +655,18 @@ struct SmartSearchView: View {
         }
     }
 
-    private func applySuggestion(_ row: SmartSuggestionRow) {
-        switch row.action {
-        case .chat:
-            clearSuggestions()
-            transitionToChat()
-        case .search:
-            let query = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-            clearSuggestions()
-            performSearch(query)
-        case .fillAndSearch(let text):
+    private func applySuggestion(_ row: OmniboxRow) {
+        clearSuggestions()
+        switch row.kind {
+        case .chat: transitionToChat()
+        case .typedSearch(let q): performSearch(q)
+        case .typedURL(_, let url):
+            withAnimation(.easeOut(duration: 0.15)) { viewState = .searching }
+            onNavigate(url)
+        case .search(let text):
             inputText = text
-            clearSuggestions()
             performSearch(text)
-        case .open(let page):
-            clearSuggestions()
-            onOpenURLSuggestion?(page)
+        case .page(let page): onOpenURLSuggestion?(page)
         }
     }
 
@@ -783,11 +718,15 @@ struct SmartSearchView: View {
                     if let arr = item as? [Any], let first = arr.first as? String { return first }
                     return nil
                 }
-                DispatchQueue.main.async { searchSuggestions = Array(phrases.prefix(8)) }
+                DispatchQueue.main.async {
+                    // A newer keystroke makes this answer stale.
+                    guard inputText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
+                    searchSuggestions = Array(phrases.prefix(8))
+                }
             }.resume()
         }
         suggestionDebounceTask = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
     private func handlePasteDetection(_ newValue: String) {
@@ -1393,22 +1332,6 @@ struct SmartSearchView: View {
 }
 
 // MARK: - Thinking step model
-
-private struct SmartSuggestionRow: Identifiable {
-    let id: String
-    let icon: String
-    let label: String
-    let suffix: String?
-    let action: SmartSuggestionAction
-}
-
-private enum SmartSuggestionAction {
-    case chat
-    case search
-    case fillAndSearch(String)
-    /// A bookmark, history page or open tab (the address bar's rows).
-    case open(AddressSuggestion)
-}
 
 private struct SmartThinkingStep: Identifiable {
     let id = UUID()
