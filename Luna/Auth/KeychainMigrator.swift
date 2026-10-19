@@ -28,6 +28,9 @@ nonisolated struct KeychainMigrator {
     var vaultSync: (String) -> Bool = { profile in
         UserDefaults.standard.object(forKey: PasswordVault.syncKey(profile)) as? Bool ?? true
     }
+    /// Security domain a migrated login gets: profile UUID string → domain
+    /// for synced logins (the profile's name key). Unknown profiles keep their UUID.
+    var vaultDomain: (String) -> String = { $0 }
     var doneKey = KeychainMigrator.doneKey
 
     var isDone: Bool { defaults.bool(forKey: doneKey) }
@@ -63,11 +66,13 @@ nonisolated struct KeychainMigrator {
                 match[kSecAttrServer as String] = server
                 match[kSecAttrAccount as String] = attrs[kSecAttrAccount as String] as? String ?? ""
                 match[kSecAttrSecurityDomain as String] = profile
+                let sync = vaultSync(profile)
                 var add = match
+                if sync { add[kSecAttrSecurityDomain as String] = vaultDomain(profile) }
                 add[kSecAttrProtocol as String] = attrs[kSecAttrProtocol as String] ?? kSecAttrProtocolHTTPS
                 add[kSecAttrLabel as String] = attrs[kSecAttrLabel as String] as? String ?? "\(server) (Luna)"
                 add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
-                move(match: match, add: add, sync: vaultSync(profile) ? .synchronizable : .deviceOnly, into: &result)
+                move(match: match, add: add, sync: sync ? .synchronizable : .deviceOnly, into: &result)
             }
         }
         if result.failed == 0 { defaults.set(true, forKey: doneKey) }

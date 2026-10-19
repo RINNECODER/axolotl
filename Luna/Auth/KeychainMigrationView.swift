@@ -19,6 +19,7 @@ final class KeychainMigrationCoordinator: ObservableObject {
     func checkAtLaunch(window: UUID) {
         guard !checked else { return }
         checked = true
+        PasswordVault.shared.migrateToNameKeys()
         let migrator = migrator
         guard !migrator.isDone else { return }
         Task {
@@ -32,7 +33,9 @@ final class KeychainMigrationCoordinator: ObservableObject {
     }
 
     func migrate() {
-        let migrator = migrator
+        var migrator = migrator
+        let domains = PasswordVault.shared.syncDomainSnapshot()
+        migrator.vaultDomain = { domains[$0] ?? $0 }
         isMigrating = true
         Task {
             let result = await Task.detached { migrator.run() }.value

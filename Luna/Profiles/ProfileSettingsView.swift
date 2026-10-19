@@ -50,6 +50,7 @@ private struct ProfileRow: View {
 
     @ObservedObject private var profileManager = ProfileManager.shared
     @State private var name: String = ""
+    @State private var nameError: String?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -82,12 +83,25 @@ private struct ProfileRow: View {
             .help(canDelete ? "Delete Profile" : "Luna needs at least one profile")
         }
         .onDisappear(perform: commitName)
+        .alert("Can't rename profile", isPresented: Binding(get: { nameError != nil }, set: { if !$0 { nameError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(nameError ?? "")
+        }
     }
 
     private func commitName() {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { name = profile.name } else if trimmed != profile.name {
-            profileManager.rename(profileId: profile.id, to: trimmed)
+            if profileManager.isNameTaken(trimmed, excluding: profile.id) {
+                nameError = "Another profile is already named “\(trimmed)”."
+                name = profile.name
+            } else if profileManager.rename(profileId: profile.id, to: trimmed) {
+                nameError = nil
+            } else {
+                nameError = "Couldn't move this profile's synced logins. Try again."
+                name = profile.name
+            }
         }
     }
 }

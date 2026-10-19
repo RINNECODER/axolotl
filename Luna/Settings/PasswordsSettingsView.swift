@@ -36,6 +36,15 @@ struct PasswordsSettingsView: View {
 
             Section {
                 Toggle("Sync passwords with iCloud Keychain", isOn: Binding(get: { iCloudSync }, set: setICloudSync))
+                if iCloudSync {
+                    if PasswordVault.shared.hasDuplicateName(profile: profileId) {
+                        Text("Another profile has the same name, so this profile's logins stay on this Mac. Rename one to sync.")
+                            .font(.callout).foregroundStyle(.orange)
+                    } else {
+                        Text("Logins sync with profiles named “\(profileManager.profile(for: profileId).name)” on your other Macs.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
                 Text("Logins Luna saves for this profile sync to your other Macs signed in to the same Apple Account. Luna can't read passwords saved by Safari or the Passwords app, even with sync on; use Import below to bring those in.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
