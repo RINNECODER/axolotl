@@ -3,7 +3,8 @@ import Foundation
 import Security
 
 /// Where keys grabbed by Luna go: a Keychain generic password (service "Luna API Keys",
-/// account "<service>/<key name>", visible in Keychain Access) plus the clipboard.
+/// account "<service>/<key name>") plus the clipboard. Items live in the data protection keychain
+/// through `KeychainStore`, stay on this Mac and are never synced to iCloud.
 /// Values only ever arrive from `SecretCapture` and leave through `copy`; callers outside get
 /// an opaque handle like `‹secret:3›`. Nothing here logs or returns a value to a model.
 final class SecretVault {
@@ -35,11 +36,14 @@ final class SecretVault {
 
     let service: String
     let pasteboard: NSPasteboard
+    private let keychain: KeychainStore
     private var nextHandle = 1
 
-    init(service: String = SecretVault.defaultService, pasteboard: NSPasteboard = .general) {
+    init(service: String = SecretVault.defaultService, pasteboard: NSPasteboard = .general,
+         keychain: KeychainStore = .shared) {
         self.service = service
         self.pasteboard = pasteboard
+        self.keychain = keychain
     }
 
     /// Saves the value under a new account, copies it, and returns a handle. An existing account is
@@ -54,8 +58,8 @@ final class SecretVault {
             add[kSecValueData as String] = data
             add[kSecAttrLabel as String] = "\(service): \(account)"
             add[kSecAttrDescription as String] = "API key saved by Luna"
-            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
-            let status = SecItemAdd(add as CFDictionary, nil)
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+            let status = keychain.add(add, sync: .deviceOnly)
             if status == errSecSuccess { break }
             guard status == errSecDuplicateItem, suffix < 1000 else { throw VaultError.keychain(status) }
             suffix += 1
@@ -71,9 +75,8 @@ final class SecretVault {
     func items() -> [Item] {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecReturnAttributes as String: true, kSecMatchLimit as String: kSecMatchLimitAll]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let rows = result as? [[String: Any]] else { return [] }
+        let (status, result) = keychain.copyMatching(query, sync: .deviceOnly)
+        guard status == errSecSuccess, let rows = result as? [[String: Any]] else { return [] }
         return rows.compactMap { attrs in
             (attrs[kSecAttrAccount as String] as? String).map {
                 Item(account: $0, created: attrs[kSecAttrCreationDate as String] as? Date)
@@ -93,7 +96,7 @@ final class SecretVault {
     func delete(account: String) {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                     kSecAttrService as String: service, kSecAttrAccount as String: account]
-        SecItemDelete(query as CFDictionary)
+        _ = keychain.delete(query, sync: .deviceOnly)
     }
 
     /// The stored value; only for `copy` and tests that compare it. Never return it to a model.
@@ -101,8 +104,8 @@ final class SecretVault {
         let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
                                     kSecAttrAccount as String: account, kSecReturnData as String: true,
                                     kSecMatchLimit as String: kSecMatchLimitOne]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return nil }
+        let (status, result) = keychain.copyMatching(query, sync: .deviceOnly)
+        guard status == errSecSuccess, let data = result as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 

@@ -13,6 +13,7 @@ struct PasswordsSettingsView: View {
     @State private var importing = false
     @State private var status: String?
     @State private var pendingDelete: PasswordVault.Credential?
+    @State private var iCloudSync = true
 
     private var filtered: [PasswordVault.Credential] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -26,7 +27,23 @@ struct PasswordsSettingsView: View {
                 LunaPicker("Profile", selection: $profileId, options: profileManager.profiles.map {
                     .init($0.id, $0.name, image: ProfileAvatar.image(for: $0, size: 16))
                 })
-                Text("Luna offers to save logins when you sign in and to fill them next time. They're stored in your Mac's Keychain, separately for each profile.")
+                Text("Luna offers to save logins when you sign in and to fill them next time. They're stored in your Keychain, separately for each profile.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle("Sync passwords with iCloud Keychain", isOn: Binding(get: { iCloudSync }, set: setICloudSync))
+                if iCloudSync {
+                    if PasswordVault.shared.hasDuplicateName(profile: profileId) {
+                        Text("Another profile has the same name, so this profile's logins stay on this Mac. Rename one to sync.")
+                            .font(.callout).foregroundStyle(.orange)
+                    } else {
+                        Text("Logins sync with profiles named “\(profileManager.profile(for: profileId).name)” on your other Macs.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                Text("Logins Luna saves for this profile sync to your other Macs signed in to the same Apple Account. Luna can't read passwords saved by Safari or the Passwords app, even with sync on; use Import below to bring those in.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -91,9 +108,16 @@ struct PasswordsSettingsView: View {
 
             Section {
                 Button("Import from Apple Passwords…") { importing = true }
-                Text("In the Passwords app, choose File → Export All Passwords, then pick that CSV here. Delete the CSV afterward; it isn't encrypted. Chrome's password export works too.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Passwords saved in Safari or the Passwords app belong to Apple and can't be read by other browsers. To copy them into Luna:")
+                    Text("1. Open the Passwords app.")
+                    Text("2. Choose File → Export All Passwords to File…, and save the CSV.")
+                    Text("3. Click Import from Apple Passwords… above and pick that file.")
+                    Text("4. Move the CSV to the Trash and empty it; it isn't encrypted.")
+                    Text("Chrome's password export (CSV) works the same way.")
+                }
+                .font(.callout)
+                .foregroundStyle(.secondary)
                 if let status {
                     Text(status).font(.callout)
                 }
@@ -123,6 +147,19 @@ struct PasswordsSettingsView: View {
 
     private func reload() {
         credentials = PasswordVault.shared.credentials(profile: profileId)
+        iCloudSync = PasswordVault.shared.isICloudSyncEnabled(profile: profileId)
+    }
+
+    private func setICloudSync(_ enabled: Bool) {
+        iCloudSync = enabled
+        do {
+            try PasswordVault.shared.setICloudSync(enabled, profile: profileId)
+            status = enabled ? "Logins for this profile now sync with iCloud Keychain."
+                             : "Logins for this profile now stay on this Mac and are removed from iCloud."
+        } catch {
+            status = "Couldn't move every login: \(error.localizedDescription) Try again."
+        }
+        reload()
     }
 
     private func toggleReveal(_ cred: PasswordVault.Credential) {

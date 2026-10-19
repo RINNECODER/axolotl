@@ -174,10 +174,26 @@ final class ProfileManager: ObservableObject {
         return p
     }
 
-    func rename(profileId: UUID, to name: String) {
-        guard let idx = profiles.firstIndex(where: { $0.id == profileId }) else { return }
+    /// Whether another profile already uses `name` (compared the way synced logins are keyed).
+    func isNameTaken(_ name: String, excluding profileId: UUID? = nil) -> Bool {
+        guard let key = PasswordVault.nameKey(name) else { return false }
+        return profiles.contains { $0.id != profileId && PasswordVault.nameKey($0.name) == key }
+    }
+
+    /// Renames a profile and re-keys its synced logins. Returns false (and
+    /// changes nothing) if the name is blank, taken, or the logins couldn't move.
+    @discardableResult
+    func rename(profileId: UUID, to name: String) -> Bool {
+        guard let idx = profiles.firstIndex(where: { $0.id == profileId }),
+              PasswordVault.nameKey(name) != nil, !isNameTaken(name, excluding: profileId) else { return false }
+        do {
+            try PasswordVault.shared.rekeyForRename(profile: profileId, from: profiles[idx].name, to: name)
+        } catch {
+            return false
+        }
         profiles[idx].name = name
         saveProfiles()
+        return true
     }
 
     func setIcon(profileId: UUID, iconName: String?) {

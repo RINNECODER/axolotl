@@ -81,6 +81,13 @@ enum ProfileActions {
     /// Prompts for a name and creates a profile with the next unused color.
     static func createProfile(manager: ProfileManager) -> BrowserProfile? {
         guard let name = TextPrompt.name(title: "New Profile", initial: "Profile \(manager.profiles.count + 1)", confirm: "Create") else { return nil }
+        guard !manager.isNameTaken(name) else {
+            let alert = NSAlert()
+            alert.messageText = "A profile named “\(name)” already exists."
+            alert.informativeText = "Profile names must be different so each profile's synced logins stay separate."
+            alert.runModal()
+            return nil
+        }
         let used = Set(manager.profiles.map(\.colorId))
         let color = ProfileColor.presets.first { !used.contains($0.id) } ?? ProfileColor.presets[manager.profiles.count % ProfileColor.presets.count]
         return manager.addProfile(name: name, colorId: color.id)

@@ -9,89 +9,20 @@ import Security
 /// 
 /// CRITICAL: Never log keys. Never expose keys to web content. Never store keys elsewhere.
 final class KeychainManager {
-    
+
     static let shared = KeychainManager()
-    
-    static let serviceName = "com.luma.browser"
-    private let service = KeychainManager.serviceName
-    private let account = "gemini-api-key"
-    
-    private init() {}
-    
-    /// Stores the Gemini API key securely in Keychain.
-    /// Per SECURITY.md: Keys must be accessible only to Luma process.
-    /// - Parameter key: The API key to store (will not be logged)
-    /// - Throws: KeychainError if storage fails
-    func storeGeminiKey(_ key: String) throws {
-        guard let keyData = key.data(using: .utf8) else {
-            throw KeychainError.invalidData
-        }
-        
-        // Delete existing key if present (ignore errors if key doesn't exist)
-        try? deleteGeminiKey()
-        
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecValueData as String: keyData,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-        
-        let status = SecItemAdd(query as CFDictionary, nil)
-        
-        guard status == errSecSuccess else {
-            throw KeychainError.storeFailed(status)
-        }
-    }
-    
-    /// Fetches the stored Gemini API key from Keychain.
-    /// Returns nil if key doesn't exist or fetch fails.
-    /// - Returns: The API key string, or nil if not found
-    func fetchGeminiKey() -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        
-        guard status == errSecSuccess,
-              let data = result as? Data,
-              let key = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        
-        return key
-    }
-    
-    /// Deletes the stored Gemini API key from Keychain.
-    /// Per SECURITY.md: Users must be able to delete keys at any time.
-    /// - Throws: KeychainError if deletion fails (but ignores errSecItemNotFound)
-    func deleteGeminiKey() throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account
-        ]
-        
-        let status = SecItemDelete(query as CFDictionary)
-        
-        // Ignore "item not found" error (key may not exist)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.deleteFailed(status)
-        }
-    }
-}
 
-// MARK: - Named secrets (provider keys, OAuth credentials)
+    nonisolated static let serviceName = "com.luna.browser"
+    /// Service name used before the move to the data protection keychain.
+    nonisolated static let legacyServiceName = "com.luma.browser"
 
-extension KeychainManager {
-    enum Account: String {
+    private let keychain: KeychainStore
+
+    init(store: KeychainStore = .shared) {
+        self.keychain = store
+    }
+
+    enum Account: String, CaseIterable {
         case geminiKey = "gemini-api-key"
         case openAIKey = "openai-api-key"
         case anthropicKey = "anthropic-api-key"
@@ -100,16 +31,29 @@ extension KeychainManager {
         case lunaMCPToken = "luna-mcp-token"
     }
 
-    func store(_ value: Data, for account: Account) throws {
-        try? delete(account)
-        let query: [String: Any] = [
+    // MARK: Gemini (kept for existing callers)
+
+    func storeGeminiKey(_ key: String) throws { try store(key, for: .geminiKey) }
+    func fetchGeminiKey() -> String? { string(for: .geminiKey) }
+    func deleteGeminiKey() throws { try delete(.geminiKey) }
+
+    // MARK: Named secrets (provider keys, OAuth credentials)
+
+    private func query(_ account: Account) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.serviceName,
             kSecAttrAccount as String: account.rawValue,
-            kSecValueData as String: value,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
-        let status = SecItemAdd(query as CFDictionary, nil)
+    }
+
+    /// API keys and tokens stay on this Mac: never synced to iCloud.
+    func store(_ value: Data, for account: Account) throws {
+        try? delete(account)
+        var add = query(account)
+        add[kSecValueData as String] = value
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        let status = keychain.add(add, sync: .deviceOnly)
         guard status == errSecSuccess else { throw KeychainError.storeFailed(status) }
     }
 
@@ -119,15 +63,11 @@ extension KeychainManager {
     }
 
     func data(for account: Account) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.serviceName,
-            kSecAttrAccount as String: account.rawValue,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        var q = query(account)
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        let (status, result) = keychain.copyMatching(q, sync: .deviceOnly)
+        guard status == errSecSuccess else { return nil }
         return result as? Data
     }
 
@@ -136,12 +76,7 @@ extension KeychainManager {
     }
 
     func delete(_ account: Account) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.serviceName,
-            kSecAttrAccount as String: account.rawValue,
-        ]
-        let status = SecItemDelete(query as CFDictionary)
+        let status = keychain.delete(query(account), sync: .deviceOnly)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.deleteFailed(status) }
     }
 }
