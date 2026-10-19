@@ -1075,6 +1075,11 @@ struct BrowserShellView: View {
                             PageErrorView(error: pageError, onReload: { web.reloadAfterError(in: currentId) },
                                           onContinueHTTP: { web.continueToHTTP(in: currentId) })
                         }
+                        if let article = web.readerArticleByTab[currentId] {
+                            ReaderView(article: article, onClose: { web.toggleReader(in: currentId) },
+                                       onOpenLink: { web.load(url: $0, in: currentId) })
+                                .id(currentId)
+                        }
                         if isFocused && isFirstLoad {
                             ProgressView()
                                 .scaleEffect(0.8)

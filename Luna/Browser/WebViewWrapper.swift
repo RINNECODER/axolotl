@@ -80,6 +80,26 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     var lastFindQueryByTab: [UUID: String] = [:]
     /// Find-bar match count per tab ("3 of 17"), set by FindInPage.
     @Published var findResultByTab: [UUID: FindInPage.Result] = [:]
+    /// Tabs whose page looks like an article (reader button shown), and the tabs showing Reader.
+    @Published private(set) var readerableTabs: Set<UUID> = []
+    @Published private(set) var readerArticleByTab: [UUID: ReaderMode.Article] = [:]
+
+    /// Shows Reader for the tab, or closes it.
+    func toggleReader(in tabId: UUID) {
+        if readerArticleByTab.removeValue(forKey: tabId) != nil { return }
+        guard let webView = webViews[tabId] else { return }
+        Task { @MainActor [weak self] in
+            if let article = await ReaderMode.extract(webView), self?.webViews[tabId] === webView {
+                self?.readerArticleByTab[tabId] = article
+            }
+        }
+    }
+
+    private func clearReader(_ tabId: UUID) {
+        // Assign only on change: each @Published write re-renders the shell.
+        if readerableTabs.contains(tabId) { readerableTabs.remove(tabId) }
+        if readerArticleByTab[tabId] != nil { readerArticleByTab.removeValue(forKey: tabId) }
+    }
     
     /// Favicon URLs per tab (extracted from page <link rel="icon">)
     var faviconURLByTab: [UUID: URL?] { tabRuntime.faviconURLByTab }
@@ -1194,6 +1214,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         faviconWorkByTab.removeValue(forKey: tabId)?.cancel()
         tabRuntime.setLoadingProgress(nil, for: tabId)
         pageErrorByTab.removeValue(forKey: tabId)
+        clearReader(tabId)
         audibleFramesByTab.removeValue(forKey: tabId)
         tabRuntime.setAudible(false, for: tabId)
         mutedTabs.remove(tabId)
@@ -1391,6 +1412,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         guard let tabId = tabId(for: webView) else { return }
         httpsUpgrades.removeValue(forKey: tabId)
         findResultByTab.removeValue(forKey: tabId)
+        clearReader(tabId)
         shieldsCounter.navigationCommitted(tabId)
         if let host = webView.url?.host {
             let zoom = siteZoom.zoom(for: host)
@@ -1407,6 +1429,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard let tabId = webViews.first(where: { $0.value === webView })?.key else { return }
+        let navigationURL = webView.url
         if let url = webView.url {
             let title = webView.title?.trimmingCharacters(in: .whitespacesAndNewlines)
             onNavigationFinished?(tabId, url, (title?.isEmpty == false ? title! : (url.host ?? url.absoluteString)))
@@ -1424,6 +1447,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         applyZoom(to: tabId)
         // The URL observer runs before the new document is parsed; read its <link rel=icon> now.
         fetchFavicon(for: tabId, webView: webView)
+        Task { @MainActor [weak self] in
+            if await ReaderMode.isReaderable(webView), self?.webViews[tabId] === webView, webView.url == navigationURL {
+                self?.readerableTabs.insert(tabId)
+            }
+        }
         // Fallback: sample theme again at load end (documentEnd script may have already run).
         let script = """
         (function(){

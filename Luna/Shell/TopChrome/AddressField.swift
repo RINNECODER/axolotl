@@ -91,7 +91,7 @@ struct AddressField: View {
             }
             // Balance the leading icon so centered text sits in the true middle.
             if centered && !isFocused { Color.clear.frame(width: 14) }
-            if !isFocused, let web, isWebPage { ZoomChip(web: web) }
+            if !isFocused, let web, isWebPage { ReaderChip(web: web); ZoomChip(web: web) }
             if let trailing { trailing }
         }
         .padding(.leading, chromeStyle ? 5 : 10)
