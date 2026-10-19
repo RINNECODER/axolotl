@@ -1150,7 +1150,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         tabRuntime.setAudible(false, for: tabId)
         mutedTabs.remove(tabId)
         if !keepMetadata {
-            tabRuntime.setFaviconURL(nil, for: tabId)
+            tabRuntime.remove(tabId)
             primaryTintByTab.removeValue(forKey: tabId)
             pageThemeByTab.removeValue(forKey: tabId)
             zoomByTab.removeValue(forKey: tabId)

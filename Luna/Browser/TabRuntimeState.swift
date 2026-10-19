@@ -39,6 +39,12 @@ final class TabRuntimeStore: ObservableObject {
     var faviconURLByTab: [UUID: URL] { states.compactMapValues(\.faviconURL) }
     var audibleTabs: Set<UUID> { Set(states.filter { $0.value.isAudible }.keys) }
 
+    /// Drops a closed tab's state so it doesn't outlive the tab.
+    func remove(_ tabId: UUID) {
+        guard states.removeValue(forKey: tabId) != nil else { return }
+        revision &+= 1
+    }
+
     func setLoadingProgress(_ progress: Double?, for tabId: UUID) {
         let state = state(for: tabId)
         guard state.loadingProgress != progress else { return }
