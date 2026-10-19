@@ -14,6 +14,8 @@ struct PageError: Equatable {
     /// The page that failed (nil when unknown); Reload loads it again.
     var url: URL?
     var code: Int?
+    /// HTTPS-first: the http page the failed https try stood in for ("Continue to http").
+    var httpFallback: URL? = nil
 
     var host: String { url?.host ?? url?.absoluteString ?? "" }
 
@@ -94,6 +96,7 @@ struct PageError: Equatable {
 struct PageErrorView: View {
     let error: PageError
     let onReload: () -> Void
+    var onContinueHTTP: (() -> Void)? = nil
 
     var body: some View {
         ZStack {
@@ -113,9 +116,20 @@ struct PageErrorView: View {
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(.tertiary)
                 }
-                Button("Reload", action: onReload)
-                    .controlSize(.large)
-                    .padding(.top, 6)
+                if error.httpFallback != nil {
+                    Text("Luna tried a secure (https) connection first. The http page isn't encrypted.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 10) {
+                    Button("Reload", action: onReload)
+                    if error.httpFallback != nil, let onContinueHTTP {
+                        Button("Continue to http", action: onContinueHTTP)
+                    }
+                }
+                .controlSize(.large)
+                .padding(.top, 6)
             }
             .frame(maxWidth: 480, alignment: .leading)
             .padding(32)

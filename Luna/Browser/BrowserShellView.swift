@@ -980,7 +980,8 @@ struct BrowserShellView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .id(currentId)
                         if let pageError = web.pageErrorByTab[currentId] {
-                            PageErrorView(error: pageError) { web.reloadAfterError(in: currentId) }
+                            PageErrorView(error: pageError, onReload: { web.reloadAfterError(in: currentId) },
+                                          onContinueHTTP: { web.continueToHTTP(in: currentId) })
                         }
                         if isFocused && isFirstLoad {
                             ProgressView()
