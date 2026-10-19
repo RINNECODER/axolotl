@@ -110,6 +110,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// This profile's site settings; a non-persistent (private) data store keeps them in memory only.
     lazy var sitePermissions: SitePermissionStore = websiteDataStore.isPersistent
         ? .forProfile(profileId) : SitePermissionStore(fileURL: nil)
+    /// Shields per-site settings and blocked total; private sessions keep both in memory only.
+    lazy var shields: ShieldsStore = websiteDataStore.isPersistent ? .forProfile(profileId) : ShieldsStore(fileURL: nil)
+    lazy var shieldsCounter: ShieldsCounter = websiteDataStore.isPersistent ? .forProfile(profileId) : ShieldsCounter(key: nil)
     @Published var passwordSaveOffer: PasswordSaveOffer?
     /// HTTPS-first: the http URL each tab's pending https try stands in for.
     private var httpsUpgrades: [UUID: URL] = [:]
@@ -748,7 +751,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     /// HTTPS-first: the https URL to load instead of `url`, remembering the http one for the error page.
     private func httpsFirst(_ url: URL, in tabId: UUID) -> URL {
-        guard PrivacyPrefs.isOn(PrivacyPrefs.httpsFirst), let https = HTTPSUpgrade.upgrade(url, exempt: httpAllowedHosts) else {
+        guard shields.policy(host: url.host).upgradesHTTPS, let https = HTTPSUpgrade.upgrade(url, exempt: httpAllowedHosts) else {
             httpsUpgrades.removeValue(forKey: tabId)
             return url
         }
@@ -1266,7 +1269,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
                 // The https site sent us back to http: it doesn't do https, so don't loop.
                 httpsUpgrades.removeValue(forKey: tabId)
                 if let host = url.host?.lowercased() { httpAllowedHosts.insert(host) }
-            } else if navigationAction.navigationType == .linkActivated, PrivacyPrefs.isOn(PrivacyPrefs.httpsFirst),
+            } else if navigationAction.navigationType == .linkActivated, shields.policy(host: url.host).upgradesHTTPS,
                       HTTPSUpgrade.upgrade(url, exempt: httpAllowedHosts) != nil {
                 decisionHandler(.cancel, preferences)
                 load(url: url, in: tabId)
@@ -1278,7 +1281,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         if let targetURL = navigationAction.request.url {
             webView.customUserAgent = Self.userAgent(for: targetURL)
         }
-        preferences.allowsContentJavaScript = true
+        // Shields "Block scripts" goes by the page's site, for its subframes too.
+        let pageURL = navigationAction.targetFrame?.isMainFrame == false ? webView.url : navigationAction.request.url
+        preferences.allowsContentJavaScript = !shields.policy(host: ShieldsStore.host(of: pageURL)).blocksScripts
         decisionHandler(.allow, preferences)
     }
 
