@@ -1828,6 +1828,8 @@ struct BrowserShellView: View {
 
     private func closeTab(_ id: UUID) {
         Usage.record(.closeTab)
+        let closingHost = session.workspace.tab(id)?.url?.host
+        defer { forgetSiteIfLastTab(closingHost) }
         web.removeWebView(for: id)
         tabsWithPanelOpen.remove(id)
         session.chatStore.removeMessages(for: id)
@@ -1838,6 +1840,17 @@ struct BrowserShellView: View {
             web.setActiveTab(newCurrent)
             syncAddressBarFromCurrentTab()
         }
+    }
+
+    /// Forget Me sites: once a marked site's last tab (in any window of the profile) closes, clear its data.
+    private func forgetSiteIfLastTab(_ host: String?) {
+        guard !isPrivate, host != nil else { return }
+        let profileId = sessionStore.activeProfileId
+        let sites = ForgetSites.sites(profileId)
+        guard !sites.isEmpty else { return }
+        let open = ProfileSession.open(profileId: profileId).flatMap { $0.workspace.workspace.tabs.values.compactMap(\.url?.host) }
+        guard let site = ForgetSites.siteToForget(closing: host, openHosts: open, sites: sites) else { return }
+        ForgetSites.forget(site, in: ProfileManager.shared.dataStore(for: profileId))
     }
 
     private func switchToTab(_ id: UUID) {
