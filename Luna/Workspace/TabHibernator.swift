@@ -73,7 +73,7 @@ final class TabHibernator {
     }
 
     private func unload(_ id: UUID) {
-        store.setInteractionState(id, web.interactionStates()[id])
+        store.setInteractionState(id, web.interactionState(of: id))
         web.removeWebView(for: id, keepMetadata: true)
     }
 }

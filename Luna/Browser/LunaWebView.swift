@@ -15,6 +15,23 @@ final class LunaWebView: WKWebView {
     var onOpenInNewWindow: ((URL) -> Void)?
     var onPrint: (() -> Void)?
 
+    /// When the user last clicked or typed in this page: gates popups and silent downloads.
+    private(set) var lastUserInput = Date.distantPast
+    private var consumedInput = Date.distantPast
+
+    override func mouseDown(with event: NSEvent) { lastUserInput = Date(); super.mouseDown(with: event) }
+    override func keyDown(with event: NSEvent) { lastUserInput = Date(); super.keyDown(with: event) }
+
+    func hadUserInput(within seconds: TimeInterval) -> Bool { Date().timeIntervalSince(lastUserInput) < seconds }
+
+    /// True for the first caller after a click or key press in the last second, so one
+    /// gesture brings at most one popup to the front.
+    func consumeUserGesture() -> Bool {
+        guard hadUserInput(within: 1), lastUserInput > consumedInput else { return false }
+        consumedInput = lastUserInput
+        return true
+    }
+
     private enum Target: String {
         case image, link, media
     }

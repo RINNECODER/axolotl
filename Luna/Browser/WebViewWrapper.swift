@@ -53,8 +53,12 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     /// DownloadManager item for each in-flight WKDownload (keyed by ObjectIdentifier of WKDownload).
     private var downloadItemByID: [ObjectIdentifier: UUID] = [:]
+    /// Downloads started from the context menu: the user asked for them, so they save without a prompt.
+    private var menuDownloads: Set<ObjectIdentifier> = []
     /// Tabs created for `target="_blank"` / `window.open()` popups.
     private var popupTabIds: Set<UUID> = []
+    /// Recent popup times per opener tab, for the popup cap.
+    private var popupTimes: [UUID: [Date]] = [:]
 
     /// Per-tab zoom (1.0 = 100%). Applied via WKWebView.pageZoom.
     private var zoomByTab: [UUID: CGFloat] = [:]
@@ -75,9 +79,6 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Per-tab primary tint, derived from favicon (preferred) or page theme (fallback).
     var primaryTintByTab: [UUID: NSColor] = [:]
     
-    /// When true, Google AI Studio showed "request is suspicious" — show in-app explanation (Google’s decision, not a Luma bug).
-    @Published var googleSuspiciousErrorDetected: Bool = false
-
     /// Luna Max link preview: the link the user is Shift-hovering, in web view coordinates.
     struct LinkPreviewRequest: Equatable {
         let tabId: UUID
@@ -524,35 +525,6 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         return safariUserAgent
     }
 
-    /// Detects "Failed to generate API key, The request is suspicious" on AI Studio so we can show an in-app explanation.
-    private static let googleSuspiciousErrorScriptSource = """
-        (function(){
-            if (!window.location.hostname || window.location.hostname.indexOf('aistudio.google.com') === -1) return;
-            function check(){
-                var b = document.body; if (!b) return;
-                var t = (b.innerText || b.textContent || '').toLowerCase();
-                if (t.indexOf('request is suspicious') !== -1 || t.indexOf('failed to generate api key') !== -1) {
-                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.lumaGoogleSuspiciousError) {
-                        window.webkit.messageHandlers.lumaGoogleSuspiciousError.postMessage({});
-                    }
-                }
-            }
-            setTimeout(check, 1500); setTimeout(check, 3500);
-        })();
-        """
-
-    private lazy var googleSuspiciousErrorHandler: GoogleSuspiciousErrorHandler = {
-        let h = GoogleSuspiciousErrorHandler()
-        h.wrapper = self
-        return h
-    }()
-
-    func clearGoogleSuspiciousErrorBanner() {
-        DispatchQueue.main.async { [weak self] in
-            self?.googleSuspiciousErrorDetected = false
-        }
-    }
-
     func ensureWebView(for tabId: UUID) -> WKWebView {
         if let wv = webViews[tabId] { return wv }
         // Standards-compliant config to avoid bot/fingerprint detection: persistent store, real UA, full JS, no document-start injection.
@@ -562,15 +534,14 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         config.webExtensionController = extensionController
         // Enable JavaScript via per-navigation preferences (preferences.javaScriptEnabled is deprecated).
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        // WebKit's popup blocker: window.open only during a user gesture (macOS defaults to true).
+        config.preferences.javaScriptCanOpenWindowsAutomatically = false
         // Web Inspector + "Inspect Element" (Debug, or Settings → Enable Developer Tools).
         Self.applyDeveloperTools(to: config)
         config.userContentController.add(themeMessageHandler, name: "lumaPageTheme")
-        config.userContentController.add(googleSuspiciousErrorHandler, name: "lumaGoogleSuspiciousError")
         // Inject only at documentEnd (and didFinish fallback). No atDocumentStart — early injection is detectable as DOM tampering.
         let themeScript = WKUserScript(source: WebViewWrapper.themeScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(themeScript)
-        let googleErrorScript = WKUserScript(source: WebViewWrapper.googleSuspiciousErrorScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-        config.userContentController.addUserScript(googleErrorScript)
         // Passwords: form detection and filling live in an isolated content world, so page
         // scripts can neither read saved passwords nor fake a submit.
         config.userContentController.add(passwordHandler, contentWorld: .defaultClient, name: "lunaPasswords")
@@ -624,8 +595,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             }
         }
         let urlObservation = wv.observe(\.url, options: [.new]) { [weak self, tabId] webView, _ in
-            guard let self = self, webView.url != nil else { return }
-            self.fetchFavicon(for: tabId, webView: webView)
+            // pushState/replaceState can change the URL many times a second: refetch only when the
+            // origin changes (didFinish refetches after a load), debounced.
+            guard let self = self, let url = webView.url, Self.origin(of: url) != self.faviconOriginByTab[tabId] else { return }
+            self.faviconWorkByTab[tabId]?.cancel()
+            let work = DispatchWorkItem { [weak self, weak webView] in
+                guard let self, let webView else { return }
+                self.fetchFavicon(for: tabId, webView: webView)
+            }
+            self.faviconWorkByTab[tabId] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
         }
         // Live back/forward state (covers pushState/same-document navigations, not just didFinish).
         let canGoBackObservation = wv.observe(\.canGoBack, options: [.new]) { [weak self, tabId] webView, _ in
@@ -768,10 +747,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Back/forward state for every live web page, for session persistence.
     func interactionStates() -> [UUID: Data] {
         var result: [UUID: Data] = [:]
-        for (id, wv) in webViews where wv.url != nil {
-            if let data = wv.interactionState as? Data { result[id] = data }
+        for id in webViews.keys {
+            if let data = interactionState(of: id) { result[id] = data }
         }
         return result
+    }
+
+    /// Back/forward state of one live page; unloading a tab needs only its own.
+    func interactionState(of tabId: UUID) -> Data? {
+        guard let wv = webViews[tabId], wv.url != nil else { return nil }
+        return wv.interactionState as? Data
     }
 
     func goBack(in tabId: UUID) {
@@ -808,6 +793,21 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     nonisolated static func newTabDisposition(type: WKNavigationType, modifiers: NSEvent.ModifierFlags, button: Int) -> Bool? {
         guard type == .linkActivated, modifiers.contains(.command) || button == 4 else { return nil }
         return modifiers.contains(.shift)
+    }
+
+    /// Schemes a page may open in a new tab or popup; `file` only from a file page,
+    /// so a web page can't open local files.
+    nonisolated static func canOpenInNewTab(_ url: URL, from opener: URL?) -> Bool {
+        switch url.scheme?.lowercased() {
+        case "http", "https": return true
+        case "file": return opener?.isFileURL == true
+        default: return false
+        }
+    }
+
+    /// Popup blocker: only user-activated popups, at most 5 per opener per minute.
+    nonisolated static func allowsPopup(userActivated: Bool, recent: [Date], now: Date) -> Bool {
+        userActivated && recent.filter { now.timeIntervalSince($0) < 60 }.count < 5
     }
 
     /// Opens `url` in a new tab right after `opener` (Chrome); a background tab loads when first shown.
@@ -1005,8 +1005,31 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         wv.pageZoom = Double(zoom)
     }
 
+    /// Origin the favicon was last looked up for, per tab (skips same-origin URL churn).
+    private var faviconOriginByTab: [UUID: String] = [:]
+    private var faviconWorkByTab: [UUID: DispatchWorkItem] = [:]
+
+    nonisolated static func origin(of url: URL) -> String {
+        "\(url.scheme ?? "")://\(url.host ?? "")\(url.port.map { ":\($0)" } ?? "")"
+    }
+
+    /// Loopback, link-local, private (RFC 1918 / ULA) and .local hosts.
+    nonisolated static func isPrivateNetworkHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")) else { return false }
+        if host == "localhost" || host.hasSuffix(".local") || host.hasSuffix(".localhost") || host == "::1" { return true }
+        if host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe80:") { return host.contains(":") }
+        let octets = host.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4 else { return false }
+        switch (octets[0], octets[1]) {
+        case (10, _), (127, _), (0, _), (192, 168), (169, 254): return true
+        case (172, 16...31): return true
+        default: return false
+        }
+    }
+
     /// Fetches the favicon URL from the page's <link rel="icon"> tag
     private func fetchFavicon(for tabId: UUID, webView: WKWebView) {
+        if let url = webView.url { faviconOriginByTab[tabId] = Self.origin(of: url) }
         let script = """
         (function() {
             var links = document.querySelectorAll('link[rel*="icon"]');
@@ -1022,7 +1045,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         webView.evaluateJavaScript(script) { [weak self] result, error in
             guard let self = self else { return }
             DispatchQueue.main.async {
-                if let urlString = result as? String, !urlString.isEmpty, let url = URL(string: urlString) {
+                if let urlString = result as? String, !urlString.isEmpty, let url = URL(string: urlString),
+                   // A public page can't make Luna probe the local network through its icon link.
+                   !Self.isPrivateNetworkHost(url.host) || Self.isPrivateNetworkHost(webView.url?.host) {
                     self.tabRuntime.setFaviconURL(url, for: tabId)
                     self.fetchPrimaryTintFromFavicon(for: tabId, faviconURL: url)
                 } else if let pageURL = webView.url, pageURL.host != nil {
@@ -1044,9 +1069,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         }
         var request = URLRequest(url: faviconURL)
         request.cachePolicy = .returnCacheDataElseLoad
+        request.timeoutInterval = 10
         URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
             guard let self else { return }
-            guard let data, let image = NSImage(data: data), let color = Self.dominantColor(from: image) else { return }
+            // shortcut: the size cap applies after download (bounded by the timeout); stream it if icons get abused.
+            guard let data, data.count <= 1_000_000, let image = NSImage(data: data), let color = Self.dominantColor(from: image) else { return }
             DispatchQueue.main.async {
                 self.updatePrimaryTint(color, for: tabId)
             }
@@ -1146,6 +1173,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         }
         webViews.removeValue(forKey: tabId)
         popupTabIds.remove(tabId)
+        popupTimes.removeValue(forKey: tabId)
+        faviconOriginByTab.removeValue(forKey: tabId)
+        faviconWorkByTab.removeValue(forKey: tabId)?.cancel()
         tabRuntime.setLoadingProgress(nil, for: tabId)
         pageErrorByTab.removeValue(forKey: tabId)
         audibleFramesByTab.removeValue(forKey: tabId)
@@ -1191,7 +1221,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
            let foreground = Self.newTabDisposition(type: navigationAction.navigationType,
                                                   modifiers: navigationAction.modifierFlags,
                                                   button: navigationAction.buttonNumber),
-           ["http", "https", "file"].contains(url.scheme?.lowercased() ?? ""),
+           Self.canOpenInNewTab(url, from: webView.url),
            let opener = tabId(for: webView) {
             openInNewTab(url, nextTo: opener, foreground: foreground)
             decisionHandler(.cancel, preferences)
@@ -1207,22 +1237,13 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
-        let url = webView.url?.absoluteString ?? "(unknown url)"
-        print("WKWebView didFailProvisionalNavigation:", url, error.localizedDescription)
         guard let tabId = tabId(for: webView), let pageError = PageError.classify(error, url: webView.url) else { return }
         pageErrorByTab[tabId] = pageError
         // The address bar shows the page that failed, not the one still underneath.
         if tabId == activeTab, let failed = pageError.url { currentURL = failed }
     }
 
-    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
-        let url = webView.url?.absoluteString ?? "(unknown url)"
-        print("WKWebView didFail:", url, error.localizedDescription)
-    }
-
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        let url = webView.url?.absoluteString ?? "(unknown url)"
-        print("WKWebView process terminated:", url)
         guard let tabId = tabId(for: webView) else { return }
         pageErrorByTab[tabId] = PageError(kind: .crashed, url: webView.url, code: nil)
         tabRuntime.setLoadingProgress(nil, for: tabId)
@@ -1437,6 +1458,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         if let page = webView.url { request.setValue(page.absoluteString, forHTTPHeaderField: "Referer") }
         webView.startDownload(using: request) { [weak self] download in
             download.delegate = self
+            self?.menuDownloads.insert(ObjectIdentifier(download))
         }
     }
 
@@ -1459,10 +1481,27 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             counter += 1
         }
         let requestURL = response.url ?? download.originalRequest?.url ?? dest
-        downloadItemByID[ObjectIdentifier(download)] = DownloadManager.shared.begin(
-            download, url: requestURL, fileURL: dest, suggestedFilename: suggestedFilename)
-        downloadLog.info("Saving download to \(dest.path, privacy: .public)")
-        completionHandler(dest)
+        let save = { [weak self] (dest: URL) in
+            self?.downloadItemByID[ObjectIdentifier(download)] = DownloadManager.shared.begin(
+                download, url: requestURL, fileURL: dest, suggestedFilename: suggestedFilename)
+            downloadLog.info("Saving download to \(dest.path, privacy: .public)")
+            completionHandler(dest)
+        }
+        // Save silently only for a download the user asked for (menu, click or key press);
+        // one a page starts on its own asks where to save, or is cancelled.
+        let fromMenu = menuDownloads.remove(ObjectIdentifier(download)) != nil
+        guard fromMenu || (download.webView as? LunaWebView)?.hadUserInput(within: 10) == true else {
+            let panel = NSSavePanel()
+            panel.nameFieldStringValue = suggestedFilename
+            panel.directoryURL = downloadsDir
+            panel.begin { response in
+                guard response == .OK, let url = panel.url else { return completionHandler(nil) }
+                try? FileManager.default.removeItem(at: url)  // the panel already confirmed replacing it
+                save(url)
+            }
+            return
+        }
+        save(dest)
     }
 
     func downloadDidFinish(_ download: WKDownload) {
@@ -1494,28 +1533,28 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         let isAboutBlank = requestURL?.absoluteString == "about:blank" || requestURL == nil
         
         if !isAboutBlank {
-            guard let url = requestURL,
-                  let scheme = url.scheme?.lowercased(),
-                  (scheme == "http" || scheme == "https" || scheme == "file") else {
-                print("WebViewWrapper: Blocked navigation to invalid URL: \(requestURL?.absoluteString ?? "nil")")
-                return nil
-            }
+            guard let url = requestURL, Self.canOpenInNewTab(url, from: webView.url) else { return nil }
         }
 
         // If tabManager is unavailable, fall back to loading in current tab instead of blocking entirely.
         guard let tabManager = tabManager else {
-            if let url = requestURL {
-                print("WebViewWrapper: tabManager is nil, loading \(url.absoluteString) in current tab")
-                webView.load(URLRequest(url: url))
-            }
+            if let url = requestURL { webView.load(URLRequest(url: url)) }
             return nil
         }
 
-        print("WebViewWrapper: Creating new tab for popup: \(requestURL?.absoluteString ?? "about:blank")")
+        let lwv = webView as? LunaWebView
+        let opener = tabId(for: webView)
+        let now = Date()
+        let recent = opener.flatMap { popupTimes[$0] } ?? []
+        guard Self.allowsPopup(userActivated: navigationAction.navigationType == .linkActivated || lwv?.hadUserInput(within: 1) == true,
+                               recent: recent, now: now) else { return nil }
+        if let opener { popupTimes[opener] = recent.filter { now.timeIntervalSince($0) < 60 } + [now] }
+        // One popup per click comes to the front; any more open in the background.
+        let foreground = lwv?.consumeUserGesture() ?? true
 
         // Create a new tab and *return* its webview so WebKit performs the navigation with correct headers.
         // For about:blank popups, pass nil so TabManager creates a blank tab that will be navigated later.
-        let id = tabManager.newTab(url: requestURL)
+        let id = tabManager.store.newTab(url: requestURL, activate: foreground)
         // IMPORTANT: the returned WKWebView must be created with the provided `configuration`,
         // otherwise WebKit throws: "Returned WKWebView was not created with the given configuration."
         // The supplied popup configuration inherits the opener's profile store.
@@ -1526,7 +1565,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         register(webView: wv, for: id)
         popupTabIds.insert(id)
 
-        setActiveTab(id)
+        if foreground { setActiveTab(id) }
         // Do NOT call `load()` here — WebKit will load `navigationAction.request` into the returned webview.
         return wv
     }
@@ -1596,7 +1635,6 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webViewDidClose(_ webView: WKWebView) {
         // A popup window closed itself via window.close() - close the corresponding tab.
         guard let tabId = webViews.first(where: { $0.value === webView })?.key else { return }
-        print("WebViewWrapper: Popup closed via window.close(), removing tab \(tabId)")
         tabManager?.closeTab(tabId)
         removeWebView(for: tabId)
     }
@@ -1655,18 +1693,6 @@ private final class ThemeMessageHandler: NSObject, WKScriptMessageHandler {
                 wrapper.pageThemeByTab.removeValue(forKey: tabId)
             }
             wrapper.updatePageThemeForActiveTab()
-        }
-    }
-}
-
-// MARK: - Google “suspicious request” handler (shows in-app explanation so users know it’s Google’s decision, not Luma)
-
-private final class GoogleSuspiciousErrorHandler: NSObject, WKScriptMessageHandler {
-    weak var wrapper: WebViewWrapper?
-
-    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-        DispatchQueue.main.async { [weak self] in
-            self?.wrapper?.googleSuspiciousErrorDetected = true
         }
     }
 }

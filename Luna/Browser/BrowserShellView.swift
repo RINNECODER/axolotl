@@ -69,7 +69,6 @@ struct BrowserShellView: View {
     @State private var suggestionDebounceTask: DispatchWorkItem?
     /// Set while arrow keys write the selected suggestion into the field, so that edit doesn't refetch.
     @State private var suppressSuggestionFetch = false
-    @State private var showGoogleAPIKeyHelpSheet: Bool = false
     @State private var showBrowserFindBar: Bool = false
     @State private var browserFindQuery: String = ""
     /// Luna Max "Ask on Page" card for the current tab.
@@ -920,10 +919,8 @@ struct BrowserShellView: View {
                         tabContent(id, isFocused: id == currentId)
                     }
                     .onDisappear { paneFrames = [:] }
-                    .sheet(isPresented: $showGoogleAPIKeyHelpSheet) { GoogleAPIKeyHelpView() }
                 } else {
                     tabContent(currentId, isFocused: true)
-                        .sheet(isPresented: $showGoogleAPIKeyHelpSheet) { GoogleAPIKeyHelpView() }
                 }
             } else {
                 Color(nsColor: .windowBackgroundColor)
@@ -983,15 +980,6 @@ struct BrowserShellView: View {
                                         isFirstLoad = false
                                     }
                                 }
-                        }
-                        if web.googleSuspiciousErrorDetected, currentURL?.host?.contains("aistudio.google.com") == true {
-                            GoogleSuspiciousErrorBanner(
-                                onDismiss: { web.clearGoogleSuspiciousErrorBanner() },
-                                onLearnMore: { showGoogleAPIKeyHelpSheet = true }
-                            )
-                            .padding(.horizontal, 12)
-                            .padding(.top, 12)
-                            .transition(.move(edge: .top).combined(with: .opacity))
                         }
                         if let preview = web.linkPreview, preview.tabId == currentId {
                             GeometryReader { geo in
@@ -1709,78 +1697,6 @@ struct BrowserShellView: View {
 // MARK: - Profile window registry
 
 /// Keeps profile windows alive (isReleasedWhenClosed = false) and releases them on close.
-
-// MARK: - Google “suspicious request” banner + help (DIA-style: explain it’s Google’s decision, not Luma)
-
-private struct GoogleSuspiciousErrorBanner: View {
-    let onDismiss: () -> Void
-    let onLearnMore: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.system(size: 16))
-                .foregroundColor(.orange)
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Google is blocking API key creation for this request.")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.primary)
-                Text("This is a Google security decision, not a problem with Luma.")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            Button("Learn more") { onLearnMore() }
-                .buttonStyle(.borderedProminent)
-            Button("Dismiss") { onDismiss() }
-                .buttonStyle(.bordered)
-        }
-        .padding(14)
-        .background(Color(nsColor: .windowBackgroundColor).opacity(0.95))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .shadow(color: .black.opacity(0.15), radius: 8)
-    }
-}
-
-private struct GoogleAPIKeyHelpView: View {
-    @Environment(\.dismiss) private var dismiss
-    private let googleSecurityURL = URL(string: "https://myaccount.google.com/security")!
-    private let aiStudioURL = URL(string: "https://aistudio.google.com/app/apikey")!
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Text("Trouble creating Google AI keys?")
-                    .font(.system(size: 18, weight: .semibold))
-                Spacer()
-                Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
-            }
-            .padding(.bottom, 4)
-            Text("When you see “The request is suspicious” on Google AI Studio, Google’s systems are blocking that action — for example because of account type, region, network, or past security events. Luma cannot override this.")
-                .font(.system(size: 13))
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("What you can do:")
-                    .font(.system(size: 13, weight: .semibold))
-                Text("• Check your Google Account security and sign-in history.")
-                Text("• Try again later or from a different network.")
-                Text("• Create the API key in Chrome or Safari, then paste it into Luma Settings.")
-            }
-            .font(.system(size: 13))
-            .foregroundColor(.primary)
-            Spacer()
-            HStack(spacing: 12) {
-                Link("Google Account security", destination: googleSecurityURL)
-                Link("Google AI Studio", destination: aiStudioURL)
-            }
-            .font(.system(size: 12))
-        }
-        .padding(24)
-        .frame(minWidth: 420, minHeight: 320)
-    }
-}
 
 // MARK: - Address bar suggestions (history first, then search)
 

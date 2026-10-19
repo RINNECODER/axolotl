@@ -68,6 +68,48 @@ final class PageRobustnessTests: XCTestCase {
         XCTAssertNil(WebViewWrapper.newTabDisposition(type: .formSubmitted, modifiers: .command, button: 1))
     }
 
+    func testWebPagesCannotOpenFileURLsInNewTabs() {
+        let file = URL(fileURLWithPath: "/etc/hosts")
+        XCTAssertFalse(WebViewWrapper.canOpenInNewTab(file, from: URL(string: "https://evil.example/")))
+        XCTAssertFalse(WebViewWrapper.canOpenInNewTab(file, from: nil))
+        XCTAssertTrue(WebViewWrapper.canOpenInNewTab(file, from: URL(fileURLWithPath: "/tmp/index.html")))
+        XCTAssertTrue(WebViewWrapper.canOpenInNewTab(URL(string: "https://a.example/")!, from: nil))
+        XCTAssertFalse(WebViewWrapper.canOpenInNewTab(URL(string: "javascript:alert(1)")!, from: nil))
+    }
+
+    func testPopupsNeedAUserGestureAndAreCappedPerMinute() {
+        let now = Date()
+        XCTAssertFalse(WebViewWrapper.allowsPopup(userActivated: false, recent: [], now: now))
+        XCTAssertTrue(WebViewWrapper.allowsPopup(userActivated: true, recent: Array(repeating: now, count: 4), now: now))
+        XCTAssertFalse(WebViewWrapper.allowsPopup(userActivated: true, recent: Array(repeating: now, count: 5), now: now))
+        // Popups older than a minute no longer count.
+        XCTAssertTrue(WebViewWrapper.allowsPopup(userActivated: true, recent: Array(repeating: now - 61, count: 5), now: now))
+    }
+
+    func testPrivateNetworkHosts() {
+        for host in ["localhost", "127.0.0.1", "10.1.2.3", "192.168.0.1", "172.20.0.1", "169.254.1.1", "printer.local", "[::1]", "fd00::1"] {
+            XCTAssertTrue(WebViewWrapper.isPrivateNetworkHost(host), host)
+        }
+        for host in ["example.com", "8.8.8.8", "172.32.0.1", "fd.example.com", "fcbarcelona.com"] {
+            XCTAssertFalse(WebViewWrapper.isPrivateNetworkHost(host), host)
+        }
+    }
+
+    func testHistoryCapsPageControlledTitleAndURL() {
+        let profile = UUID()
+        defer {
+            let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Luna/Profiles/\(profile.uuidString)")
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let history = HistoryManager(profileId: profile)
+        history.recordPageVisit(url: URL(string: "https://a.example/?q=" + String(repeating: "x", count: 5000))!,
+                                title: String(repeating: "t", count: 1000))
+        XCTAssertEqual(history.historyEvents.first?.url?.count, 2000)
+        XCTAssertEqual(history.historyEvents.first?.pageTitle?.count, 300)
+        history.flush()
+    }
+
     func testTabMenuCloseCommandsSparePinnedTabs() {
         let pinned = UUID(), a = UUID(), b = UUID(), c = UUID()
         let order = [pinned, a, b, c]
