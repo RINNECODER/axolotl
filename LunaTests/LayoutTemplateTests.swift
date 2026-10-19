@@ -93,4 +93,23 @@ final class LayoutTemplateTests: XCTestCase {
         XCTAssertFalse(ChromeMetrics.showsClose(pitch: 70, isActive: false))
         XCTAssertTrue(ChromeMetrics.showsClose(pitch: 44, isActive: true))
     }
+
+    @MainActor
+    func testTrafficLightsAreRestoredSynchronouslyWhenTheViewLeavesTheWindow() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+                              styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+        let close = try XCTUnwrap(window.standardWindowButton(.closeButton))
+        let before = close.frame.origin
+        let view = TrafficLightPositioner.PositionerView()
+        window.contentView?.addSubview(view)
+        view.enabled = true
+        let moved = expectation(description: "moved")
+        DispatchQueue.main.async { moved.fulfill() }
+        wait(for: [moved], timeout: 2)
+        XCTAssertNotEqual(close.frame.origin, before)
+
+        view.removeFromSuperview()
+        TrafficLightPositioner.dismantleNSView(view, coordinator: ())
+        XCTAssertEqual(close.frame.origin, before)
+    }
 }

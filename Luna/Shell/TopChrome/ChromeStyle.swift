@@ -294,19 +294,39 @@ struct TrafficLightPositioner: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: PositionerView, coordinator: ()) {
-        view.enabled = false
+        view.tearDown()
     }
 
     final class PositionerView: NSView {
         var enabled = false { didSet { if enabled != oldValue { schedule() } } }
         private var original: (container: NSRect, buttons: [NSRect])?
         private var observers: [NSObjectProtocol] = []
+        /// The last window we moved buttons in, so they can be restored after the view has left it.
+        private weak var attachedWindow: NSWindow?
+
+        /// Restores the buttons right now and stops observing; used when the view is removed.
+        func tearDown() {
+            enabled = false
+            removeObservers()
+            apply()
+            attachedWindow = nil
+        }
+
+        private func removeObservers() {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            observers.forEach(NotificationCenter.default.removeObserver)
-            observers = []
-            guard let window else { return }
+            removeObservers()
+            guard let window else {
+                // Left the window: put the buttons back synchronously, nothing is scheduled.
+                enabled = false
+                apply()
+                return
+            }
+            attachedWindow = window
             for name in [NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification, NSWindow.didExitFullScreenNotification,
                          NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
                 observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
@@ -321,7 +341,7 @@ struct TrafficLightPositioner: NSViewRepresentable {
         private func schedule() { DispatchQueue.main.async { [weak self] in self?.apply() } }
 
         private func apply() {
-            guard let window, !window.styleMask.contains(.fullScreen) else { return }
+            guard let window = window ?? attachedWindow, !window.styleMask.contains(.fullScreen) else { return }
             let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { window.standardWindowButton($0) }
             guard buttons.count == 3, let container = buttons[0].superview?.superview else { return }
             if !enabled {
