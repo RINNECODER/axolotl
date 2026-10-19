@@ -33,6 +33,8 @@ struct ChatMessage: Identifiable, Codable {
     let pageTitle: String?
     /// A run or key-grab card rendered instead of the text (the text stays as a plain summary).
     var card: ChatCard?
+    /// "Error: …" / "Generation stopped" shown under the reply; never sent back to the model.
+    var status: String?
 
     enum Role: String, Codable {
         case user

@@ -67,16 +67,21 @@ final class LLMService {
 
     /// Collects a full reply (titles, summaries, Luna Max).
     func complete(_ request: LLMRequest) async throws -> String {
-        var text = ""
-        var result: Result<Void, Error>?
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            stream(request, onToken: { text += $0 }, onCompletion: { r in
-                result = r
-                cont.resume()
-            })
+        try await Self.collect { stream(request, onToken: $0, onCompletion: $1) }
+    }
+
+    /// Runs a `stream`-shaped call to completion. Cancelling the caller cancels the stream and
+    /// throws CancellationError; cancelled streams never call onCompletion, so this resumes itself.
+    static func collect(_ start: (@escaping (String) -> Void, @escaping (Result<Void, Error>) -> Void) -> Task<Void, Never>) async throws -> String {
+        let state = CollectState()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
+                guard state.begin(cont) else { return }
+                state.setTask(start({ state.append($0) }, { state.finish($0) }))
+            }
+        } onCancel: {
+            state.cancel()
         }
-        if case .failure(let error) = result { throw error }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func complete(_ request: LLMRequest, completion: @escaping (Result<String, Error>) -> Void) {
@@ -85,10 +90,68 @@ final class LLMService {
         }
     }
 
-    /// 2-3 sentence summary used to keep long conversations within context.
-    func summarize(_ messages: [ChatMessage], completion: @escaping (Result<String, Error>) -> Void) {
+    static let maxSummaryChars = 1_500
+
+    /// Folds the previous summary and the new messages into one summary, so it stays bounded.
+    static func summaryRequest(previous: String?, messages: [ChatMessage]) -> LLMRequest {
         let transcript = messages.map { "\($0.role == .user ? "User" : "Assistant"): \($0.text)" }.joined(separator: "\n")
-        complete(LLMRequest(prompt: "Summarize this conversation in 2-3 sentences:\n\(transcript)\n\nReply with ONLY the summary."),
-                 completion: completion)
+        let prior = previous.flatMap { $0.isEmpty ? nil : "Earlier summary:\n\($0)\n\nNew messages:\n" } ?? ""
+        return LLMRequest(prompt: "Summarize this conversation in 2-4 sentences, merging any earlier summary into one:\n\(prior)\(transcript)\n\nReply with ONLY the summary.")
+    }
+
+    /// Summary used to keep long conversations within context, capped at `maxSummaryChars`.
+    func summarize(_ messages: [ChatMessage], previous: String? = nil, completion: @escaping (Result<String, Error>) -> Void) {
+        complete(Self.summaryRequest(previous: previous, messages: messages)) { result in
+            completion(result.map { String($0.prefix(Self.maxSummaryChars)) })
+        }
+    }
+}
+
+/// Shared by `collect`'s callbacks (any thread) and its cancel handler; resumes the continuation once.
+private nonisolated final class CollectState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cont: CheckedContinuation<String, Error>?
+    private var task: Task<Void, Never>?
+    private var text = ""
+    private var cancelled = false
+
+    /// False if already cancelled (the continuation is resumed with CancellationError).
+    func begin(_ c: CheckedContinuation<String, Error>) -> Bool {
+        lock.lock()
+        if cancelled { lock.unlock(); c.resume(throwing: CancellationError()); return false }
+        cont = c
+        lock.unlock()
+        return true
+    }
+
+    func setTask(_ t: Task<Void, Never>) {
+        lock.lock()
+        let late = cancelled
+        if !late { task = t }
+        lock.unlock()
+        if late { t.cancel() }
+    }
+
+    func append(_ s: String) { lock.lock(); text += s; lock.unlock() }
+
+    func finish(_ result: Result<Void, Error>) {
+        lock.lock()
+        let c = cont; cont = nil
+        let out = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        lock.unlock()
+        switch result {
+        case .success: c?.resume(returning: out)
+        case .failure(let e): c?.resume(throwing: e)
+        }
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let c = cont, t = task
+        cont = nil; task = nil
+        lock.unlock()
+        t?.cancel()
+        c?.resume(throwing: CancellationError())
     }
 }

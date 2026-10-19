@@ -40,6 +40,7 @@ struct CommandSurfaceView: View {
     @State private var actionProposedMessage: String? = nil
     @State private var conversationSummary: String? = nil
     @State private var lastSummarizedMessageCount: Int = 0
+    @State private var isSummarizing = false
     /// Active streaming task — cancel to stop generation.
     @State private var streamingTask: Task<Void, Never>? = nil
     /// Incremented whenever a stream starts or is cancelled; stale callbacks compare
@@ -643,12 +644,11 @@ struct CommandSurfaceView: View {
     }
 
     private func openLinkInNewTab(_ url: URL) {
-        // Only allow web schemes; model-generated markdown could contain
-        // javascript:/file:/data: links which must never navigate the browser.
-        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return }
-        if let tabManager = webViewWrapper.tabManager {
-            let newTabId = tabManager.newTab(url: url)
-            webViewWrapper.load(url: url, in: newTabId)
+        ChatLink.open(url) { url in
+            if let tabManager = webViewWrapper.tabManager {
+                let newTabId = tabManager.newTab(url: url)
+                webViewWrapper.load(url: url, in: newTabId)
+            }
         }
     }
 
@@ -1071,7 +1071,7 @@ struct CommandSurfaceView: View {
                 }
             }
         } else if !last.text.isEmpty {
-            messages[messages.count - 1].text += "\n\n*[Generation stopped]*"
+            messages[messages.count - 1].status = "Generation stopped"
         } else {
             messages.removeLast()
         }
@@ -1112,11 +1112,7 @@ struct CommandSurfaceView: View {
                 let msg = error.localizedDescription
                 errorMessage = msg
                 if let idx = messages.firstIndex(where: { $0.id == placeholderId }) {
-                    if messages[idx].text.isEmpty {
-                        messages[idx].text = "Error: \(msg)"
-                    } else {
-                        messages[idx].text += "\n\n*[Error: \(msg)]*"
-                    }
+                    messages[idx].status = "Error: \(msg)"
                 }
             }
         }
@@ -1132,22 +1128,23 @@ struct CommandSurfaceView: View {
         // Auto-summarize every 8 messages (4 exchanges)
         let messagesToSummarize = messages.count - lastSummarizedMessageCount
         
-        if messagesToSummarize >= 8 {
+        if messagesToSummarize >= 8, !isSummarizing {
+            isSummarizing = true
             let messagesToProcess = Array(messages.suffix(messagesToSummarize))
             // Capture the summarized span now: messages can grow while the
             // summarize request is in flight, which would corrupt the range.
             let summarizedUpTo = messages.count
+            let chatId = messages.first?.id
 
             let completion: (Result<String, Error>) -> Void = { result in
                 DispatchQueue.main.async {
+                    isSummarizing = false
+                    // A new chat (or another tab's chat) started while this was in flight.
+                    guard messages.first?.id == chatId else { return }
                     switch result {
                     case .success(let summary):
-                        // Append to existing summary or create new one
-                        if let existing = conversationSummary {
-                            conversationSummary = "\(existing)\n\nRecent: \(summary)"
-                        } else {
-                            conversationSummary = summary
-                        }
+                        // Already merged with the previous summary and length-capped.
+                        conversationSummary = summary
                         lastSummarizedMessageCount = summarizedUpTo
 
                         // Save summary to history if we have a tab ID
@@ -1166,7 +1163,7 @@ struct CommandSurfaceView: View {
                     }
                 }
             }
-            LLMService.shared.summarize(messagesToProcess, completion: completion)
+            LLMService.shared.summarize(messagesToProcess, previous: conversationSummary, completion: completion)
         }
     }
 

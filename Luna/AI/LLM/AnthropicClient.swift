@@ -65,7 +65,7 @@ struct AnthropicClient {
             let (bytes, response) = try await URLSession.shared.bytes(for: request)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             if status == 200 {
-                try await consume(bytes, onToken: onToken)
+                try await Self.consume(lines: bytes.lines, onToken: onToken)
                 return
             }
             let message = errorMessage(fromBody: await bytes.collect())
@@ -83,9 +83,10 @@ struct AnthropicClient {
         }
     }
 
-    private func consume(_ bytes: URLSession.AsyncBytes, onToken: @escaping (String) -> Void) async throws {
+    static func consume<Lines: AsyncSequence>(lines: Lines, onToken: @escaping (String) -> Void) async throws where Lines.Element == String {
         var stopReason: String?
-        try await SSE.read(bytes) { event in
+        var stopped = false
+        try await SSE.read(lines: lines) { event in
             guard let json = SSE.json(event.data), let type = json["type"] as? String else { return true }
             switch type {
             case "content_block_delta":
@@ -97,6 +98,7 @@ struct AnthropicClient {
             case "message_delta":
                 if let delta = json["delta"] as? [String: Any] { stopReason = delta["stop_reason"] as? String ?? stopReason }
             case "message_stop":
+                stopped = true
                 return false
             case "error":
                 let err = json["error"] as? [String: Any]
@@ -108,6 +110,13 @@ struct AnthropicClient {
         }
         if stopReason == "refusal" {
             throw LLMError.refused("Claude declined to answer this request.")
+        }
+        // A dropped connection ends the byte stream without message_stop; don't report it as done.
+        if !stopped && !Task.isCancelled {
+            throw LLMError.incomplete("The response ended unexpectedly.")
+        }
+        if stopReason == "max_tokens" {
+            throw LLMError.incomplete("The reply was cut off at the output length limit.")
         }
     }
 }

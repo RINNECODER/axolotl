@@ -805,6 +805,11 @@ struct SmartSearchView: View {
             transitionToChat()
         case .unsure:
             guard !isRouting else { return }
+            // Private windows never send typed text to a cloud model just to route it.
+            if isPrivate && LLMService.shared.provider != .ollama {
+                performSearch(trimmed)
+                return
+            }
             isRouting = true
             Task { @MainActor in
                 let intent = await QueryClassifier.resolve(trimmed)
@@ -842,7 +847,7 @@ struct SmartSearchView: View {
         // Append a stop notice to partial assistant message if any
         if let lastIdx = messages.indices.last, messages[lastIdx].role == .assistant {
             if !messages[lastIdx].text.isEmpty {
-                messages[lastIdx].text += "\n\n*[Generation stopped]*"
+                messages[lastIdx].status = "Generation stopped"
             } else {
                 messages.removeLast()
             }
@@ -1052,17 +1057,15 @@ struct SmartSearchView: View {
                         let msg = error.localizedDescription
                         errorMessage = msg
                         if let idx = messages.firstIndex(where: { $0.id == placeholderId }) {
-                            if messages[idx].text.isEmpty {
-                                messages[idx].text = "Error: \(msg)"
-                            } else {
-                                messages[idx].text += "\n\n*[Error: \(msg)]*"
-                            }
+                            messages[idx].status = "Error: \(msg)"
                         }
                     }
                 }
             }
 
             await MainActor.run {
+                // Stop may land while the title request awaited; don't start an orphaned stream.
+                guard generation == streamGeneration, !Task.isCancelled else { return }
                 streamingTask = LLMService.shared.stream(
                     LLMRequest(prompt: prompt, context: finalContext, recentMessages: recentContext),
                     onToken: onToken,
@@ -1205,8 +1208,10 @@ struct SmartSearchView: View {
     // MARK: - Link handling
 
     private func openLinkInNewTab(_ url: URL) {
-        let newTabId = tabManager.newTab(url: url)
-        webViewWrapper.load(url: url, in: newTabId)
+        ChatLink.open(url) { url in
+            let newTabId = tabManager.newTab(url: url)
+            webViewWrapper.load(url: url, in: newTabId)
+        }
     }
 
     // MARK: - Context helpers

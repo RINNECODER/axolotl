@@ -77,8 +77,12 @@ enum SSE {
     /// Calls `handle` for each `data:` line (every provider here sends one
     /// JSON object per event). Return false to stop reading.
     static func read(_ bytes: URLSession.AsyncBytes, handle: (Event) throws -> Bool) async throws {
+        try await read(lines: bytes.lines, handle: handle)
+    }
+
+    static func read<Lines: AsyncSequence>(lines: Lines, handle: (Event) throws -> Bool) async throws where Lines.Element == String {
         var name: String?
-        for try await line in bytes.lines {
+        for try await line in lines {
             if Task.isCancelled { return }
             if line.hasPrefix("event:") {
                 name = line.dropFirst(6).trimmingCharacters(in: .whitespaces)

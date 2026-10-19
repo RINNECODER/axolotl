@@ -207,6 +207,20 @@ struct ChatPulse: ViewModifier {
     }
 }
 
+// MARK: - Links
+
+/// Model-written links may only open web pages (in a tab) or compose mail;
+/// javascript:/file:/data:/custom schemes must never navigate the browser.
+enum ChatLink {
+    static func open(_ url: URL, inTab: (URL) -> Void) {
+        switch url.scheme?.lowercased() {
+        case "http", "https": inTab(url)
+        case "mailto": NSWorkspace.shared.open(url)
+        default: break
+        }
+    }
+}
+
 // MARK: - Bubble
 
 /// Chat message: user text in a soft bubble (edit on hover), assistant
@@ -261,12 +275,22 @@ struct LunaChatBubble: View {
                 withAnimation(.easeInOut(duration: 0.15)) { isHovered = hovering }
             }
         } else {
-            RichMessageView(
-                rawText: message.text,
-                fontSize: fontSize,
-                linkColor: linkColor,
-                onLinkTapped: onLinkTapped
-            )
+            VStack(alignment: .leading, spacing: 6) {
+                if !message.text.isEmpty {
+                    RichMessageView(
+                        rawText: message.text,
+                        fontSize: fontSize,
+                        linkColor: linkColor,
+                        onLinkTapped: onLinkTapped
+                    )
+                }
+                if let status = message.status {
+                    Text(status)
+                        .font(.system(size: fontSize - 1).italic())
+                        .foregroundColor(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }

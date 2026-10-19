@@ -101,10 +101,11 @@ final class GeminiClient {
                         }
                     }
                 }
-                await MainActor.run { onCompletion(.success(())) }
-            } catch is CancellationError {
+                // Cancelled streams never report (LLMService.stream contract).
+                if Task.isCancelled { return }
                 await MainActor.run { onCompletion(.success(())) }
             } catch {
+                if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
                 await MainActor.run { onCompletion(.failure(GeminiError.networkFailure(error.localizedDescription))) }
             }
         }
