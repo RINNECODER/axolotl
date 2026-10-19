@@ -23,7 +23,10 @@ struct AddressField: View {
     /// Chrome layout template: Chrome's pill omnibox with the site-info chip and a trailing accessory (the star).
     var chromeStyle: Bool = false
     var trailing: AnyView? = nil
+    /// For the site-info popover (permissions, certificate, site data); nil shows a plain icon.
+    var web: WebViewWrapper? = nil
     let onSubmit: () -> Void
+    @State private var showSiteInfo = false
 
     @Environment(\.colorScheme) private var scheme
 
@@ -49,19 +52,25 @@ struct AddressField: View {
         let palette = ChromePalette.for(scheme)
         let fontSize: CGFloat = chromeStyle ? 14.5 : 13
         HStack(spacing: chromeStyle ? 8 : 6) {
-            if chromeStyle {
-                // Chrome's site-information chip.
-                Group {
-                    if isWebPage { ChromeSiteInfoIcon().stroke(palette.icon, lineWidth: 1.5).frame(width: 14, height: 12) }
-                    else { Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium)).foregroundStyle(palette.icon) }
+            siteInfoButton {
+                if chromeStyle {
+                    // Chrome's site-information chip.
+                    Group {
+                        if isWebPage { ChromeSiteInfoIcon().stroke(palette.icon, lineWidth: 1.5).frame(width: 14, height: 12) }
+                        else { Image(systemName: "magnifyingglass").font(.system(size: 12, weight: .medium)).foregroundStyle(palette.icon) }
+                    }
+                        .frame(width: 24, height: 24)
+                        .background(Circle().fill(palette.toolbar.opacity(isWebPage ? 1 : 0)))
+                } else {
+                    Image(systemName: isWebPage ? (url?.scheme == "https" ? "lock.fill" : "globe") : "magnifyingglass")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 14)
                 }
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(palette.toolbar.opacity(isWebPage ? 1 : 0)))
-            } else {
-                Image(systemName: isWebPage ? (url?.scheme == "https" ? "lock.fill" : "globe") : "magnifyingglass")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.tertiary)
-                    .frame(width: 14)
+            }
+            if !isFocused, SiteSecurity.showsNotSecure(url) {
+                Text("Not secure").font(.system(size: fontSize - 1)).foregroundStyle(.secondary).fixedSize()
+                    .accessibilityLabel("Connection is not secure")
             }
             ZStack(alignment: centered && !isFocused ? .center : .leading) {
                 TextField("Search \(SearchEngine(rawValue: searchEngineRaw)?.title ?? SearchEngine.google.title) or type a URL", text: $text)
@@ -114,6 +123,26 @@ struct AddressField: View {
         .onTapGesture { focused.wrappedValue = true }
         .anchorPreference(key: AddressFieldAnchorKey.self, value: .bounds) { reportsAnchor ? $0 : nil }
         .background(NonDraggableWindowView())
+    }
+}
+
+extension AddressField {
+    /// The lock/globe opens the site-info popover on web pages (not file pages or search).
+    @ViewBuilder
+    private func siteInfoButton<Icon: View>(@ViewBuilder _ icon: () -> Icon) -> some View {
+        if let web, let url, isWebPage, !url.isFileURL {
+            Button { showSiteInfo.toggle() } label: { icon().contentShape(Rectangle()) }
+                .buttonStyle(.plain)
+                .help("View site information")
+                .accessibilityLabel("View site information")
+                .lunaPopover(isPresented: $showSiteInfo, arrowEdge: .bottom) {
+                    SiteInfoPopover(url: url, store: web.sitePermissions,
+                                    webView: web.activeTab.flatMap { web.webViewIfLoaded(for: $0) },
+                                    onClose: { showSiteInfo = false })
+                }
+        } else {
+            icon()
+        }
     }
 }
 
