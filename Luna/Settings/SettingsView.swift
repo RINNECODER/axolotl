@@ -234,7 +234,7 @@ extension SettingsPane {
                           ("Computer use", nil), ("Text size", "AI panel text size.")]
         case .passwords: return [("Passwords", "Saved logins in the Luna vault."), ("iCloud Keychain sync", nil),
                                  ("Import", "Bring bookmarks, history and passwords from another browser."),
-                                 ("Import passwords from CSV", nil)]
+                                 ("Import passwords from CSV", nil), ("Autofill", "Saved addresses and payment cards.")]
         case .privacy: return [("Keep a usage record", "Counts the Luna features and shortcuts you use each day, on this Mac only."),
                                ("Keep data for", nil), ("View usage data", nil),
                                ("Cookies and site data", "Clear cookies and site data."),
@@ -388,6 +388,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         "search": .general,
         "import": .passwords,
         "importData": .passwords,
+        "autofill": .passwords,
         "lunaMax": .ai,
         "personalization": .privacy,
         "dev": .agents,
@@ -403,6 +404,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
     static func passwordsTab(for name: String) -> PasswordsPaneTab? {
         switch name {
         case "import", "importData": return .importData
+        case "autofill": return .autofill
         case SettingsPane.passwords.rawValue: return .passwords
         default: return nil
         }
@@ -475,7 +477,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
                           "computer use", "agent", "grab", "text size"]
         case .passwords: return ["password", "login", "keychain", "autofill", "icloud", "touch id", "import", "chrome",
                                  "firefox", "safari", "brave", "edge", "arc", "vivaldi", "1password", "csv",
-                                 "bookmarks", "history", "sync"]
+                                 "bookmarks", "history", "sync", "address", "credit card", "payment", "card"]
         case .privacy: return ["privacy", "usage", "data", "record", "personalization", "cookies", "site data",
                                "history", "clear", "browsing data", "customize"]
         case .siteSettings: return ["site settings", "permissions", "camera", "microphone", "location", "pop-ups", "popups",
@@ -545,13 +547,14 @@ struct DefaultBrowserSection: View {
 // MARK: - Passwords & Import
 
 enum PasswordsPaneTab: String, CaseIterable, Identifiable {
-    case passwords, importData
+    case passwords, autofill, importData
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .passwords: return "Passwords"
+        case .autofill: return "Autofill"
         case .importData: return "Import"
         }
     }
@@ -565,6 +568,7 @@ private struct PasswordsImportView: View {
         SettingsTabBar(selection: $router.passwordsTab, tabs: PasswordsPaneTab.allCases.map { ($0, $0.title) })
         switch router.passwordsTab {
         case .passwords: PasswordsSettingsView()
+        case .autofill: AutofillSettingsView()
         case .importData: BrowserImportView()
         }
     }

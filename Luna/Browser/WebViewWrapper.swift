@@ -340,6 +340,165 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         return (result as? Bool) == true
     }
 
+    // MARK: Luna Autofill (addresses and cards)
+
+    /// Saved addresses or cards for the form field just focused on a tab.
+    struct AutofillOffer: Equatable {
+        let tabId: UUID
+        let host: String
+        let isCard: Bool
+        /// Field index in the page's form → what it asks for (same kind as `isCard`, never the CVC).
+        let fields: [Int: AutofillField]
+    }
+    /// A submitted address or card that isn't saved yet.
+    struct AutofillSaveOffer: Equatable {
+        let tabId: UUID
+        let host: String
+        let candidate: AutofillCandidate
+    }
+    @Published var autofillOffer: AutofillOffer?
+    @Published var autofillSaveOffer: AutofillSaveOffer?
+
+    private lazy var autofillHandler: AutofillMessageHandler = {
+        let h = AutofillMessageHandler()
+        h.wrapper = self
+        return h
+    }()
+
+    static let autofillScriptSource = """
+        (function(){
+            var handler = window.webkit && window.webkit.messageHandlers.lunaAutofill;
+            if (!handler) return;
+            var skip = /^(hidden|password|submit|button|checkbox|radio|file|image|reset|search|range|color)$/i;
+            function host() { return location.host.replace(/^www\\./, '').toLowerCase(); }
+            function labelOf(el) {
+                var t = (el.labels && el.labels.length) ? el.labels[0].textContent : (el.getAttribute('aria-label') || '');
+                return (t || '').trim().slice(0, 80);
+            }
+            function fieldsIn(scope) {
+                return Array.prototype.filter.call(scope.querySelectorAll('input, select'), function(i) {
+                    return !skip.test(i.type || '') && !i.disabled;
+                }).slice(0, 60);
+            }
+            function describe(list, withValues) {
+                return list.map(function(i) {
+                    var d = {ac: i.getAttribute('autocomplete') || '', name: i.name || '', id: i.id || '',
+                             label: labelOf(i), placeholder: i.placeholder || '', type: i.type || ''};
+                    if (withValues) d.value = String(i.value || '').slice(0, 200);
+                    return d;
+                });
+            }
+            var current = null;
+            document.addEventListener('focusin', function(e) {
+                var el = e.target;
+                if (!el || !/^(INPUT|SELECT)$/.test(el.tagName) || skip.test(el.type || '')) return;
+                if (current && current.el === el) return;
+                var list = fieldsIn(el.form || document), idx = list.indexOf(el);
+                if (idx < 0) return;
+                current = {el: el, list: list};
+                handler.postMessage({type: 'focus', host: host(), focused: idx, fields: describe(list, false)});
+            }, true);
+            var lastSent = '';
+            function capture(scope) {
+                var msg = JSON.stringify(describe(fieldsIn(scope || document), true));
+                if (msg === lastSent) return;
+                lastSent = msg;
+                handler.postMessage({type: 'submit', host: host(), fields: JSON.parse(msg)});
+            }
+            document.addEventListener('submit', function(e) { capture(e.target); }, true);
+            document.addEventListener('click', function(e) {
+                var b = e.target.closest ? e.target.closest('button, input[type=submit]') : null;
+                if (b && (b.type === 'submit' || b.form)) capture(b.form);
+            }, true);
+            window.__lunaAutofill = function(values, expectedHost) {
+                if (host() !== expectedHost || !current) return false;
+                var setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set, n = 0;
+                current.list.forEach(function(el, i) {
+                    var v = values[String(i)];
+                    if (v == null || v === '' || !el.isConnected) return;
+                    if (el.tagName === 'SELECT') {
+                        var want = String(v).toLowerCase(), num = parseInt(v, 10), opts = Array.prototype.slice.call(el.options);
+                        var opt = opts.find(function(o) { return o.value.toLowerCase() === want || o.text.trim().toLowerCase() === want; })
+                            || opts.find(function(o) { var x = parseInt(o.value, 10); return !isNaN(num) && (x === num || x === num % 100); });
+                        if (!opt) return;
+                        el.value = opt.value;
+                    } else {
+                        if (el.maxLength === 2 && /^\\d{4}$/.test(v)) v = v.slice(-2);
+                        setter.call(el, v);
+                    }
+                    el.dispatchEvent(new Event('input', {bubbles: true}));
+                    el.dispatchEvent(new Event('change', {bubbles: true}));
+                    n++;
+                });
+                return n > 0;
+            };
+        })();
+        """
+
+    fileprivate func handleAutofillMessage(_ body: Any, from webView: WKWebView?) {
+        guard let webView, let tabId = tabId(for: webView), let dict = body as? [String: Any],
+              let host = dict["host"] as? String, !host.isEmpty,
+              PasswordVault.normalize(webView.url?.host ?? "") == host else { return }
+        let raw = dict["fields"] as? [[String: Any]] ?? []
+        let fields = raw.map { d in
+            AutofillField.classify(autocomplete: d["ac"] as? String ?? "", name: d["name"] as? String ?? "",
+                                   id: d["id"] as? String ?? "", label: d["label"] as? String ?? "",
+                                   placeholder: d["placeholder"] as? String ?? "", type: d["type"] as? String ?? "")
+        }
+        // Cards are offered and saved on secure pages only, like Chrome.
+        let secure = webView.url?.scheme?.lowercased() == "https"
+        switch dict["type"] as? String {
+        case "focus":
+            if autofillOffer?.tabId == tabId { autofillOffer = nil }
+            guard let i = dict["focused"] as? Int, fields.indices.contains(i), let focused = fields[i], focused != .ccCSC,
+                  AutofillPrefs.isOn(focused.isCard ? AutofillPrefs.cards : AutofillPrefs.addresses),
+                  !focused.isCard || secure else { return }
+            let store = AutofillStore.forProfile(profileId)
+            guard focused.isCard ? !store.cards.isEmpty : !store.addresses.isEmpty else { return }
+            var map: [Int: AutofillField] = [:]
+            for (i, f) in fields.enumerated() { if let f, f != .ccCSC, f.isCard == focused.isCard { map[i] = f } }
+            autofillOffer = AutofillOffer(tabId: tabId, host: host, isCard: focused.isCard, fields: map)
+        case "submit":
+            guard !isPrivate else { return }
+            let pairs = zip(fields, raw).compactMap { f, d in f.map { ($0, d["value"] as? String ?? "") } }
+            var c = AutofillCandidate(fields: pairs)
+            let store = AutofillStore.forProfile(profileId)
+            if !AutofillPrefs.isOn(AutofillPrefs.addresses) || c.address.map(store.hasAddress(like:)) == true { c.address = nil }
+            if !AutofillPrefs.isOn(AutofillPrefs.cards) || !secure || c.cardNumber.map(store.hasCard(number:)) == true {
+                c.card = nil
+                c.cardNumber = nil
+            }
+            guard c.address != nil || c.card != nil else { return }
+            let offer = AutofillSaveOffer(tabId: tabId, host: host, candidate: c)
+            if autofillSaveOffer != offer { autofillSaveOffer = offer }
+        default:
+            break
+        }
+    }
+
+    /// Fills the focused form with a saved address or card (`id`); a card unlocks with Touch ID first.
+    @discardableResult
+    func fillAutofill(_ id: UUID, offer: AutofillOffer) async -> Bool {
+        guard let webView = webViews[offer.tabId], PasswordVault.normalize(webView.url?.host ?? "") == offer.host else { return false }
+        let store = AutofillStore.forProfile(profileId)
+        let value: (AutofillField) -> String?
+        if offer.isCard {
+            guard let card = store.cards.first(where: { $0.id == id }),
+                  await PasswordVault.shared.unlock(reason: "fill your card \(card.masked)"),
+                  let number = store.number(for: card) else { return false }
+            value = { card.value(for: $0, number: number) }
+        } else {
+            guard let address = store.addresses.first(where: { $0.id == id }) else { return false }
+            value = address.value(for:)
+        }
+        var values: [String: String] = [:]
+        for (i, f) in offer.fields { if let v = value(f), !v.isEmpty { values[String(i)] = v } }
+        let result = try? await webView.callAsyncJavaScript(
+            "return window.__lunaAutofill ? window.__lunaAutofill(values, host) : false;",
+            arguments: ["values": values, "host": offer.host], in: nil, contentWorld: .defaultClient)
+        return (result as? Bool) == true
+    }
+
     private lazy var linkPreviewHandler: LinkPreviewMessageHandler = {
         let h = LinkPreviewMessageHandler()
         h.wrapper = self
@@ -608,6 +767,12 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         controller.add(passwordHandler, contentWorld: .defaultClient, name: "lunaPasswords")
         controller.addUserScript(WKUserScript(source: WebViewWrapper.passwordScriptSource, injectionTime: .atDocumentEnd,
                                               forMainFrameOnly: true, in: .defaultClient))
+        if AutofillPrefs.anyOn {
+            // Address and card autofill, isolated like passwords. Private windows fill but never save.
+            controller.add(autofillHandler, contentWorld: .defaultClient, name: "lunaAutofill")
+            controller.addUserScript(WKUserScript(source: WebViewWrapper.autofillScriptSource, injectionTime: .atDocumentEnd,
+                                                  forMainFrameOnly: true, in: .defaultClient))
+        }
         if LunaMaxPrefs.isOn(LunaMaxPrefs.linkPreviews) {
             // Link previews run in an isolated content world: page scripts can't see or spoof this channel.
             controller.add(linkPreviewHandler, contentWorld: .defaultClient, name: "lunaLinkPreview")
@@ -1443,6 +1608,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         // The old document's media is gone; frames of the new one report again.
         setAudible(false, frame: nil, in: tabId)
         if passwordFillOffer?.tabId == tabId { passwordFillOffer = nil }
+        if autofillOffer?.tabId == tabId { autofillOffer = nil }
         // Chrome drops an unanswered prompt when the page navigates away.
         tabRuntime.setPendingPermission(nil, for: tabId)?.respond(allow: false, remember: false)
     }
@@ -1838,6 +2004,17 @@ private final class PasswordMessageHandler: NSObject, WKScriptMessageHandler {
         let body = message.body
         let webView = message.webView
         DispatchQueue.main.async { [weak self] in self?.wrapper?.handlePasswordMessage(body, from: webView) }
+    }
+}
+
+private final class AutofillMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var wrapper: WebViewWrapper?
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.frameInfo.isMainFrame else { return }
+        let body = message.body
+        let webView = message.webView
+        DispatchQueue.main.async { [weak self] in self?.wrapper?.handleAutofillMessage(body, from: webView) }
     }
 }
 

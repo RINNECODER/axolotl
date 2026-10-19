@@ -81,6 +81,79 @@ struct PasswordSaveCard: View {
     }
 }
 
+/// Saved addresses or cards for the focused form field (Chrome's autofill suggestions).
+struct AutofillFillCard: View {
+    let offer: WebViewWrapper.AutofillOffer
+    @ObservedObject var store: AutofillStore
+    let onFill: (UUID) -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: offer.isCard ? "creditcard.fill" : "house.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            LunaMenuButton(minWidth: 220, items: {
+                offer.isCard
+                    ? store.cards.map { card in
+                        .button("\(card.title)  \(card.expiry)", icon: "creditcard", id: "card.\(card.id)") { onFill(card.id) }
+                    }
+                    : store.addresses.map { address in
+                        .button(address.summary, icon: "house", id: "address.\(address.id)") { onFill(address.id) }
+                    }
+            }) { isOpen in
+                LunaPopUpLabel(title: offer.isCard ? "Fill a saved card" : "Fill a saved address", isOpen: isOpen)
+            }
+            .fixedSize()
+            PanelIconButton(systemName: "xmark", help: "Not now", action: onDismiss)
+        }
+        .modifier(PasswordCardStyle())
+    }
+}
+
+/// "Save address?" / "Save card?" after a form with new details is submitted.
+struct AutofillSaveCard: View {
+    let offer: WebViewWrapper.AutofillSaveOffer
+    let onSave: () -> Void
+    let onDismiss: () -> Void
+
+    private var title: String {
+        switch (offer.candidate.address, offer.candidate.card) {
+        case (_?, _?): return "Save address and card?"
+        case (nil, let card?): return "Save card \(card.masked)?"
+        default: return "Save address?"
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: offer.candidate.card != nil ? "creditcard.fill" : "house.fill").foregroundStyle(.secondary)
+                Text(title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                Spacer(minLength: 0)
+                PanelIconButton(systemName: "xmark", help: "Not now", action: onDismiss)
+            }
+            if let address = offer.candidate.address {
+                Text(address.summary).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(2)
+            }
+            HStack {
+                Spacer()
+                Button("Not Now", action: onDismiss).controlSize(.small)
+                Button("Save", action: onSave)
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .keyboardShortcut(.defaultAction)
+            }
+            Text(offer.candidate.card != nil ? "The card number stays in your Keychain; the security code is never saved."
+                                              : "Stored encrypted on this Mac for this profile.")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+        }
+        .frame(width: 320)
+        .modifier(PasswordCardStyle())
+    }
+}
+
 private struct PasswordCardStyle: ViewModifier {
     func body(content: Content) -> some View {
         content

@@ -1145,6 +1145,26 @@ struct BrowserShellView: View {
                                     onDismiss: { web.passwordSaveOffer = nil }
                                 )
                                 .id(offer.host + offer.username)
+                            } else if let offer = web.autofillSaveOffer, offer.tabId == currentId {
+                                AutofillSaveCard(
+                                    offer: offer,
+                                    onSave: {
+                                        let store = AutofillStore.forProfile(web.profileId)
+                                        if let address = offer.candidate.address { store.save(address) }
+                                        if let card = offer.candidate.card { store.save(card, number: offer.candidate.cardNumber) }
+                                        web.autofillSaveOffer = nil
+                                    },
+                                    onDismiss: { web.autofillSaveOffer = nil }
+                                )
+                            } else if let offer = web.autofillOffer, offer.tabId == currentId {
+                                AutofillFillCard(
+                                    offer: offer,
+                                    store: AutofillStore.forProfile(web.profileId),
+                                    onFill: { id in
+                                        Task { if await web.fillAutofill(id, offer: offer) { web.autofillOffer = nil } }
+                                    },
+                                    onDismiss: { web.autofillOffer = nil }
+                                )
                             } else if let offer = web.passwordFillOffer, offer.tabId == currentId {
                                 PasswordFillCard(
                                     offer: offer,
@@ -1163,6 +1183,8 @@ struct BrowserShellView: View {
                         .transition(.move(edge: .top).combined(with: .opacity))
                         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: web.passwordFillOffer)
                         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: web.passwordSaveOffer)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: web.autofillOffer)
+                        .animation(.spring(response: 0.3, dampingFraction: 0.85), value: web.autofillSaveOffer)
                         if isFocused && askOnPageVisible {
                             AskOnPageBar(tabId: currentId, web: web, onClose: { askOnPageVisible = false })
                                 .padding(.top, 12)

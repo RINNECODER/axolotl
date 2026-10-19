@@ -234,6 +234,7 @@ final class ProfileManager: ObservableObject {
                 }
                 // Logins first: their synced key depends on the profile list still holding this name.
                 PasswordVault.shared.deleteAll(profile: profileId, includingSynced: deleteSyncedLogins)
+                AutofillStore.deleteAll(profile: profileId)
                 BrowserImporter.forgetSources(lunaProfileId: profileId)
                 UsageStore.forget(profileId)
                 let wasDefault = self.profiles.first { $0.id == profileId }?.isDefault == true
