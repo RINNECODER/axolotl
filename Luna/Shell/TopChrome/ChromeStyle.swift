@@ -127,6 +127,7 @@ struct ChromeTabView: View {
     let showsClose: Bool
     let isHovered: Bool
     var narrow = false
+    var audio = TabAudioState.silent
     let onClose: () -> Void
 
     @Environment(\.colorScheme) private var scheme
@@ -186,6 +187,7 @@ struct ChromeTabView: View {
                 .clipped()
                 .mask(LinearGradient(stops: [.init(color: .black, location: 0), .init(color: .black, location: 0.82),
                                              .init(color: .clear, location: 1)], startPoint: .leading, endPoint: .trailing))
+            TabAudioButton(audio: audio, color: isActive ? palette.title : palette.inactiveTitle)
             if showsClose { closeButton(palette) }
         }
     }

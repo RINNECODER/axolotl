@@ -41,6 +41,7 @@ struct SidebarTabRow: View {
     let tab: Tab
     let faviconURL: URL?
     let isLoading: Bool
+    var audio = TabAudioState.silent
 
     var body: some View {
         HStack(spacing: 8) {
@@ -57,6 +58,9 @@ struct SidebarTabRow: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)
+            // Not clickable here (AppKit owns the row's clicks): mute from the tab menu.
+            TabAudioButton(audio: audio)
+                .padding(.trailing, 22)
         }
         .padding(.leading, 4)
         .frame(maxHeight: .infinity)

@@ -9,6 +9,9 @@ struct SidebarSnapshot: Equatable {
     var activeTabId: UUID?
     var faviconURLs: [UUID: URL]
     var loading: Set<UUID>
+    /// Tabs playing sound, and tabs on a muted site (speaker in the row).
+    var audible: Set<UUID> = []
+    var muted: Set<UUID> = []
     /// Other spaces, for "Move to Space".
     var otherSpaces: [(id: UUID, name: String)]
 
@@ -23,13 +26,15 @@ struct SidebarSnapshot: Equatable {
             activeTabId: ws.activeTabId,
             faviconURLs: favicons,
             loading: Set(web.loadingProgressByTab.keys),
+            audible: web.audibleTabs,
+            muted: web.mutedHosts.isEmpty ? [] : Set(ws.tabs.keys.filter { web.isMuted($0) }),
             otherSpaces: ws.spaces.filter { $0.id != space.id }.map { ($0.id, $0.name) }
         )
     }
 
     static func == (a: SidebarSnapshot, b: SidebarSnapshot) -> Bool {
         a.space == b.space && a.tabs == b.tabs && a.activeTabId == b.activeTabId
-            && a.faviconURLs == b.faviconURLs && a.loading == b.loading
+            && a.faviconURLs == b.faviconURLs && a.loading == b.loading && a.audible == b.audible && a.muted == b.muted
             && a.otherSpaces.map(\.id) == b.otherSpaces.map(\.id) && a.otherSpaces.map(\.name) == b.otherSpaces.map(\.name)
     }
 }
@@ -48,6 +53,8 @@ struct SidebarActions {
     var tearOff: (UUID, CGPoint) -> Void = { _, _ in }
     /// ⋯ → Bookmark This Page (⌘D); nil when the current tab has no web page.
     var bookmarkPage: (() -> Void)? = nil
+    /// Reload, Duplicate and Mute in the tab menu.
+    var web: WebViewWrapper? = nil
 }
 
 /// Native source-list sidebar (NSOutlineView): pinned tabs, a divider, a New
@@ -468,7 +475,9 @@ struct SidebarOutline: NSViewRepresentable {
                     let pinned = snapshot.space.pinned.contains { $0.tabIds.contains(id) }
                     cell.show(AnyView(SidebarTabRow(tab: tab,
                                                     faviconURL: snapshot.faviconURLs[id],
-                                                    isLoading: snapshot.loading.contains(id))),
+                                                    isLoading: snapshot.loading.contains(id),
+                                                    audio: TabAudioState(isAudible: snapshot.audible.contains(id),
+                                                                         isMuted: snapshot.muted.contains(id)))),
                               closeAction: { [actions] in actions.close(id) },
                               closeSymbol: pinned ? "minus" : "xmark")
                 case .folder(let f):
@@ -491,11 +500,11 @@ struct SidebarOutline: NSViewRepresentable {
             let store = actions.store
             switch node {
             case .tab(let id):
-                let pinned = snapshot.space.pinned.contains { $0.tabIds.contains(id) }
-                if pinned {
-                    menu.addItem(MenuAction("Unpin Tab") { store.unpin(id) })
-                } else {
-                    menu.addItem(MenuAction("Pin Tab") { store.pin(id) })
+                // Chrome's items (shared with the tab strip), then the sidebar's own, then the close group.
+                let shared = TabContextMenu.items(for: id, store: store, web: actions.web, close: actions.close)
+                for section in shared.dropLast() {
+                    TabContextMenu.addItems(section, to: menu)
+                    menu.addItem(.separator())
                 }
                 menu.addItem(MenuAction("Add to Favorites") { store.moveToFavorites(id) })
                 if let active = snapshot.activeTabId, active != id, !store.workspace.isFavorite(active) {
@@ -534,7 +543,7 @@ struct SidebarOutline: NSViewRepresentable {
                     })
                 }
                 menu.addItem(.separator())
-                menu.addItem(MenuAction(pinned ? "Reset Tab" : "Close Tab") { [actions] in actions.close(id) })
+                if let close = shared.last { TabContextMenu.addItems(close, to: menu) }
             case .folder(let f):
                 menu.addItem(MenuAction("Rename Folder…") {
                     if let name = TextPrompt.name(title: "Rename Folder", initial: f.name) {

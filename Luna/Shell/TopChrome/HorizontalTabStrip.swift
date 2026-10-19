@@ -94,11 +94,13 @@ struct HorizontalTabStrip: View {
                                         onRemoveFromSplit: split.map { _ in { store.removeFromSplit(id) } },
                                         chromeStyle: chromeStyle,
                                         chromeShowsClose: ChromeMetrics.showsClose(pitch: tabWidth, isActive: ws.activeTabId == id),
-                                        chromeNarrow: !iconOnly && ChromeMetrics.isNarrow(pitch: tabWidth)
+                                        chromeNarrow: !iconOnly && ChromeMetrics.isNarrow(pitch: tabWidth),
+                                        audio: TabAudioState(web: web, tabId: id),
+                                        menuItems: { TabContextMenu.items(for: id, store: store, web: web, close: onClose) }
                                     )
                                     .frame(width: tabWidth, height: height)
                                     .overlay(TabPressView(
-                                        trailingPassthrough: iconOnly ? 0 : 30,
+                                        trailingPassthrough: iconOnly ? 0 : (TabAudioState(web: web, tabId: id).isShown ? 56 : 30),
                                         onClick: { onActivate(id) },
                                         onDragChanged: { dragChanged(id, $0) },
                                         onDragEnded: { dragEnded(id, $0) }
@@ -431,6 +433,9 @@ private struct StripTab: View {
     var chromeStyle = false
     var chromeShowsClose = true
     var chromeNarrow = false
+    var audio = TabAudioState.silent
+    /// The shared tab menu (Chrome's items), after the split items.
+    var menuItems: () -> [[TabContextMenu.Item]] = { [] }
 
     @State private var isHovered = false
 
@@ -448,9 +453,7 @@ private struct StripTab: View {
                 if let onRemoveFromSplit {
                     entries.append(.button("Remove from Split View", icon: "rectangle", action: onRemoveFromSplit))
                 }
-                if !entries.isEmpty { entries.append(.divider("t1")) }
-                entries.append(.button("Close Tab", icon: "xmark", shortcut: "⌘W", action: onClose))
-                return entries
+                return TabContextMenu.lunaEntries(menuItems(), leading: entries)
             }
     }
 
@@ -459,7 +462,7 @@ private struct StripTab: View {
         if chromeStyle {
             ChromeTabView(tab: tab, faviconURL: faviconURL, isActive: isActive, isLoading: isLoading, iconOnly: iconOnly,
                           showsSeparator: showsSeparator && !isHovered, showsClose: chromeShowsClose,
-                          isHovered: isHovered || isVisible, narrow: chromeNarrow, onClose: onClose)
+                          isHovered: isHovered || isVisible, narrow: chromeNarrow, audio: audio, onClose: onClose)
                 .overlay { splitTargetMark }
         } else {
             lunaTab
@@ -494,6 +497,7 @@ private struct StripTab: View {
                     .truncationMode(.tail)
                     .foregroundStyle(isActive ? .primary : .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                TabAudioButton(audio: audio)
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .semibold))
