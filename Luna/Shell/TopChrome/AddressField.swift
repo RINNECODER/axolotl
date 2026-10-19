@@ -28,6 +28,7 @@ struct AddressField: View {
     @Environment(\.colorScheme) private var scheme
 
     @AppStorage(ChromePrefs.minimalURL) private var minimalURL = true
+    @AppStorage(SearchEngine.defaultsKey) private var searchEngineRaw = SearchEngine.google.rawValue
     @AppStorage(ChromePrefs.addressBarProgress) private var showProgress = true
 
     private var isWebPage: Bool {
@@ -63,7 +64,7 @@ struct AddressField: View {
                     .frame(width: 14)
             }
             ZStack(alignment: centered && !isFocused ? .center : .leading) {
-                TextField(chromeStyle ? "Search Google or type a URL" : "Search or enter address", text: $text)
+                TextField("Search \(SearchEngine(rawValue: searchEngineRaw)?.title ?? SearchEngine.google.title) or type a URL", text: $text)
                     .textFieldStyle(.plain)
                     .font(.system(size: fontSize))
                     .focused(focused)

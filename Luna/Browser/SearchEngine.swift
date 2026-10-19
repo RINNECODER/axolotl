@@ -28,6 +28,18 @@ enum SearchEngine: String, CaseIterable, Identifiable {
         }
     }
 
+    /// The engine's OpenSearch suggest endpoint (["query", ["phrase", …]]), or nil if it has none.
+    func suggestURL(for query: String) -> URL? {
+        guard let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
+        switch self {
+        case .google: return URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(q)")
+        case .duckduckgo: return URL(string: "https://ac.duckduckgo.com/ac/?q=\(q)&type=list")
+        case .bing: return URL(string: "https://www.bing.com/osjson.aspx?query=\(q)")
+        case .brave: return URL(string: "https://search.brave.com/api/suggest?q=\(q)")
+        case .ecosia: return URL(string: "https://ac.ecosia.org/autocomplete?q=\(q)&type=list")
+        }
+    }
+
     static var current: SearchEngine {
         UserDefaults.standard.string(forKey: defaultsKey).flatMap(SearchEngine.init(rawValue:)) ?? .google
     }

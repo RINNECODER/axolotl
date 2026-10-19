@@ -64,10 +64,11 @@ struct BrowserShellView: View {
     @State private var isFirstLoad: Bool = true
     @FocusState private var addressBarFocused: Bool
     @State private var searchSuggestions: [String] = []
-    @State private var historySuggestions: [(display: String, url: URL)] = []
+    @State private var urlSuggestions: [AddressSuggestion] = []
     @StateObject private var addressBarKeyState = AddressBarKeyState()
     @State private var suggestionDebounceTask: DispatchWorkItem?
-    @State private var historyDebounceTask: DispatchWorkItem?
+    /// Set while arrow keys write the selected suggestion into the field, so that edit doesn't refetch.
+    @State private var suppressSuggestionFetch = false
     @State private var showGoogleAPIKeyHelpSheet: Bool = false
     @State private var showBrowserFindBar: Bool = false
     @State private var browserFindQuery: String = ""
@@ -466,6 +467,12 @@ struct BrowserShellView: View {
         .onChange(of: addressBarFocused) { _, focused in
             // ⌘L-revealed bar tucks away once editing ends, unless the pointer is on it.
             if !focused && !topBarHovering { topBarPeeking = false }
+            if !focused {
+                suggestionDebounceTask?.cancel()
+                searchSuggestions = []
+                urlSuggestions = []
+                addressBarKeyState.visible = false
+            }
         }
         .onChange(of: hostWindow) { _, window in
             applyTrafficLights()
@@ -516,14 +523,19 @@ struct BrowserShellView: View {
         }
         .onChange(of: addressBarKeyState.selectedIndex) { _, newValue in
             guard addressBarKeyState.visible else { return }
-            let h = historySuggestions.count
+            let h = urlSuggestions.count
             let total = h + searchSuggestions.count
             guard newValue >= 0, newValue < total else { return }
-            if newValue < h {
-                addressBarText = historySuggestions[newValue].url.absoluteString
-            } else {
-                addressBarText = searchSuggestions[newValue - h]
+            let text = newValue < h ? urlSuggestions[newValue].url.absoluteString : searchSuggestions[newValue - h]
+            if text != addressBarText {
+                suppressSuggestionFetch = true
+                addressBarText = text
             }
+        }
+        .onChange(of: addressBarText) { _, newValue in
+            if suppressSuggestionFetch { suppressSuggestionFetch = false; return }
+            guard addressBarFocused else { return }
+            scheduleSuggestions(for: newValue)
         }
         .onChange(of: addressBarKeyState.submitSelection) { _, new in
             if new {
@@ -531,15 +543,15 @@ struct BrowserShellView: View {
                 addressBarKeyState.submitSelection = false
             }
         }
-        .onChange(of: historySuggestions.count) { _, _ in
+        .onChange(of: urlSuggestions.count) { _, _ in
             if addressBarKeyState.visible {
-                addressBarKeyState.totalCount = historySuggestions.count + searchSuggestions.count
+                addressBarKeyState.totalCount = urlSuggestions.count + searchSuggestions.count
                 addressBarKeyState.selectedIndex = min(addressBarKeyState.selectedIndex, max(0, addressBarKeyState.totalCount - 1))
             }
         }
         .onChange(of: searchSuggestions.count) { _, _ in
             if addressBarKeyState.visible {
-                addressBarKeyState.totalCount = historySuggestions.count + searchSuggestions.count
+                addressBarKeyState.totalCount = urlSuggestions.count + searchSuggestions.count
                 addressBarKeyState.selectedIndex = min(addressBarKeyState.selectedIndex, max(0, addressBarKeyState.totalCount - 1))
             }
         }
@@ -1010,26 +1022,21 @@ struct BrowserShellView: View {
     /// Address suggestions, placed under whichever address field is on screen.
     @ViewBuilder
     private func suggestionsOverlay(anchor: Anchor<CGRect>?) -> some View {
-        let hasSuggestions = !historySuggestions.isEmpty || !searchSuggestions.isEmpty
+        let hasSuggestions = !urlSuggestions.isEmpty || !searchSuggestions.isEmpty
         if let anchor, addressBarFocused,
            !addressBarText.trimmingCharacters(in: .whitespaces).isEmpty,
            hasSuggestions {
             GeometryReader { proxy in
                 let field = proxy[anchor]
                 AddressBarSuggestionsList(
-                    historyItems: historySuggestions,
+                    urlItems: urlSuggestions,
                     searchPhrases: Array(searchSuggestions.prefix(5)),
                     selectedIndex: addressBarKeyState.selectedIndex,
-                    onSelectHistory: { url in
-                        searchSuggestions = []
-                        historySuggestions = []
-                        addressBarKeyState.visible = false
-                        navigateToURL(url)
-                    },
+                    onSelectURL: { openSuggestion($0) },
                     onSelectSearch: { phrase in
                         addressBarText = phrase
                         searchSuggestions = []
-                        historySuggestions = []
+                        urlSuggestions = []
                         addressBarKeyState.visible = false
                         navigateFromAddressBar()
                     }
@@ -1041,7 +1048,7 @@ struct BrowserShellView: View {
                 .offset(x: field.minX, y: field.maxY + 6)
                 .onAppear {
                     addressBarKeyState.visible = true
-                    addressBarKeyState.totalCount = historySuggestions.count + searchSuggestions.count
+                    addressBarKeyState.totalCount = urlSuggestions.count + searchSuggestions.count
                     addressBarKeyState.selectedIndex = 0
                 }
                 .onDisappear { addressBarKeyState.visible = false }
@@ -1099,7 +1106,7 @@ struct BrowserShellView: View {
         // Reset address bar
         addressBarText = ""
         searchSuggestions = []
-        historySuggestions = []
+        urlSuggestions = []
         tabsWithPanelOpen = []
         syncAddressBarFromCurrentTab()
     }
@@ -1190,126 +1197,117 @@ struct BrowserShellView: View {
         }
     }
 
-    private func fetchHistorySuggestions(for query: String) {
-        historyDebounceTask?.cancel()
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count >= 2 else {
-            historySuggestions = []
-            return
-        }
-        let task = DispatchWorkItem { [trimmed] in
-            let results = historyManager.urlAutocompleteSuggestions(prefix: trimmed, limit: 5)
-            self.historySuggestions = results
-        }
-        historyDebounceTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: task)
-    }
-
-    private func fetchSearchSuggestions(for query: String) {
+    /// Address-bar dropdown: refreshed 120 ms after the last keystroke; a newer keystroke cancels it.
+    private func scheduleSuggestions(for query: String) {
         suggestionDebounceTask?.cancel()
-        guard searchSuggestionsEnabled else {
-            searchSuggestions = []
-            return
-        }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count >= 2 else {
+        guard trimmed.count >= 2 else {
+            urlSuggestions = []
             searchSuggestions = []
             return
         }
-        let task = DispatchWorkItem { [trimmed] in
-            guard let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                  let url = URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(encoded)") else { return }
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 3
-            URLSession.shared.dataTask(with: request) { data, _, _ in
-                guard let data = data,
-                      var raw = String(data: data, encoding: .utf8) else {
-                    DispatchQueue.main.async { self.searchSuggestions = [] }
-                    return
-                }
-                if raw.hasPrefix("window."), let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]") {
-                    raw = String(raw[start...end])
-                }
-                guard let jsonData = raw.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: jsonData) as? [Any],
-                      json.count >= 2,
-                      let rawSuggestions = json[1] as? [Any] else {
-                    DispatchQueue.main.async { self.searchSuggestions = [] }
-                    return
-                }
-                let phrases = rawSuggestions.compactMap { item -> String? in
-                    if let s = item as? String { return s }
-                    if let arr = item as? [Any], let first = arr.first as? String { return first }
-                    return nil
-                }
-                DispatchQueue.main.async {
-                    // Drop stale responses: only apply if the user is still typing this query.
-                    guard self.addressBarText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
-                    self.searchSuggestions = Array(phrases.prefix(5))
-                }
-            }.resume()
+        let task = DispatchWorkItem {
+            urlSuggestions = urlSuggestionRows(for: trimmed)
+            fetchSearchSuggestions(for: trimmed)
         }
         suggestionDebounceTask = task
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: task)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: task)
     }
 
-    private func resolveToURL(_ input: String) -> URL? {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        
-        // Handle luma:// scheme
-        if trimmed.lowercased().hasPrefix("luma://") {
-            return URL(string: trimmed)
+    /// Bookmarks, history and open tabs matching the query (open tabs offer "Switch to tab").
+    private func urlSuggestionRows(for query: String) -> [AddressSuggestion] {
+        let ws = session.workspace
+        let openTabs = ws.orderedTabIds.compactMap { id -> (id: UUID, title: String, url: URL)? in
+            guard id != tabManager.currentTab, let tab = ws.tab(id), let url = tab.url, isSafeBrowserURL(url) else { return nil }
+            return (id, tab.customTitle ?? tab.title, url)
         }
-        // Handle file:// so we don't turn it into https://file:///...
-        if trimmed.lowercased().hasPrefix("file://") {
-            return URL(string: trimmed)
-        }
-        if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
-            return URL(string: trimmed)
-        }
-        if !trimmed.contains(" "), trimmed.contains(".") {
-            return URL(string: "https://" + trimmed)
-        }
-        return SearchEngine.current.searchURL(for: trimmed)
+        return AddressSuggestions.merge(query: query,
+                                        bookmarks: bookmarks.bookmarks,
+                                        history: historyManager.urlAutocompleteSuggestions(prefix: query, limit: 5),
+                                        openTabs: openTabs)
     }
+
+    /// Opens a URL row: switches to its tab when it's already open, otherwise navigates.
+    private func openSuggestion(_ suggestion: AddressSuggestion) {
+        searchSuggestions = []
+        urlSuggestions = []
+        addressBarKeyState.visible = false
+        if case .openTab(let id) = suggestion.kind, session.workspace.tab(id) != nil {
+            addressBarFocused = false
+            switchToTab(id)
+        } else {
+            navigateToURL(suggestion.url)
+        }
+    }
+
+    /// Search phrases from the selected engine's suggest endpoint (opt-in, Settings → Search).
+    private func fetchSearchSuggestions(for trimmed: String) {
+        guard searchSuggestionsEnabled, let url = SearchEngine.current.suggestURL(for: trimmed) else {
+            searchSuggestions = []
+            return
+        }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 3
+        URLSession.shared.dataTask(with: request) { data, _, _ in
+            guard let data = data,
+                  var raw = String(data: data, encoding: .utf8) else {
+                DispatchQueue.main.async { self.searchSuggestions = [] }
+                return
+            }
+            if raw.hasPrefix("window."), let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]") {
+                raw = String(raw[start...end])
+            }
+            guard let jsonData = raw.data(using: .utf8),
+                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [Any],
+                  json.count >= 2,
+                  let rawSuggestions = json[1] as? [Any] else {
+                DispatchQueue.main.async { self.searchSuggestions = [] }
+                return
+            }
+            let phrases = rawSuggestions.compactMap { item -> String? in
+                if let s = item as? String { return s }
+                if let arr = item as? [Any], let first = arr.first as? String { return first }
+                return nil
+            }
+            DispatchQueue.main.async {
+                // Drop stale responses: only apply if the user is still typing this query.
+                guard self.addressBarText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
+                self.searchSuggestions = Array(phrases.prefix(5))
+            }
+        }.resume()
+    }
+
+    private func resolveToURL(_ input: String) -> URL? { AddressInput.url(for: input) }
 
     /// Submit address bar: if first history suggestion matches typed prefix, go there; else resolve as URL or search.
     private func applyAddressBarSubmit() {
         Usage.record(.addressBar)
         let trimmed = addressBarText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if !trimmed.isEmpty,
-           let first = historySuggestions.first,
+           let first = urlSuggestions.first,
            first.display.lowercased().hasPrefix(trimmed)
             || first.url.absoluteString.lowercased().contains(trimmed)
             || (first.url.host?.lowercased().contains(trimmed) ?? false) {
-            searchSuggestions = []
-            historySuggestions = []
-            addressBarKeyState.visible = false
-            navigateToURL(first.url)
+            openSuggestion(first)
             return
         }
         searchSuggestions = []
-        historySuggestions = []
+        urlSuggestions = []
         addressBarKeyState.visible = false
         navigateFromAddressBar()
     }
 
     /// Apply the currently selected suggestion (keyboard Enter): navigate to URL or run search.
     private func applySelectionAtIndex(_ index: Int) {
-        let h = historySuggestions.count
+        let h = urlSuggestions.count
         let total = h + searchSuggestions.count
         guard index >= 0, index < total else { return }
         if index < h {
-            let url = historySuggestions[index].url
-            searchSuggestions = []
-            historySuggestions = []
-            addressBarKeyState.visible = false
-            navigateToURL(url)
+            openSuggestion(urlSuggestions[index])
         } else {
             let phrase = searchSuggestions[index - h]
             searchSuggestions = []
-            historySuggestions = []
+            urlSuggestions = []
             addressBarKeyState.visible = false
             addressBarText = phrase
             navigateFromAddressBar()
@@ -1671,24 +1669,32 @@ private struct GoogleAPIKeyHelpView: View {
 // MARK: - Address bar suggestions (history first, then search)
 
 private struct AddressBarSuggestionsList: View {
-    let historyItems: [(display: String, url: URL)]
+    let urlItems: [AddressSuggestion]
     let searchPhrases: [String]
     var selectedIndex: Int = 0
-    let onSelectHistory: (URL) -> Void
+    let onSelectURL: (AddressSuggestion) -> Void
     let onSelectSearch: (String) -> Void
     @State private var hoveredSection: String? = nil  // "h-0", "s-0", etc.
 
     private func isSelected(historyIndex: Int) -> Bool { selectedIndex == historyIndex }
-    private func isSelected(searchIndex: Int) -> Bool { selectedIndex == historyItems.count + searchIndex }
+
+    private static func icon(_ kind: AddressSuggestion.Kind) -> String {
+        switch kind {
+        case .history: return "clock.arrow.circlepath"
+        case .bookmark: return "star"
+        case .openTab: return "square.on.square"
+        }
+    }
+    private func isSelected(searchIndex: Int) -> Bool { selectedIndex == urlItems.count + searchIndex }
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(Array(historyItems.enumerated()), id: \.offset) { index, item in
+            ForEach(Array(urlItems.enumerated()), id: \.offset) { index, item in
                 let id = "h-\(index)"
                 let selected = isSelected(historyIndex: index)
-                Button(action: { onSelectHistory(item.url) }) {
+                Button(action: { onSelectURL(item) }) {
                     HStack {
-                        Image(systemName: "clock.arrow.circlepath")
+                        Image(systemName: Self.icon(item.kind))
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .frame(width: 20)
@@ -1705,6 +1711,11 @@ private struct AddressBarSuggestionsList: View {
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        if case .openTab = item.kind {
+                            Text("Switch to tab")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)

@@ -742,8 +742,7 @@ struct SmartSearchView: View {
         }
 
         let work = DispatchWorkItem { [trimmed] in
-            guard let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-                  let url = URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(encoded)") else { return }
+            guard let url = SearchEngine.current.suggestURL(for: trimmed) else { return }
             var request = URLRequest(url: url)
             request.timeoutInterval = 3
             URLSession.shared.dataTask(with: request) { data, _, _ in

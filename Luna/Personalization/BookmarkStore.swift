@@ -57,6 +57,8 @@ final class BookmarkStore: ObservableObject {
         return bookmark.id
     }
 
+    func bookmark(for url: URL) -> Bookmark? { bookmarks.first { Self.same($0.url, url) } }
+
     func remove(_ id: UUID) {
         bookmarks.removeAll { $0.id == id }
         save()
@@ -76,7 +78,8 @@ final class BookmarkStore: ObservableObject {
         return name.prefix(1).uppercased() + name.dropFirst()
     }
 
-    private static func same(_ a: URL, _ b: URL) -> Bool {
+    /// Same page, ignoring a trailing slash.
+    static func same(_ a: URL, _ b: URL) -> Bool {
         a.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ==
             b.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
