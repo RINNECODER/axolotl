@@ -161,7 +161,7 @@ struct ConnectAgentsSection: View {
 
 
 /// Popover for the MCP port: free ports near the default, or any port with the stepper.
-private struct MCPPortChooser: View {
+struct MCPPortChooser: View {
     let current: Int
     let done: (Int?) -> Void
     @State private var draft: Int
@@ -177,26 +177,34 @@ private struct MCPPortChooser: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Port").font(.headline)
-            LunaPicker("Free ports", selection: $draft,
-                       options: (suggestions.contains(draft) ? suggestions : [draft] + suggestions)
-                           .map { .init($0, $0 == current ? "\($0) (current)" : String($0)) })
-            Stepper(value: $draft, in: LocalPort.range) {
-                Text("Port \(String(draft))").monospacedDigit()
+            Text("Port").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            SettingsCard {
+                SettingsRow("Free ports") {
+                    SettingsDropdown(title: "Free ports", selection: $draft,
+                                     options: (suggestions.contains(draft) ? suggestions : [draft] + suggestions)
+                                         .map { .init($0, $0 == current ? "\($0) (current)" : String($0)) },
+                                     minWidth: 110)
+                }
+                SettingsRow("Port \(String(draft))") {
+                    Stepper("Port \(String(draft))", value: $draft, in: LocalPort.range).labelsHidden()
+                }
             }
             if !draftIsFree {
-                Text("Another app is using this port.").font(.callout).foregroundStyle(.red)
+                Text("Another app is using this port.").font(.system(size: 12)).foregroundStyle(.red)
             }
             HStack {
                 Spacer()
                 Button("Cancel") { done(nil) }.keyboardShortcut(.cancelAction)
                 Button("Use Port") { done(draft) }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.settingsProminent)
                     .disabled(!draftIsFree)
             }
         }
         .padding(16)
-        .frame(width: 300)
+        .frame(width: 340)
+        .background(SettingsStyle.page)
+        .settingsControlStyles()
         .onAppear {
             suggestions = ([current] + LocalPort.freePorts(from: LunaMCPBridge.defaultPort, count: 6))
                 .reduce(into: [Int]()) { if !$0.contains($1) { $0.append($1) } }

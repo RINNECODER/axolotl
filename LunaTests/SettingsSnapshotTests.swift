@@ -22,11 +22,22 @@ final class SettingsSnapshotTests: XCTestCase {
                            to: "\(dir)/\(pane.rawValue)-\(name).png")
             }
             try render(SettingsView(initialPane: .general, query: "tab"), appearance: appearance, to: "\(dir)/search-\(name).png")
+            // Sheets and popovers opened from Settings, each at its own size.
+            try render(UsageDataSheet(usage: UsageStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("shots-usage.json"))), appearance: appearance, size: NSSize(width: 460, height: 560), to: "\(dir)/sheet-usage-\(name).png")
+            try render(ClearHistorySheet(history: ProfileStoreRegistry.stores(for: Usage.profileId()).history) { _ in },
+                       appearance: appearance, size: NSSize(width: 420, height: 260), to: "\(dir)/sheet-clear-\(name).png")
+            try render(MCPPortChooser(current: 8765) { _ in }, appearance: appearance, size: NSSize(width: 340, height: 260), to: "\(dir)/popover-port-\(name).png")
+            try render(BrowserImportView(onDone: {}), appearance: appearance, size: NSSize(width: 640, height: 600), to: "\(dir)/sheet-import-\(name).png")
+            // Left nav with Liquid Glass on.
+            let glass = LiquidGlass.defaultsKey
+            let previous = UserDefaults.standard.object(forKey: glass)
+            UserDefaults.standard.set(true, forKey: glass)
+            defer { if let previous { UserDefaults.standard.set(previous, forKey: glass) } else { UserDefaults.standard.removeObject(forKey: glass) } }
+            try render(SettingsView(initialPane: .general), appearance: appearance, to: "\(dir)/nav-glass-\(name).png")
         }
     }
 
-    private func render<V: View>(_ view: V, appearance: NSAppearance.Name, to path: String) throws {
-        let size = NSSize(width: 1100, height: 760)
+    private func render<V: View>(_ view: V, appearance: NSAppearance.Name, size: NSSize = NSSize(width: 1100, height: 760), to path: String) throws {
         let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))
         host.frame = NSRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)

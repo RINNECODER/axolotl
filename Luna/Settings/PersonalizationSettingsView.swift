@@ -71,7 +71,7 @@ struct PersonalizationSettingsView: View {
 }
 
 /// "View Data": the record in plain words — features, shortcuts, active hours, top sites.
-private struct UsageDataSheet: View {
+struct UsageDataSheet: View {
     @ObservedObject var usage: UsageStore
     @Environment(\.dismiss) private var dismiss
     @State private var days = 30
@@ -83,58 +83,55 @@ private struct UsageDataSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Usage record").font(.headline)
+                Text("Usage record").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
                 Spacer()
-                LunaPicker("Period", selection: $days, options: [
+                SettingsDropdown(title: "Period", selection: $days, options: [
                     .init(7, "7 days"), .init(30, "30 days"), .init(90, "90 days"), .init(365, "1 year"),
-                ])
-                .labelsHidden()
-                .fixedSize()
+                ], minWidth: 110)
             }
-            .padding(16)
-            Divider()
-            Form {
-                Section("Features") {
-                    let features = usage.featureTotals(days: days)
-                    if features.isEmpty { Text("None recorded").foregroundStyle(.secondary) }
-                    ForEach(features.prefix(12), id: \.feature) { item in
-                        LabeledContent(item.feature.title) { Text("\(item.count)").monospacedDigit() }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    SettingsCard("Features") {
+                        let features = usage.featureTotals(days: days)
+                        if features.isEmpty { SettingsNoteRow("None recorded") }
+                        ForEach(features.prefix(12), id: \.feature) { item in
+                            SettingsRow(item.feature.title) { Text("\(item.count)").monospacedDigit().foregroundStyle(.secondary) }
+                        }
                     }
-                }
-                let shortcuts = usage.shortcutTotals(days: days)
-                if !shortcuts.isEmpty {
-                    Section("Keyboard shortcuts") {
-                        ForEach(shortcuts.prefix(8), id: \.shortcut) { item in
-                            LabeledContent(item.shortcut) { Text("\(item.count)").monospacedDigit() }
+                    let shortcuts = usage.shortcutTotals(days: days)
+                    if !shortcuts.isEmpty {
+                        SettingsCard("Keyboard shortcuts") {
+                            ForEach(shortcuts.prefix(8), id: \.shortcut) { item in
+                                SettingsRow(item.shortcut) { Text("\(item.count)").monospacedDigit().foregroundStyle(.secondary) }
+                            }
+                        }
+                    }
+                    SettingsCard("Active hours") {
+                        SettingsContentRow {
+                            HourBars(hours: usage.activeHours(days: days)).frame(height: 54)
+                        }
+                    }
+                    SettingsCard("Top sites", footer: "From your browsing history; agents see domains, not full addresses.") {
+                        if sites.isEmpty { SettingsNoteRow("No visits") }
+                        ForEach(sites, id: \.domain) { site in
+                            SettingsRow(site.domain) { Text("\(site.visits) visits").monospacedDigit().foregroundStyle(.secondary) }
                         }
                     }
                 }
-                Section("Active hours") {
-                    HourBars(hours: usage.activeHours(days: days))
-                        .frame(height: 54)
-                        .padding(.vertical, 4)
-                }
-                Section {
-                    if sites.isEmpty { Text("No visits").foregroundStyle(.secondary) }
-                    ForEach(sites, id: \.domain) { site in
-                        LabeledContent(site.domain) { Text("\(site.visits) visits").monospacedDigit() }
-                    }
-                } header: {
-                    Text("Top sites")
-                } footer: {
-                    Text("From your browsing history; agents see domains, not full addresses.")
-                        .foregroundStyle(.secondary)
-                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
             }
-            .formStyle(.grouped)
-            Divider()
             HStack {
                 Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
+                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction).buttonStyle(.settingsProminent)
             }
             .padding(12)
         }
         .frame(width: 460, height: 560)
+        .background(SettingsStyle.page)
+        .settingsControlStyles()
     }
 }
 
@@ -165,7 +162,7 @@ private struct HourBars: View {
 }
 
 /// Chrome-style "Clear browsing data": pick a time range, confirm, clear history from then to now.
-private struct ClearHistorySheet: View {
+struct ClearHistorySheet: View {
     let history: HistoryManager
     let onDone: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -194,11 +191,13 @@ private struct ClearHistorySheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Clear browsing history").font(.headline)
+            Text("Clear browsing history").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
             Text("Removes the pages you visited in this time range from History on this Mac. Cookies, passwords and bookmarks are kept.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            LunaPicker("Time range", selection: $range, options: TimeRange.allCases.map { .init($0, $0.label) })
+            SettingsCard {
+                SettingsMenuRow("Time range", selection: $range, options: TimeRange.allCases.map { .init($0, $0.label) })
+            }
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
@@ -211,6 +210,8 @@ private struct ClearHistorySheet: View {
             }
         }
         .padding(20)
-        .frame(width: 400)
+        .frame(width: 420)
+        .background(SettingsStyle.page)
+        .settingsControlStyles()
     }
 }

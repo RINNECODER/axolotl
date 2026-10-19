@@ -177,18 +177,18 @@ struct BrowserImportView: View {
                         .padding(24)
                 }
                 .background(SettingsStyle.page)
-                .settingsControlStyles()
-                Divider()
                 HStack {
                     Spacer()
-                    Button("Done", action: onDone).keyboardShortcut(.defaultAction)
+                    Button("Done", action: onDone).keyboardShortcut(.defaultAction).buttonStyle(.settingsProminent)
                 }
                 .padding(12)
+                .background(SettingsStyle.page)
             } else {
                 // Embedded in a settings page, which scrolls.
                 VStack(alignment: .leading, spacing: 22) { cards }
             }
         }
+        .settingsControlStyles()
         .onAppear {
             model.detect()
             #if DEBUG
