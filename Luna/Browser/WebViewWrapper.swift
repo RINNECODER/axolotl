@@ -750,6 +750,18 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         webViews[tabId]?.reload()
     }
 
+    /// Hard reload (⌘⇧R): skips the cache.
+    func reloadFromOrigin(in tabId: UUID) {
+        webViews[tabId]?.reloadFromOrigin()
+    }
+
+    /// Whether the page's focused element takes typing (inputs, text areas, contenteditable).
+    func isEditingText(in tabId: UUID, completion: @escaping (Bool) -> Void) {
+        guard let wv = webViews[tabId] else { return completion(false) }
+        let js = "(function(e){ return !!e && (e.isContentEditable || /^(INPUT|TEXTAREA|SELECT|IFRAME)$/.test(e.tagName)); })(document.activeElement)"
+        wv.evaluateJavaScript(js) { result, _ in completion(result as? Bool ?? false) }
+    }
+
     // MARK: - Find in page (Cmd+F)
 
     /// JSON-encodes a string for safe embedding in JavaScript source (handles quotes, backslashes, newlines).

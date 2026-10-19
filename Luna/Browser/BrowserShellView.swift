@@ -324,98 +324,7 @@ struct BrowserShellView: View {
                 // Only handle shortcuts for this browser window. Prevents double-handling when
                 // multiple windows are open, and keeps sheets/settings windows working normally.
                 guard let host = hostWindow, event.window === host else { return event }
-                let key = event.charactersIgnoringModifiers ?? ""
-                if event.modifierFlags.contains(.command) {
-                    Self.recordShortcut(key, event.modifierFlags)
-                    if key == "e" {
-                        DispatchQueue.main.async { toggleAIPanel() }
-                        return nil
-                    }
-                    if key == "s", usesSidebar, !event.modifierFlags.contains(.shift) {
-                        DispatchQueue.main.async { toggleSidebar() }
-                        return nil
-                    }
-                    if key == "t" {
-                        DispatchQueue.main.async { newTab() }
-                        return nil
-                    }
-                    if key == "w" {
-                        DispatchQueue.main.async { closeCurrentTab() }
-                        return nil
-                    }
-                    if key == "y" {
-                        DispatchQueue.main.async { navigateToHistory() }
-                        return nil
-                    }
-                    if key == "l" {
-                        DispatchQueue.main.async {
-                            if addressBarPeeks {
-                                sidebarPeeking = false
-                                topBarPeeking = true
-                            }
-                            addressBarFocused = true
-                        }
-                        return nil
-                    }
-                    // Cmd+R: reload current tab
-                    if key == "r" {
-                        DispatchQueue.main.async {
-                            if let id = tabManager.currentTab { web.reload(in: id) }
-                        }
-                        return nil
-                    }
-                    // Cmd+P: print current page
-                    if key == "p" {
-                        DispatchQueue.main.async {
-                            if let id = tabManager.currentTab { web.printPage(in: id) }
-                        }
-                        return nil
-                    }
-                    // Cmd+1...9: switch to tab by index
-                    if key >= "1", key <= "9", let idx = Int(key), idx >= 1, idx <= 9 {
-                        DispatchQueue.main.async {
-                            if idx <= tabManager.tabCount() {
-                                tabManager.switchToTab(index: idx - 1)
-                            }
-                        }
-                        return nil
-                    }
-                    // Cmd+= / Cmd+Plus: zoom in
-                    if key == "=" || key == "+" {
-                        DispatchQueue.main.async { web.zoomIn(tabManager.currentTab) }
-                        return nil
-                    }
-                    // Cmd+-: zoom out
-                    if key == "-" {
-                        DispatchQueue.main.async { web.zoomOut(tabManager.currentTab) }
-                        return nil
-                    }
-                    // Cmd+0: zoom reset to 100%
-                    if key == "0" {
-                        DispatchQueue.main.async { web.zoomReset(tabManager.currentTab) }
-                        return nil
-                    }
-                    // Cmd+F: find in page (web tabs only; start page / AI chat handle it themselves)
-                    if key == "f" {
-                        guard !isCurrentTabStartOrAIChat else { return event }
-                        // Luna Max: holding ⌘F (key repeat) or ⌘⇧F opens Ask on Page.
-                        if LunaMaxPrefs.isOn(LunaMaxPrefs.askOnPage),
-                           event.isARepeat || event.modifierFlags.contains(.shift) {
-                            DispatchQueue.main.async { openAskOnPage() }
-                            return nil
-                        }
-                        DispatchQueue.main.async {
-                            showBrowserFindBar.toggle()
-                            if !showBrowserFindBar {
-                                browserFindQuery = ""
-                                if let id = tabManager.currentTab {
-                                    web.clearFind(in: id)
-                                }
-                            }
-                        }
-                        return nil
-                    }
-                }
+                if let handled = handleShortcut(event, in: host) { return handled ? nil : event }
                 // Dev mode's raw terminal owns plain keys while focused: Esc, arrows and Return go to
                 // the CLI (a stale address-bar focus flag used to swallow Esc there).
                 if DevTerminalView.hasKeyboardFocus(in: host) { return event }
@@ -480,6 +389,7 @@ struct BrowserShellView: View {
             if let window {
                 // Agent tools (MCP bridge) drive the front-most browser window.
                 LunaBrowserHosts.shared.register(window: window) { sessionStore.activeSession }
+                BrowserCommandTargets.shared.register(window: window, actions: commandActions)
                 TabDropTargets.shared.register(.init(
                     window: window,
                     profileId: { sessionStore.activeProfileId },
@@ -572,19 +482,157 @@ struct BrowserShellView: View {
         }
     }
 
+    // MARK: - Shortcuts
+
+    /// Window shortcuts the menu bar can't own (focus-, repeat- or tab-dependent; menu items own
+    /// the rest, see BrowserCommands), matched on the exact modifier set so ⌃⌘F still reaches
+    /// full screen and ⌘⇧T reaches Reopen Closed Tab. Returns nil for other keys, true to
+    /// swallow the key, false to let it through.
+    private func handleShortcut(_ event: NSEvent, in host: NSWindow) -> Bool? {
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock, .numericPad, .function])
+        let key = (event.charactersIgnoringModifiers ?? "").lowercased()
+        let code = event.keyCode
+        let isLeft = code == 123, isRight = code == 124
+
+        // Tab cycling: ⌃Tab / ⌃⇧Tab, ⌘⌥← / ⌘⌥→, ⌘⇧[ / ⌘⇧].
+        if code == 48, mods == .control || mods == [.control, .shift] {
+            DispatchQueue.main.async { cycleTab(by: mods.contains(.shift) ? -1 : 1) }
+            return true
+        }
+        if mods == [.command, .option], isLeft || isRight {
+            DispatchQueue.main.async { cycleTab(by: isLeft ? -1 : 1) }
+            return true
+        }
+        if mods == [.command, .shift], code == 33 || code == 30 {
+            DispatchQueue.main.async { cycleTab(by: code == 33 ? -1 : 1) }
+            return true
+        }
+        guard mods == .command || mods == [.command, .shift] else { return nil }
+        Self.recordShortcut(key, mods)
+        let shift = mods.contains(.shift)
+
+        // ⌘← / ⌘→: back / forward, unless the keys are moving a text cursor.
+        if !shift, isLeft || isRight {
+            if host.firstResponder is NSText || DevTerminalView.hasKeyboardFocus(in: host) { return false }
+            guard let id = tabManager.currentTab else { return false }
+            let go = { isLeft ? web.goBack(in: id) : web.goForward(in: id) }
+            if Self.isInWebView(host.firstResponder) {
+                // The page sees the key too; navigate only if it isn't focused on a text field.
+                web.isEditingText(in: id) { editing in if !editing { go() } }
+                return false
+            }
+            DispatchQueue.main.async { go() }
+            return true
+        }
+        switch (key, shift) {
+        case ("e", false):
+            DispatchQueue.main.async { toggleAIPanel() }
+        case ("s", false) where usesSidebar:
+            DispatchQueue.main.async { toggleSidebar() }
+        case ("l", false):
+            DispatchQueue.main.async {
+                if addressBarPeeks {
+                    sidebarPeeking = false
+                    topBarPeeking = true
+                }
+                addressBarFocused = true
+            }
+        case ("1"..."9", false):
+            // ⌘1…⌘8 pick that tab; ⌘9 is always the last one.
+            guard let idx = Int(key) else { return nil }
+            DispatchQueue.main.async {
+                let count = tabManager.tabCount()
+                let target = idx == 9 ? count : idx
+                if target >= 1, target <= count { tabManager.switchToTab(index: target - 1) }
+            }
+        case ("f", _):
+            // Find in page (web tabs only; start page / AI chat handle it themselves).
+            guard !isCurrentTabStartOrAIChat else { return false }
+            // Luna Max: holding ⌘F (key repeat) or ⌘⇧F opens Ask on Page.
+            if LunaMaxPrefs.isOn(LunaMaxPrefs.askOnPage), event.isARepeat || shift {
+                DispatchQueue.main.async { openAskOnPage() }
+                return true
+            }
+            guard !shift else { return nil }
+            DispatchQueue.main.async {
+                showBrowserFindBar.toggle()
+                if !showBrowserFindBar {
+                    browserFindQuery = ""
+                    if let id = tabManager.currentTab {
+                        web.clearFind(in: id)
+                    }
+                }
+            }
+        case ("g", _):
+            // ⌘G / ⌘⇧G: next / previous match of the last find.
+            guard !isCurrentTabStartOrAIChat, let id = tabManager.currentTab else { return false }
+            DispatchQueue.main.async {
+                if browserFindQuery.isEmpty { showBrowserFindBar = true; return }
+                shift ? web.findPrevious(in: id) : web.findNext(in: id)
+            }
+        default:
+            return nil
+        }
+        return true
+    }
+
+    private static func isInWebView(_ responder: NSResponder?) -> Bool {
+        var view = responder as? NSView
+        while let v = view {
+            if v is WKWebView { return true }
+            view = v.superview
+        }
+        return false
+    }
+
+    private func cycleTab(by offset: Int) {
+        let order = tabManager.tabOrder
+        guard order.count > 1, let i = tabManager.currentIndex() else { return }
+        switchToTab(order[(i + offset % order.count + order.count) % order.count])
+    }
+
+    /// The menu bar's File / View / History / Bookmarks commands for this window.
+    private var commandActions: BrowserCommandActions {
+        BrowserCommandActions(
+            profileId: { sessionStore.activeProfileId },
+            newTab: { newTab() },
+            reopenClosedTab: {
+                if let id = session.workspace.reopenClosedTab() { switchToTab(id) }
+            },
+            closeTab: { closeCurrentTab() },
+            printPage: {
+                Usage.record(.print)
+                if let id = tabManager.currentTab { web.printPage(in: id) }
+            },
+            reload: {
+                Usage.record(.reload)
+                if let id = tabManager.currentTab { web.reload(in: id) }
+            },
+            hardReload: {
+                Usage.record(.reload)
+                if let id = tabManager.currentTab { web.reloadFromOrigin(in: id) }
+            },
+            zoomIn: { Usage.record(.zoom); web.zoomIn(tabManager.currentTab) },
+            zoomOut: { Usage.record(.zoom); web.zoomOut(tabManager.currentTab) },
+            zoomReset: { Usage.record(.zoom); web.zoomReset(tabManager.currentTab) },
+            back: { if let id = tabManager.currentTab { web.goBack(in: id) } },
+            forward: { if let id = tabManager.currentTab { web.goForward(in: id) } },
+            showHistory: { navigateToHistory() },
+            toggleBookmark: { bookmarkCurrentPage() }
+        )
+    }
+
     // MARK: - Usage (opt-in)
 
     /// Counts Luna's own ⌘ shortcuts (not page shortcuts) while personalization is on.
     private static func recordShortcut(_ key: String, _ flags: NSEvent.ModifierFlags) {
-        let known: Set<String> = ["e", "s", "t", "w", "y", "l", "r", "p", "f", "d", "=", "+", "-", "0",
-                                  "1", "2", "3", "4", "5", "6", "7", "8", "9", "[", "]"]
+        let known: Set<String> = ["e", "s", "l", "f", "g",
+                                  "1", "2", "3", "4", "5", "6", "7", "8", "9"]
         let k = key.lowercased()
         guard known.contains(k) else { return }
         Usage.recordShortcut((flags.contains(.shift) ? "⇧⌘" : "⌘") + k.uppercased())
         switch k {
-        case "r": Usage.record(.reload)
-        case "p": Usage.record(.print)
-        case "=", "+", "-", "0": Usage.record(.zoom)
         case "f": Usage.record(.find)
         default: break
         }
@@ -673,10 +721,14 @@ struct BrowserShellView: View {
         .padding(.top, !showsTopChrome && !topBarPeeking ? 4 : 0)
     }
 
-    /// Adds the current page to the bookmarks bar, turning the bar on so it shows.
+    /// ⌘D: bookmarks the current page (turning the bar on so it shows), or removes it if already bookmarked.
     private func bookmarkCurrentPage() {
         guard let id = tabManager.currentTab, let tab = session.workspace.tab(id), let url = tab.url,
               isSafeBrowserURL(url) else { return }
+        if let existing = bookmarks.bookmark(for: url) {
+            bookmarks.remove(existing.id)
+            return
+        }
         bookmarks.add(url: url, title: tab.customTitle ?? tab.title)
         Usage.record(.bookmarkAdd)
         if !showBookmarksBar { showBookmarksBar = true }
@@ -793,7 +845,8 @@ struct BrowserShellView: View {
                 store: session.workspace,
                 tidyTitle: { session.tidyTitle($0) },
                 tidyToday: { session.tidyToday() },
-                tearOff: { tearOff($0, at: $1) }
+                tearOff: { tearOff($0, at: $1) },
+                bookmarkPage: isCurrentTabStartOrAIChat ? nil : { bookmarkCurrentPage() }
             ),
             onToggleSidebar: toggleSidebar,
             extensions: session.extensions,
