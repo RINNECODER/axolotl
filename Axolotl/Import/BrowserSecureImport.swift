@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import WebKit
 
@@ -14,6 +15,8 @@ extension BrowserImporter {
         var addresses: Int?
         /// True when cookies/passwords were requested but the Safe Storage key wasn't readable.
         var keychainUnavailable = false
+        var vaultLocked = false
+        var extensionsDeclined = false
         var errors: [String] = []
 
         var parts: [String] {
@@ -88,7 +91,7 @@ extension BrowserImporter {
                 let csv = loginsCSV(logins)
                 summary.passwords = (try? PasswordVault.shared.importCSV(csv, profile: axolotlProfileId).imported) ?? 0
             } else {
-                summary.errors.append("Passwords need the vault unlocked.")
+                summary.vaultLocked = true
             }
         } else if read.logins != nil {
             summary.passwords = 0
@@ -109,14 +112,35 @@ extension BrowserImporter {
 
         if let candidates = read.extensionCandidates {
             var imported = 0, failed = 0
-            for c in candidates {
-                do { _ = try await ExtensionLibrary.shared.install(from: c.folder); imported += 1 }
-                catch { failed += 1 }
+            if !candidates.isEmpty, confirmExtensionBatch(candidates.map(\.name)) {
+                // One alert above covers the whole batch, so skip the per-extension one.
+                let library = ExtensionLibrary.shared
+                let perExtension = library.confirmInstall
+                library.confirmInstall = { _ in true }
+                defer { library.confirmInstall = perExtension }
+                for c in candidates {
+                    do { _ = try await library.install(from: c.folder); imported += 1 }
+                    catch { failed += 1 }
+                }
+            } else if !candidates.isEmpty {
+                summary.extensionsDeclined = true
             }
-            summary.extensionsImported = imported
+            summary.extensionsImported = summary.extensionsDeclined ? nil : imported
             summary.extensionsFailed = failed
         }
         return summary
+    }
+
+    /// One confirmation for every extension an import would add.
+    @MainActor
+    static var confirmExtensionBatch: ([String]) -> Bool = { names in
+        let alert = NSAlert()
+        alert.messageText = "Add \(names.count == 1 ? "this extension" : "these \(names.count) extensions")?"
+        alert.informativeText = names.sorted().joined(separator: "\n")
+            + "\n\nThey keep the website access they had in your other browser."
+        alert.addButton(withTitle: names.count == 1 ? "Add Extension" : "Add All")
+        alert.addButton(withTitle: "Not Now")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     /// Chromium's leading-dot host means "and subdomains"; HTTPCookie wants the domain and `.domainMatch`.

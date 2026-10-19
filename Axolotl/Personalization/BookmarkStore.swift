@@ -102,6 +102,40 @@ final class BookmarkStore: ObservableObject {
         return bookmark.id
     }
 
+    /// Adds a bookmark tree from another browser with one save. Folders merge by
+    /// name; a link already bookmarked anywhere is skipped, and folders that would
+    /// end up empty aren't created. Returns how many links were added.
+    @discardableResult
+    func addImported(_ tree: [ImportedBookmark], in parent: UUID? = nil) -> Int {
+        var known = Set(bookmarks.compactMap { Workspace.bookmarkKey($0.url) })
+        func place(_ nodes: [ImportedBookmark], _ parent: UUID?) -> Int {
+            var added = 0
+            for node in nodes {
+                switch node {
+                case .link(let title, let url):
+                    guard let key = Workspace.bookmarkKey(url), known.insert(key).inserted else { continue }
+                    let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    items.append(Bookmark(title: name.isEmpty ? Self.defaultTitle(for: url) : name, url: url, parentId: parent))
+                    added += 1
+                case .folder(let name, let children):
+                    if let existing = items.first(where: { $0.isFolder && $0.parentId == parent && $0.title == name }) {
+                        added += place(children, existing.id)
+                    } else {
+                        let folder = Bookmark(title: name, url: Self.folderURL, parentId: parent, isFolder: true)
+                        items.append(folder)
+                        let inside = place(children, folder.id)
+                        if inside == 0 { items.removeAll { $0.id == folder.id } }
+                        added += inside
+                    }
+                }
+            }
+            return added
+        }
+        let added = place(tree, parent)
+        if added > 0 { save() }
+        return added
+    }
+
     @discardableResult
     func addFolder(_ title: String, in parent: UUID? = nil) -> UUID {
         let folder = Bookmark(title: title, url: Self.folderURL, parentId: parent, isFolder: true)
