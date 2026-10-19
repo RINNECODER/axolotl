@@ -18,6 +18,9 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
     weak var menuAnchor: NSView?
     /// Bumped when an extension's action (icon, badge, title) changes.
     @Published private(set) var actionRevision = 0
+    /// The bundled uBlock Origin Lite, which Shields drives.
+    private var ubol: (context: WKWebExtensionContext, bridge: UBOLBridge)?
+    private var shieldsDefault = ShieldsPrefs.defaults().level
 
     nonisolated deinit {}
 
@@ -34,10 +37,28 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
                 DispatchQueue.main.async { self?.sync(with: records) }
             }
             .store(in: &cancellables)
+        // Settings' Shields level is uBOL's default mode; changing it clears uBOL's per-site modes at that level.
+        NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            .sink { [weak self] _ in
+                DispatchQueue.main.async {
+                    guard let self, ShieldsPrefs.defaults().level != self.shieldsDefault else { return }
+                    self.pushShields()
+                }
+            }
+            .store(in: &cancellables)
     }
 
     func attach(_ session: ProfileSession) {
         self.session = session
+        // Site exceptions edited anywhere (panel, Site Settings) reach uBOL; `$sites` sends the new value.
+        var previous = session.webViewWrapper.shields.sites
+        session.webViewWrapper.shields.$sites
+            .sink { [weak self] sites in
+                let changed = Set(previous.keys).union(sites.keys).filter { previous[$0] != sites[$0] }
+                previous = sites
+                DispatchQueue.main.async { for host in changed { Task { await self?.applyShields(host: host) } } }
+            }
+            .store(in: &cancellables)
         sync(with: ExtensionLibrary.shared.records)
     }
 
@@ -49,6 +70,7 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
         for (id, context) in contexts where !wanted.contains(id) {
             try? controller.unload(context)
             contexts.removeValue(forKey: id)
+            if ubol?.context === context { ubol = nil }
         }
         for record in records where record.enabled && contexts[record.id] == nil {
             let dir = ExtensionLibrary.shared.directory(for: record)
@@ -70,6 +92,10 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
                 do {
                     try controller.load(context)
                     contexts[record.id] = context
+                    if record.builtInID == "ubolite" {
+                        ubol = (context, UBOLBridge(context: context))
+                        pushShields()
+                    }
                     actionRevision += 1
                     #if DEBUG
                     if !context.errors.isEmpty { NSLog("ExtensionHost: %@ loaded with errors: %@", record.name, "\(context.errors)") }
@@ -106,6 +132,7 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
     func tabOpened(_ id: UUID) { controller.didOpenTab(adapter(for: id)) }
 
     func tabClosed(_ id: UUID) {
+        web?.shieldsCounter.tabClosed(id)
         guard let adapter = tabAdapters.removeValue(forKey: id) else { return }
         controller.didCloseTab(adapter, windowIsClosing: false)
     }
@@ -134,6 +161,37 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
         session.webViewWrapper.removeWebView(for: id)
         session.chatStore.removeMessages(for: id)
         session.workspace.close(id)
+    }
+
+    // MARK: Shields
+
+    /// uBOL's blocked count for a tab (its action badge), 0 when uBOL is off or shows no count.
+    func blockedCount(for tabId: UUID) -> Int {
+        guard let ubol else { return 0 }
+        return Int(ubol.context.action(for: adapter(for: tabId))?.badgeText ?? "") ?? 0
+    }
+
+    var hasAdBlocker: Bool { ubol != nil }
+
+    /// Sends one site's Shields level to uBOL.
+    func applyShields(host: String) async {
+        guard let ubol, let shields = web?.shields else { return }
+        let mode = shields.policy(host: host).effectiveLevel.uBOLMode
+        await ubol.bridge.send(["what": "setFilteringMode", "hostname": host, "level": mode])
+    }
+
+    /// The default level, then every site with its own Shields settings (private sessions start empty).
+    private func pushShields() {
+        guard let ubol, let shields = web?.shields else { return }
+        shieldsDefault = ShieldsPrefs.defaults().level
+        let modes = shields.sites.keys.map { ($0, shields.policy(host: $0).effectiveLevel.uBOLMode) }
+        let level = shieldsDefault.uBOLMode
+        Task {
+            await ubol.bridge.send(["what": "setDefaultFilteringMode", "level": level])
+            for (host, mode) in modes {
+                await ubol.bridge.send(["what": "setFilteringMode", "hostname": host, "level": mode])
+            }
+        }
     }
 
     // MARK: Actions
@@ -201,6 +259,9 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
 
     func webExtensionController(_ controller: WKWebExtensionController, didUpdate action: WKWebExtension.Action,
                                 forExtensionContext context: WKWebExtensionContext) {
+        if context === ubol?.context, let tab = action.associatedTab as? ExtensionTabAdapter {
+            web?.shieldsCounter.observe(tab: tab.tabId, count: Int(action.badgeText) ?? 0)
+        }
         actionRevision += 1
     }
 

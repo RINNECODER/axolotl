@@ -18,6 +18,9 @@ struct SiteSettingsView: View {
                 }
                 SiteExceptionsList(store: .forProfile(profileId))
             }
+            SettingsCard("Shields exceptions") {
+                ShieldsExceptionsList(store: .forProfile(profileId))
+            }
         }
     }
 }
@@ -41,5 +44,28 @@ private struct SiteExceptionsList: View {
                                 options: p.choices.map { .init($0, $0.title(for: p)) })
             }
         }
+    }
+}
+
+private struct ShieldsExceptionsList: View {
+    @ObservedObject var store: ShieldsStore
+
+    var body: some View {
+        let hosts = store.sites.keys.sorted()
+        if hosts.isEmpty {
+            SettingsNoteRow("No sites yet. Sites you change with the Shields button show up here.")
+        }
+        ForEach(hosts, id: \.self) { host in
+            SettingsRow(host, subtitle: Self.summary(store.policy(host: host)), icon: "shield.lefthalf.filled") {
+                Button("Remove", role: .destructive) { store.remove(host: host) }
+                    .accessibilityLabel("Remove Shields settings for \(host)")
+            }
+        }
+    }
+
+    static func summary(_ p: ShieldsPolicy) -> String {
+        guard p.up else { return "Shields down" }
+        return ["Trackers & ads: \(p.level.title)", p.httpsUpgrade ? nil : "No HTTPS upgrade",
+                p.blockScripts ? "Scripts blocked" : nil].compactMap { $0 }.joined(separator: " · ")
     }
 }
