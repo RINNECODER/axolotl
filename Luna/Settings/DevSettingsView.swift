@@ -18,6 +18,7 @@ struct DevSettingsView: View {
     var body: some View {
         Form {
             ConnectAgentsSection()
+            DeveloperToolsSection()
             RecentAIChangesSection()
             Section {
                 if harnesses.isEmpty {

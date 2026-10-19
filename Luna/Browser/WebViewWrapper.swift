@@ -37,6 +37,14 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Load progress (0…1) for tabs that are currently loading; absent when idle.
     @Published private(set) var loadingProgressByTab: [UUID: Double] = [:]
     @Published var canGoBackForActiveTab: Bool = false
+    /// Tabs showing Luna's native error page (failed load or crashed web process).
+    @Published private(set) var pageErrorByTab: [UUID: PageError] = [:]
+    /// Tabs with audible media (unmuted, playing <audio>/<video>), and tabs the user muted.
+    @Published private(set) var audibleTabs: Set<UUID> = []
+    @Published private(set) var mutedTabs: Set<UUID> = []
+    private var developerToolsObserver: NSObjectProtocol?
+    /// Audible frames per tab, keyed by a token each frame's media script picks.
+    private var audibleFramesByTab: [UUID: Set<String>] = [:]
     @Published var canGoForwardForActiveTab: Bool = false
 
     /// DownloadManager item for each in-flight WKDownload (keyed by ObjectIdentifier of WKDownload).
@@ -108,6 +116,14 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         self.profileId = profileId
         self.websiteDataStore = dataStore
         super.init()
+        // Settings → Enable Developer Tools: open tabs become inspectable now (Inspect Element follows on new tabs).
+        developerToolsObserver = NotificationCenter.default.addObserver(
+            forName: Self.developerToolsChangedNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                for wv in self.webViews.values { Self.applyDeveloperTools(to: wv) }
+            }
+        }
     }
 
     // Avoid the MainActor isolated-deinit executor hop that double-frees
@@ -541,10 +557,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         config.webExtensionController = extensionController
         // Enable JavaScript via per-navigation preferences (preferences.javaScriptEnabled is deprecated).
         config.defaultWebpagePreferences.allowsContentJavaScript = true
-        // Enable Web Inspector + "Inspect Element" in context menu (macOS WebKit Developer Extras).
-        #if DEBUG
-        config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        #endif
+        // Web Inspector + "Inspect Element" (Debug, or Settings → Enable Developer Tools).
+        Self.applyDeveloperTools(to: config)
         config.userContentController.add(themeMessageHandler, name: "lumaPageTheme")
         config.userContentController.add(googleSuspiciousErrorHandler, name: "lumaGoogleSuspiciousError")
         // Inject only at documentEnd (and didFinish fallback). No atDocumentStart — early injection is detectable as DOM tampering.
@@ -561,6 +575,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         config.userContentController.add(linkPreviewHandler, contentWorld: .defaultClient, name: "lunaLinkPreview")
         config.userContentController.addUserScript(WKUserScript(source: WebViewWrapper.linkPreviewScriptSource, injectionTime: .atDocumentEnd,
                                                                 forMainFrameOnly: true, in: .defaultClient))
+        config.userContentController.add(mediaHandler, contentWorld: .defaultClient, name: "lunaMedia")
+        config.userContentController.addUserScript(WKUserScript(source: WebViewWrapper.mediaScriptSource, injectionTime: .atDocumentEnd,
+                                                                forMainFrameOnly: false, in: .defaultClient))
         let wv = LunaWebView(frame: .zero, configuration: config)
         // Use Safari UA for all requests to avoid bot detection on Akamai-protected sites.
         wv.customUserAgent = WebViewWrapper.safariUserAgent
@@ -574,9 +591,24 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         wv.uiDelegate = self
         wv.allowsBackForwardNavigationGestures = true
         wv.allowsMagnification = true
-        (wv as? LunaWebView)?.onDownloadRequest = { [weak self, weak wv] url in
-            guard let self, let wv else { return }
-            self.startDownload(of: url, from: wv)
+        Self.applyDeveloperTools(to: wv)
+        if let lwv = wv as? LunaWebView {
+            lwv.onDownloadRequest = { [weak self, weak wv] url in
+                guard let self, let wv else { return }
+                self.startDownload(of: url, from: wv)
+            }
+            lwv.onOpenInNewTab = { [weak self, weak wv] url in
+                guard let self, let wv else { return }
+                self.openInNewTab(url, nextTo: self.tabId(for: wv), foreground: false)
+            }
+            lwv.onOpenInNewWindow = { [weak self] url in
+                guard let self else { return }
+                BrowserWindows.open(profileId: self.profileId, adopting: TabTransfer(tab: Tab(url: url)))
+            }
+            lwv.onPrint = { [weak self, weak wv] in
+                guard let self, let wv, let id = self.tabId(for: wv) else { return }
+                self.printPage(in: id)
+            }
         }
         webViews[tabId] = wv
 
@@ -762,6 +794,141 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         wv.evaluateJavaScript(js) { result, _ in completion(result as? Bool ?? false) }
     }
 
+    // MARK: - New tabs from links
+
+    /// For a link click: nil to navigate in place, else whether the new tab opens in
+    /// the foreground. ⌘-click and middle-click open a background tab; adding Shift
+    /// brings it to the front (Chrome). `button` is WebKit's mask: 1 left, 2 right, 4 middle.
+    nonisolated static func newTabDisposition(type: WKNavigationType, modifiers: NSEvent.ModifierFlags, button: Int) -> Bool? {
+        guard type == .linkActivated, modifiers.contains(.command) || button == 4 else { return nil }
+        return modifiers.contains(.shift)
+    }
+
+    /// Opens `url` in a new tab right after `opener` (Chrome); a background tab loads when first shown.
+    func openInNewTab(_ url: URL, nextTo opener: UUID?, foreground: Bool) {
+        guard let store = tabManager?.store else { return }
+        let id = store.newTab(url: url, activate: foreground)
+        if let opener, store.tab(opener) != nil, !store.workspace.isPersistent(opener) {
+            store.moveTab(id, nextTo: opener, after: true)
+        }
+    }
+
+    // MARK: - Tab audio (indicator + mute)
+
+    private lazy var mediaHandler: MediaMessageHandler = {
+        let h = MediaMessageHandler()
+        h.wrapper = self
+        return h
+    }()
+
+    /// Reports whether a frame has audible media, from media events (no polling), and mutes
+    /// a frame's media on request. Each frame relays mute to its child frames. Isolated world.
+    static let mediaScriptSource = """
+        (function(){
+            var handler = window.webkit && window.webkit.messageHandlers.lunaMedia;
+            if (!handler) return;
+            var token = Math.random().toString(36).slice(2), muted = false, last = false, ours = [];
+            function media() { return Array.prototype.slice.call(document.querySelectorAll('video, audio')); }
+            function audible() {
+                return media().some(function(m) {
+                    return !m.paused && !m.ended && m.volume > 0 && (!m.muted || ours.indexOf(m) !== -1);
+                });
+            }
+            function send(a) { last = a; handler.postMessage({token: token, audible: a}); }
+            function report() { var a = audible(); if (a !== last) send(a); }
+            function quiet(m) { if (muted && !m.muted) { m.muted = true; ours.push(m); } }
+            ['play', 'playing', 'pause', 'ended', 'emptied', 'volumechange'].forEach(function(type) {
+                document.addEventListener(type, function(e) {
+                    if ((type === 'play' || type === 'playing') && e.target instanceof HTMLMediaElement) quiet(e.target);
+                    report();
+                }, true);
+            });
+            function setMuted(m) {
+                muted = m;
+                if (m) { media().forEach(quiet); } else { ours.forEach(function(el) { el.muted = false; }); ours = []; }
+                for (var i = 0; i < window.frames.length; i++) {
+                    try { window.frames[i].postMessage({__lunaMute: m}, '*'); } catch (e) {}
+                }
+                report();
+            }
+            window.addEventListener('message', function(e) {
+                if (e.source === window.parent && e.data && typeof e.data.__lunaMute === 'boolean') setMuted(e.data.__lunaMute);
+            });
+            window.addEventListener('pagehide', function() { if (last) send(false); });
+            window.__lunaSetMuted = setMuted;
+        })();
+        """
+
+    /// Hosts muted this session ("Mute Site"), without "www.".
+    @Published private(set) var mutedHosts: Set<String> = []
+
+    nonisolated static func siteKey(_ url: URL?) -> String? {
+        guard let host = url?.host?.lowercased(), !host.isEmpty else { return nil }
+        return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+    }
+
+    func isMuted(_ tabId: UUID) -> Bool {
+        Self.siteKey(webViews[tabId]?.url).map(mutedHosts.contains) ?? false
+    }
+
+    /// Mutes or unmutes every tab on this tab's site (Chrome's "Mute Site").
+    func setMuted(_ muted: Bool, tab tabId: UUID) {
+        guard let site = Self.siteKey(webViews[tabId]?.url) else { return }
+        if muted { mutedHosts.insert(site) } else { mutedHosts.remove(site) }
+        for wv in webViews.values where Self.siteKey(wv.url) == site { applyMute(muted, to: wv) }
+    }
+
+    private func applyMute(_ muted: Bool, to webView: WKWebView) {
+        webView.callAsyncJavaScript("if (window.__lunaSetMuted) window.__lunaSetMuted(m);", arguments: ["m": muted],
+                                   in: nil, in: .defaultClient, completionHandler: nil)
+    }
+
+    fileprivate func handleMediaMessage(_ body: Any, from webView: WKWebView?) {
+        guard let webView, let tabId = tabId(for: webView), let dict = body as? [String: Any],
+              let token = dict["token"] as? String, let audible = dict["audible"] as? Bool else { return }
+        setAudible(audible, frame: token, in: tabId)
+        // A frame that just started (or a new page on a muted site) hasn't heard about the mute yet.
+        if audible, isMuted(tabId) { applyMute(true, to: webView) }
+    }
+
+    /// `frame` nil clears every frame (navigation, crash).
+    private func setAudible(_ audible: Bool, frame: String?, in tabId: UUID) {
+        var frames = audibleFramesByTab[tabId] ?? []
+        if let frame {
+            if audible { frames.insert(frame) } else { frames.remove(frame) }
+        } else {
+            frames.removeAll()
+        }
+        audibleFramesByTab[tabId] = frames.isEmpty ? nil : frames
+        if audibleTabs.contains(tabId) == frames.isEmpty {
+            if frames.isEmpty { audibleTabs.remove(tabId) } else { audibleTabs.insert(tabId) }
+        }
+    }
+
+    // MARK: - Developer tools
+
+    /// Settings → Agents → "Enable Developer Tools": Web Inspector and Inspect Element (always on in Debug).
+    static let developerToolsKey = "luna.developerToolsEnabled"
+
+    static var developerToolsEnabled: Bool {
+        #if DEBUG
+        return true
+        #else
+        return UserDefaults.standard.bool(forKey: developerToolsKey)
+        #endif
+    }
+
+    private static func applyDeveloperTools(to configuration: WKWebViewConfiguration) {
+        // "Inspect Element" in the page's context menu.
+        configuration.preferences.setValue(developerToolsEnabled, forKey: "developerExtrasEnabled")
+    }
+
+    private static func applyDeveloperTools(to webView: WKWebView) {
+        if #available(macOS 13.3, *) { webView.isInspectable = developerToolsEnabled }
+    }
+
+    static let developerToolsChangedNotification = Notification.Name("LunaDeveloperToolsChanged")
+
     // MARK: - Find in page (Cmd+F)
 
     /// JSON-encodes a string for safe embedding in JavaScript source (handles quotes, backslashes, newlines).
@@ -841,17 +1008,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             var links = document.querySelectorAll('link[rel*="icon"]');
             for (var i = 0; i < links.length; i++) {
                 var href = links[i].getAttribute('href');
-                if (href) {
-                    // Make absolute URL if relative
-                    if (href.startsWith('//')) {
-                        return window.location.protocol + href;
-                    } else if (href.startsWith('/')) {
-                        return window.location.origin + href;
-                    } else if (!href.startsWith('http')) {
-                        return window.location.origin + '/' + href;
-                    }
-                    return href;
-                }
+                // Resolve against the document (relative, protocol-relative); data: URIs pass through.
+                if (href) { try { return new URL(href, document.baseURI).href; } catch (e) {} }
             }
             return '';
         })();
@@ -876,6 +1034,10 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
 
     private func fetchPrimaryTintFromFavicon(for tabId: UUID, faviconURL: URL) {
+        if let data = FaviconCache.decodeDataURI(faviconURL) {
+            if let image = NSImage(data: data), let color = Self.dominantColor(from: image) { updatePrimaryTint(color, for: tabId) }
+            return
+        }
         var request = URLRequest(url: faviconURL)
         request.cachePolicy = .returnCacheDataElseLoad
         URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
@@ -981,6 +1143,10 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         webViews.removeValue(forKey: tabId)
         popupTabIds.remove(tabId)
         loadingProgressByTab.removeValue(forKey: tabId)
+        pageErrorByTab.removeValue(forKey: tabId)
+        audibleFramesByTab.removeValue(forKey: tabId)
+        audibleTabs.remove(tabId)
+        mutedTabs.remove(tabId)
         if !keepMetadata {
             faviconURLByTab.removeValue(forKey: tabId)
             primaryTintByTab.removeValue(forKey: tabId)
@@ -1015,6 +1181,18 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             decisionHandler(.download, preferences)
             return
         }
+        // ⌘-click / middle-click a link (or a target=_blank link): open it in a new tab
+        // next to this one, in the background unless Shift is held (Chrome).
+        if let url = navigationAction.request.url,
+           let foreground = Self.newTabDisposition(type: navigationAction.navigationType,
+                                                  modifiers: navigationAction.modifierFlags,
+                                                  button: navigationAction.buttonNumber),
+           ["http", "https", "file"].contains(url.scheme?.lowercased() ?? ""),
+           let opener = tabId(for: webView) {
+            openInNewTab(url, nextTo: opener, foreground: foreground)
+            decisionHandler(.cancel, preferences)
+            return
+        }
         // Switch UA on the fly so redirects (e.g. Gmail → accounts.google.com)
         // pick up the correct UA for the target host.
         if let targetURL = navigationAction.request.url {
@@ -1027,6 +1205,10 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
         let url = webView.url?.absoluteString ?? "(unknown url)"
         print("WKWebView didFailProvisionalNavigation:", url, error.localizedDescription)
+        guard let tabId = tabId(for: webView), let pageError = PageError.classify(error, url: webView.url) else { return }
+        pageErrorByTab[tabId] = pageError
+        // The address bar shows the page that failed, not the one still underneath.
+        if tabId == activeTab, let failed = pageError.url { currentURL = failed }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
@@ -1037,6 +1219,42 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         let url = webView.url?.absoluteString ?? "(unknown url)"
         print("WKWebView process terminated:", url)
+        guard let tabId = tabId(for: webView) else { return }
+        pageErrorByTab[tabId] = PageError(kind: .crashed, url: webView.url, code: nil)
+        loadingProgressByTab.removeValue(forKey: tabId)
+        setAudible(false, frame: nil, in: tabId)
+    }
+
+    /// The error page's Reload: retries the page that failed (a crashed tab reloads in a new process).
+    func reloadAfterError(in tabId: UUID) {
+        guard let error = pageErrorByTab.removeValue(forKey: tabId) else { return reload(in: tabId) }
+        if error.kind != .crashed, let url = error.url, url != webViews[tabId]?.url {
+            load(url: url, in: tabId)
+        } else {
+            reload(in: tabId)
+        }
+    }
+
+    // MARK: - HTTP authentication
+
+    func webView(_ webView: WKWebView, didReceive challenge: URLAuthenticationChallenge,
+                 completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        let method = challenge.protectionSpace.authenticationMethod
+        // Server trust and client certificates: WebKit's default handling (never bypass TLS).
+        guard method == NSURLAuthenticationMethodHTTPBasic || method == NSURLAuthenticationMethodHTTPDigest
+                || method == NSURLAuthenticationMethodDefault else {
+            return completionHandler(.performDefaultHandling, nil)
+        }
+        // Give up after a few wrong passwords instead of re-prompting forever.
+        guard challenge.previousFailureCount < 3 else { return completionHandler(.cancelAuthenticationChallenge, nil) }
+        AuthChallengeSheet.present(for: challenge.protectionSpace, previous: challenge.proposedCredential,
+                                   in: webView.window ?? NSApp.keyWindow ?? NSApp.mainWindow) { credential in
+            if let credential {
+                completionHandler(.useCredential, credential)
+            } else {
+                completionHandler(.cancelAuthenticationChallenge, nil)
+            }
+        }
     }
 
     /// MIME types we display in the WebView (PDF + web/image types). Word docs download to avoid gibberish.
@@ -1127,8 +1345,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
-        guard let tabId = tabId(for: webView), passwordFillOffer?.tabId == tabId else { return }
-        passwordFillOffer = nil
+        guard let tabId = tabId(for: webView) else { return }
+        if pageErrorByTab[tabId] != nil { pageErrorByTab.removeValue(forKey: tabId) }
+        // The old document's media is gone; frames of the new one report again.
+        setAudible(false, frame: nil, in: tabId)
+        if passwordFillOffer?.tabId == tabId { passwordFillOffer = nil }
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -1307,9 +1528,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         // IMPORTANT: the returned WKWebView must be created with the provided `configuration`,
         // otherwise WebKit throws: "Returned WKWebView was not created with the given configuration."
         // The supplied popup configuration inherits the opener's profile store.
-        #if DEBUG
-        configuration.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        #endif
+        Self.applyDeveloperTools(to: configuration)
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         let wv = LunaWebView(frame: .zero, configuration: configuration)
         wv.customUserAgent = Self.userAgent(for: requestURL)
@@ -1389,6 +1608,18 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         print("WebViewWrapper: Popup closed via window.close(), removing tab \(tabId)")
         tabManager?.closeTab(tabId)
         removeWebView(for: tabId)
+    }
+}
+
+// MARK: - Media message handler (isolated content world, all frames)
+
+private final class MediaMessageHandler: NSObject, WKScriptMessageHandler {
+    weak var wrapper: WebViewWrapper?
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let body = message.body
+        let webView = message.webView
+        DispatchQueue.main.async { [weak self] in self?.wrapper?.handleMediaMessage(body, from: webView) }
     }
 }
 

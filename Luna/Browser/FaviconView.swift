@@ -17,6 +17,21 @@ final class FaviconCache {
         cache.totalCostLimit = 16 * 1024 * 1024
     }
 
+    /// The bytes of a `data:` URI (base64 or percent-encoded), or nil for any other URL.
+    nonisolated static func decodeDataURI(_ url: URL) -> Data? {
+        let string = url.absoluteString
+        guard string.count > 5, string.prefix(5).lowercased() == "data:",
+              let comma = string.firstIndex(of: ",") else { return nil }
+        let meta = string[string.index(string.startIndex, offsetBy: 5)..<comma].lowercased()
+        let payload = String(string[string.index(after: comma)...])
+        if meta.hasSuffix(";base64") {
+            let b64 = (payload.removingPercentEncoding ?? payload).filter { !$0.isWhitespace }
+            let padded = b64 + String(repeating: "=", count: (4 - b64.count % 4) % 4)
+            return Data(base64Encoded: padded)
+        }
+        return (payload.removingPercentEncoding ?? payload).data(using: .utf8)
+    }
+
     func cachedImage(for url: URL) -> NSImage? {
         cache.object(forKey: url as NSURL)
     }
@@ -27,6 +42,8 @@ final class FaviconCache {
         if let existing = inFlight[url] { return await existing.value }
 
         let task = Task<NSImage?, Never> {
+            // <link rel=icon href="data:..."> carries the image inline; no request.
+            if url.scheme?.lowercased() == "data" { return Self.decodeDataURI(url).flatMap(NSImage.init(data:)) }
             var request = URLRequest(url: url)
             request.timeoutInterval = 10
             guard let (data, response) = try? await URLSession.shared.data(for: request),

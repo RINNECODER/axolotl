@@ -10,9 +10,29 @@ struct AgentsSettingsView: View {
         } else {
             Form {
                 ConnectAgentsSection()
+                DeveloperToolsSection()
                 RecentAIChangesSection()
             }
             .formStyle(.grouped)
+        }
+    }
+}
+
+/// "Enable Developer Tools": Web Inspector (Inspect Element in the page menu, and Safari's Develop menu).
+struct DeveloperToolsSection: View {
+    @AppStorage(WebViewWrapper.developerToolsKey) private var enabled = false
+
+    var body: some View {
+        Section {
+            Toggle(isOn: $enabled) {
+                Text("Enable Developer Tools")
+                Text("Adds Inspect Element to the page's context menu. Applies to tabs opened after you turn it on.")
+            }
+            .onChange(of: enabled) { _, _ in
+                NotificationCenter.default.post(name: WebViewWrapper.developerToolsChangedNotification, object: nil)
+            }
+        } header: {
+            Text("Developer")
         }
     }
 }
