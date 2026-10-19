@@ -51,7 +51,7 @@ struct HorizontalTabStrip: View {
     }
 
     /// How far below (or above) the strip a drag has to go to tear off.
-    private static let tearOffDistance: CGFloat = 50
+    private static let tearOffDistance: CGFloat = 64
 
     private static let iconTabWidth: CGFloat = 38
     private static let minTabWidth: CGFloat = 72
@@ -225,15 +225,13 @@ struct HorizontalTabStrip: View {
 
     // MARK: Dragging
 
-    /// Where the lifted tab is drawn relative to its slot: under the pointer
-    /// horizontally; vertically it follows with resistance, so it visibly
-    /// comes off the strip without covering the page.
+    /// Where the dragged tab is drawn relative to its slot: under the pointer
+    /// horizontally, locked to the row vertically.
     private func liftOffset(for id: UUID) -> CGSize {
         guard let drag, drag.id == id, let frame = frames[id] else { return .zero }
         let dx = drag.pointer.x - drag.grab.width - frame.minX
-        let rawY = drag.pointer.y - drag.grab.height - frame.minY
-        let dy = (rawY < 0 ? -1 : 1) * min(abs(rawY) * 0.35, 12)
-        return CGSize(width: dx, height: dy)
+        // Like Chrome and Brave, the tab stays on the row until it tears off.
+        return CGSize(width: dx, height: 0)
     }
 
     private func dragChanged(_ id: UUID, _ d: TabPressView.Drag) {
@@ -724,10 +722,9 @@ private struct LiftedTab: ViewModifier {
                     .padding(.vertical, 2)
                     .opacity(isLifted ? 1 : 0)
             )
-            .scaleEffect(isTearing ? 0.9 : (isLifted ? 1.04 : 1))
+            .scaleEffect(isTearing ? 0.9 : 1)
             // The drag preview window carries it now.
             .opacity(isTearing ? 0.3 : 1)
-            .shadow(color: .black.opacity(isLifted ? 0.28 : 0), radius: 10, y: 4)
             .offset(offset)
             .zIndex(isLifted ? 1 : 0)
             .transaction { if isLifted { $0.animation = nil } }
