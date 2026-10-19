@@ -95,6 +95,11 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("-")
             Divider()
         }
+        CommandGroup(after: .toolbar) {
+            // Chrome's ⌃⌘F. AppKit's own item (fn-F) is turned off in LunaApp so this is the only one.
+            Button("Enter Full Screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
+                .keyboardShortcut("f", modifiers: [.command, .control])
+        }
         CommandMenu("History") {
             Button("Back") { browser?.back() }
                 .keyboardShortcut("[")

@@ -10,6 +10,8 @@ import SwiftUI
 struct LunaApp: App {
     init() {
         NSWindow.allowsAutomaticWindowTabbing = false
+        // BrowserCommands owns View ▸ Enter Full Screen (⌃⌘F); drop AppKit's fn-F duplicate.
+        UserDefaults.standard.set(false, forKey: "NSFullScreenMenuItemEverywhere")
         BrowserImporter.scheduleLaunchSync()
         #if DEBUG
         DebugSnapshot.scheduleIfRequested()
