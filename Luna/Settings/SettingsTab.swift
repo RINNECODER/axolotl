@@ -27,6 +27,13 @@ enum InternalPage {
     /// luna://downloads: Chrome's downloads page (⇧⌘J).
     static let downloadsURL = URL(string: "\(settingsScheme)://downloads")!
 
+    /// luna://passwords: the password manager (Chrome's chrome://password-manager).
+    static let passwordsURL = URL(string: "\(settingsScheme)://passwords")!
+
+    static func isPasswords(_ url: URL?) -> Bool {
+        url?.scheme?.lowercased() == settingsScheme && url?.host?.lowercased() == "passwords"
+    }
+
     static func isDownloads(_ url: URL?) -> Bool {
         url?.scheme?.lowercased() == settingsScheme && url?.host?.lowercased() == "downloads"
     }
@@ -64,6 +71,7 @@ enum InternalPage {
         if isSettings(url) { return "Settings" }
         if isBookmarks(url) { return "Bookmarks" }
         if isDownloads(url) { return "Downloads" }
+        if isPasswords(url) { return "Passwords" }
         if let page = viewSourcePage(url) { return "view-source:\(page.absoluteString)" }
         return url.host == "history" ? "History" : "AI Chat"
     }
@@ -73,6 +81,7 @@ enum InternalPage {
         if isSettings(url) { return "gearshape" }
         if isBookmarks(url) { return "book" }
         if isDownloads(url) { return "arrow.down.circle" }
+        if isPasswords(url) { return "key" }
         if viewSourcePage(url) != nil { return "chevron.left.forwardslash.chevron.right" }
         return url?.host == "history" ? "clock" : "sparkles"
     }

@@ -80,6 +80,67 @@ final class SettingsSnapshotTests: XCTestCase {
         }
     }
 
+    /// Chrome tab groups in both strips and the sidebar, and luna://passwords (list, detail) on a fake vault.
+    func testRenderTabGroupsAndPasswords() throws {
+        guard let name = ProcessInfo.processInfo.environment["LUNA_SETTINGS_SHOTS"], !name.isEmpty else {
+            throw XCTSkip("Set LUNA_SETTINGS_SHOTS to a folder name to render PNGs.")
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(name).path
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let store = WorkspaceStore(persistence: nil)
+        let web = WebViewWrapper(profileId: UUID(), dataStore: .nonPersistent())
+        let ids = ["https://apple.com", "https://github.com", "https://news.ycombinator.com", "https://swift.org", "https://wikipedia.org"]
+            .map { store.newTab(url: URL(string: $0)) }
+        let work = try XCTUnwrap(store.addToNewTabGroup(ids[1]))
+        store.renameFolder(work, to: "Work")
+        store.addToTabGroup(ids[2], group: work)
+        let read = try XCTUnwrap(store.addToNewTabGroup(ids[3]))
+        store.setTabGroupColor(read, .orange)
+        let later = try XCTUnwrap(store.addToNewTabGroup(ids[4]))
+        store.renameFolder(later, to: "Later")
+        store.setFolderExpanded(later, false)
+        store.activate(ids[2])
+        let actions = SidebarActions(activate: { store.activate($0) }, close: { store.close($0) }, newTab: {}, store: store)
+
+        let profile = UUID()
+        let defaults = UserDefaults(suiteName: "shots.\(profile)")!
+        defaults.set(false, forKey: PasswordVault.syncKey(profile.uuidString))
+        let vault = PasswordVault(store: KeychainStore(backend: FakeKeychain(), accessGroup: "TEAMID.com.luna.browser"),
+                                  defaults: defaults, profileNames: { [] })
+        for (host, user) in [("github.com", "octo"), ("github.com", "work@corp.com"), ("apple.com", "me@icloud.com"),
+                             ("news.ycombinator.com", "pg"), ("wikipedia.org", "")] {
+            try vault.save(host: host, username: user, password: "x", profile: profile)
+        }
+        defer { defaults.removePersistentDomain(forName: "shots.\(profile)") }
+
+        for (mode, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            let shell = HStack(spacing: 0) {
+                SidebarOutline(snapshot: .make(store: store, web: web), actions: actions)
+                    .frame(width: 240)
+                    .background(LunaBackdrop(material: .sidebar, solid: LunaSurface.sidebar, surface: .sidebar))
+                VStack(spacing: 0) {
+                    HorizontalTabStrip(store: store, web: web, height: 36, onActivate: { _ in }, onClose: { _ in },
+                                       onNewTab: {}, onSplit: { _, _ in })
+                        .frame(height: 36)
+                        .background(LunaBackdrop(material: .titlebar, solid: LunaSurface.toolbar, surface: .toolbar))
+                    HorizontalTabStrip(store: store, web: web, height: ChromeMetrics.tabStripHeight, onActivate: { _ in },
+                                       onClose: { _ in }, onNewTab: {}, onSplit: { _, _ in }, chromeStyle: true)
+                        .frame(height: ChromeMetrics.tabStripHeight)
+                        .background(ChromePalette.for(mode == "dark" ? .dark : .light).frame)
+                    LunaSurface.window
+                }
+            }
+            try render(shell, appearance: appearance, size: NSSize(width: 1000, height: 260), to: "\(dir)/tabgroups-\(mode).png")
+            let list = PasswordManagerModel(vault: vault, profileId: profile, authenticate: { _ in false })
+            try render(PasswordManagerPageView(model: list), appearance: appearance, size: NSSize(width: 900, height: 480),
+                       to: "\(dir)/passwords-\(mode).png")
+            let detail = PasswordManagerModel(vault: vault, profileId: profile, authenticate: { _ in false })
+            detail.select(detail.credentials.first { $0.username == "octo" })
+            try render(PasswordManagerPageView(model: detail), appearance: appearance, size: NSSize(width: 900, height: 400),
+                       to: "\(dir)/password-detail-\(mode).png")
+        }
+    }
+
     private func render<V: View>(_ view: V, appearance: NSAppearance.Name, size: NSSize = NSSize(width: 1100, height: 760),
                                  to path: String) throws {
         let host = NSHostingView(rootView: view.frame(width: size.width, height: size.height))

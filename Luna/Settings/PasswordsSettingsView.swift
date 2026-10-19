@@ -29,6 +29,12 @@ struct PasswordsSettingsView: View {
                 })
             }
 
+            SettingsCard {
+                SettingsRow("Password Manager", icon: "key") {
+                    Button("Open") { BrowserCommandTargets.shared.keyOrFrontmost?.actions.showPasswords() }
+                }
+            }
+
             SettingsCard("iCloud", footer: "Logins Luna saves for this profile sync to your other Macs signed in to the same Apple Account. Luna can't read passwords saved by Safari or the Passwords app, even with sync on; use Import below to bring those in.") {
                 SettingsToggleRow("Sync passwords with iCloud Keychain", subtitle: iCloudSyncNote,
                                   isOn: Binding(get: { iCloudSync }, set: setICloudSync))

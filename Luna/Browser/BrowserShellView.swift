@@ -646,6 +646,7 @@ struct BrowserShellView: View {
             showBookmarkManager: { openBookmarkManager() },
             searchTabs: { showTabSearch.toggle() },
             showDownloads: { openDownloadsPage() },
+            showPasswords: { openPasswordsPage() },
             viewSource: { openViewSource() },
             savePage: { if !isCurrentTabStartOrAIChat, let id = tabManager.currentTab { web.savePageAs(in: id) } },
             pictureInPicture: { if let id = tabManager.currentTab { web.pictureInPicture(in: id) } }
@@ -730,6 +731,7 @@ struct BrowserShellView: View {
             goHome: { goHome() },
             toggleAI: { toggleAIPanel() },
             showDownloads: { Usage.record(.downloads); DownloadManager.shared.presentHub() },
+            showPasswords: { openPasswordsPage() },
             showHistory: { navigateToHistory() },
             askOnPage: { openAskOnPage() },
             bookmarkPage: { bookmarkCurrentPage() },
@@ -764,6 +766,7 @@ struct BrowserShellView: View {
 
     /// ⇧⌘J: focuses the luna://downloads tab, or opens one.
     private func openDownloadsPage() { focusOrOpen(InternalPage.downloadsURL) }
+    private func openPasswordsPage() { focusOrOpen(InternalPage.passwordsURL) }
 
     /// ⌥⌘U: the current page's HTML in a new luna://source tab.
     private func openViewSource() {
@@ -1045,6 +1048,9 @@ struct BrowserShellView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if InternalPage.isDownloads(currentURL) {
                     DownloadsPageView(profileId: session.profileId, isPrivate: isPrivate)
+                } else if InternalPage.isPasswords(currentURL) {
+                    PasswordManagerPageView(profileId: session.profileId)
+                        .id(session.profileId)
                 } else if let page = InternalPage.viewSourcePage(currentURL) {
                     ViewSourceView(page: page, isPrivate: isPrivate)
                 } else if currentURL?.scheme == "luma", currentURL?.host == "history" {

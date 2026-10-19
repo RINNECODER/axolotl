@@ -13,6 +13,7 @@ struct TopChromeActions {
     var goHome: () -> Void
     var toggleAI: () -> Void
     var showDownloads: () -> Void
+    var showPasswords: () -> Void = {}
     var showHistory: () -> Void
     var askOnPage: () -> Void = {}
     var bookmarkPage: () -> Void = {}
@@ -41,6 +42,7 @@ enum AppMenuEntries {
             .divider("s2"),
             .button("History", icon: "clock.arrow.circlepath", shortcut: "⌘Y", action: actions.showHistory),
             .button("Downloads", icon: "arrow.down.to.line", action: actions.showDownloads),
+            .button("Passwords", icon: "key", action: actions.showPasswords),
             .submenu("Bookmarks and lists", icon: "star", [
                 .button("Bookmark this tab…", icon: "star", shortcut: "⌘D", action: actions.bookmarkPage),
                 .button(showBar ? "Hide bookmarks bar" : "Show bookmarks bar", icon: "menubar.rectangle") {

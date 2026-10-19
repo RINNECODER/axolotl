@@ -22,6 +22,7 @@ struct BrowserCommandActions {
     var showBookmarkManager: () -> Void = {}
     var searchTabs: () -> Void = {}
     var showDownloads: () -> Void = {}
+    var showPasswords: () -> Void = {}
     var viewSource: () -> Void = {}
     var savePage: () -> Void = {}
     var pictureInPicture: () -> Void = {}
@@ -133,6 +134,7 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("u", modifiers: [.command, .option])
             Button("Downloads") { browser?.showDownloads() }
                 .keyboardShortcut("j", modifiers: [.command, .shift])
+            Button("Passwords") { browser?.showPasswords() }
             Divider()
         }
         CommandGroup(after: .toolbar) {
