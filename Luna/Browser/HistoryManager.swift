@@ -34,11 +34,16 @@ final class HistoryManager: ObservableObject {
         return lumaDir.appendingPathComponent(summariesFileName)
     }
     
-    init(profileId: UUID) {
+    /// false (private windows): records no visits and writes nothing; summaries stay in memory.
+    let persistent: Bool
+
+    init(profileId: UUID, persistent: Bool = true) {
         self.profileId = profileId
+        self.persistent = persistent
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let dir = appSupport.appendingPathComponent("Luna/Profiles/\(profileId.uuidString)", isDirectory: true)
-        store = HistoryStore(fileURL: dir.appendingPathComponent("history.sqlite"))
+        store = HistoryStore(fileURL: persistent ? dir.appendingPathComponent("history.sqlite") : nil)
+        guard persistent else { return }
         loadHistory(legacyJSON: dir.appendingPathComponent(legacyHistoryFileName))
         loadSummaries()
     }
@@ -60,7 +65,7 @@ final class HistoryManager: ObservableObject {
     // MARK: - Page Visit Tracking
     
     func recordPageVisit(url: URL, title: String) {
-        guard url.scheme == "http" || url.scheme == "https" || url.scheme == "file" else { return }
+        guard persistent, url.scheme == "http" || url.scheme == "https" || url.scheme == "file" else { return }
         // Pages control both: keep a hostile title or URL from bloating the history file.
         let urlString = String(url.absoluteString.prefix(2000))
         let title = String(title.prefix(300))
@@ -204,6 +209,7 @@ final class HistoryManager: ObservableObject {
     }
     
     private func saveSummaries() {
+        guard persistent else { return }
         let snapshot = conversationSummaries
         let url = summariesFileURL
         saveQueue.async {

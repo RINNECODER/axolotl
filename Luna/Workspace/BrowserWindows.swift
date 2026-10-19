@@ -68,12 +68,14 @@ enum BrowserWindows {
 
     /// Opens a browser window for a profile. A new `windowId` creates a new
     /// saved window; `adopting` moves a tab in; `at` centers it under a point.
+    /// `isPrivate` opens a private window, which is never saved or restored.
     @discardableResult
     static func open(profileId: UUID, windowId: UUID = UUID(), adopting transfer: TabTransfer? = nil,
-                     at screenPoint: CGPoint? = nil, size: CGSize = CGSize(width: 1200, height: 800)) -> NSWindow {
+                     at screenPoint: CGPoint? = nil, size: CGSize = CGSize(width: 1200, height: 800),
+                     isPrivate: Bool = false) -> NSWindow {
         let record = Record(id: windowId, profileId: profileId)
-        register(record)
-        if transfer != nil { Usage.record(.newWindow) }
+        if !isPrivate { register(record) }
+        if transfer != nil && !isPrivate { Usage.record(.newWindow) }
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -88,7 +90,12 @@ enum BrowserWindows {
         window.isMovableByWindowBackground = false
         window.tabbingMode = .disallowed
         window.title = "Luna"
-        window.contentView = NSHostingView(rootView: BrowserShellView(initialProfileId: profileId, windowId: windowId, adopting: transfer))
+        window.contentView = NSHostingView(rootView: BrowserShellView(initialProfileId: profileId, windowId: windowId,
+                                                                      adopting: transfer, isPrivate: isPrivate))
+        if isPrivate {
+            window.appearance = NSAppearance(named: .darkAqua)
+            PrivateBrowsing.track(window)
+        }
         if let p = screenPoint {
             // The grabbed tab sits near the top-left of the new window, under the pointer.
             window.setFrameTopLeftPoint(NSPoint(x: p.x - 120, y: p.y + 20))
@@ -98,7 +105,7 @@ enum BrowserWindows {
         openWindows.insert(window)
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { _ in
             openWindows.remove(window)
-            if !isTerminating { forget(record) }
+            if !isTerminating && !isPrivate { forget(record) }
         }
         window.makeKeyAndOrderFront(nil)
         return window

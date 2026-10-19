@@ -36,6 +36,8 @@ final class ProfileSession: ObservableObject {
     let chatStore: ChatStore
     let hibernator: TabHibernator
     let extensions: ExtensionHost
+    /// A private window's session: nothing it does is written to disk (see `PrivateBrowsing`).
+    let isPrivate: Bool
 
     private var cancellables: Set<AnyCancellable> = []
     private var knownTabIds: Set<UUID> = []
@@ -47,16 +49,26 @@ final class ProfileSession: ObservableObject {
 
     /// - Parameter workspace: injected store (tests); by default the profile's
     ///   persisted workspace when no other window owns it, else in-memory.
-    init(profileId: UUID, dataStore: WKWebsiteDataStore, workspace: WorkspaceStore? = nil, windowId: UUID? = nil) {
+    ///   `isPrivate`: in-memory workspace, history and chats; pass a non-persistent `dataStore`.
+    init(profileId: UUID, dataStore: WKWebsiteDataStore, workspace: WorkspaceStore? = nil, windowId: UUID? = nil,
+         isPrivate: Bool = false) {
         self.profileId = profileId
-        self.workspace = workspace ?? WorkspaceOwnership.makeStore(for: profileId, windowId: windowId)
+        self.isPrivate = isPrivate
+        self.workspace = workspace ?? (isPrivate ? WorkspaceStore(persistence: nil)
+                                                 : WorkspaceOwnership.makeStore(for: profileId, windowId: windowId))
         self.tabManager = TabManager(store: self.workspace)
-        let stores = ProfileStoreRegistry.stores(for: profileId)
-        self.historyManager = stores.history
-        self.chatStore = stores.chats
+        if isPrivate {
+            self.historyManager = HistoryManager(profileId: profileId, persistent: false)
+            self.chatStore = ChatStore(profileId: profileId, persistent: false)
+        } else {
+            let stores = ProfileStoreRegistry.stores(for: profileId)
+            self.historyManager = stores.history
+            self.chatStore = stores.chats
+        }
         self.webViewWrapper = WebViewWrapper(profileId: profileId, dataStore: dataStore)
+        webViewWrapper.isPrivate = isPrivate
         self.hibernator = TabHibernator(store: self.workspace, web: webViewWrapper)
-        self.extensions = ExtensionHost(profileId: profileId, dataStore: dataStore)
+        self.extensions = ExtensionHost(profileId: profileId, dataStore: dataStore, isPrivate: isPrivate)
         webViewWrapper.extensionController = extensions.controller
 
         webViewWrapper.tabManager = tabManager
@@ -84,7 +96,7 @@ final class ProfileSession: ObservableObject {
         }
         self.workspace.onTabPinned = { [weak self] id in
             Usage.record(.pinTab)
-            if LunaMaxPrefs.isOn(LunaMaxPrefs.tidyTitles) { self?.tidyTitle(id, reportErrors: false) }
+            if self?.isPrivate == false, LunaMaxPrefs.isOn(LunaMaxPrefs.tidyTitles) { self?.tidyTitle(id, reportErrors: false) }
         }
 
         tabManager.objectWillChange
@@ -232,12 +244,17 @@ final class BrowserSessionStore: ObservableObject {
     private var suspensionTasks: [UUID: DispatchWorkItem] = [:]
     private var activeSessionSubscription: AnyCancellable?
     private var terminationObserver: NSObjectProtocol?
+    /// A private window: one ephemeral session that never switches profile.
+    let isPrivate: Bool
 
     /// - Parameter windowId: set for extra windows, which save their own workspace.
-    init(initialProfileId: UUID? = nil, windowId: UUID? = nil, profileManager: ProfileManager = .shared) {
+    init(initialProfileId: UUID? = nil, windowId: UUID? = nil, isPrivate: Bool = false, profileManager: ProfileManager = .shared) {
         self.profileManager = profileManager
+        self.isPrivate = isPrivate
         let id = profileManager.validProfileId(initialProfileId ?? profileManager.lastActiveProfileId)
-        let session = ProfileSession(profileId: id, dataStore: profileManager.dataStore(for: id), windowId: windowId)
+        let session = isPrivate
+            ? ProfileSession(profileId: id, dataStore: PrivateBrowsing.dataStore(), isPrivate: true)
+            : ProfileSession(profileId: id, dataStore: profileManager.dataStore(for: id), windowId: windowId)
         self.activeProfileId = id
         self.activeSession = session
         self.sessions[id] = session
@@ -260,7 +277,7 @@ final class BrowserSessionStore: ObservableObject {
 
     func switchTo(profileId: UUID) {
         let id = profileManager.validProfileId(profileId)
-        guard id != activeProfileId else { return }
+        guard id != activeProfileId, !isPrivate else { return }
 
         let outgoingId = activeProfileId
         scheduleSuspension(for: outgoingId)

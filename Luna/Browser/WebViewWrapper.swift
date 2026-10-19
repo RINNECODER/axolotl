@@ -18,6 +18,8 @@ private let downloadLog = Logger(subsystem: "com.luna.browser", category: "downl
 /// Autofill of saved credentials works when sites use standard autocomplete attributes.
 final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
     let profileId: UUID
+    /// A private window's tabs: no password-save offers, no disk-cached favicons, new windows stay private.
+    var isPrivate = false
     private let websiteDataStore: WKWebsiteDataStore
     private var webViews: [UUID: WKWebView] = [:]
     /// The focused tab (in a split, the focused pane). Chrome mirrors its state
@@ -276,7 +278,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         case "username":
             if let user = dict["username"] as? String, !user.isEmpty { lastUsernameByHost[host] = user }
         case "submit":
-            guard let password = dict["password"] as? String, !password.isEmpty, !vault.isNeverSave(host) else { return }
+            guard !isPrivate, let password = dict["password"] as? String, !password.isEmpty, !vault.isNeverSave(host) else { return }
             var username = dict["username"] as? String ?? ""
             if username.isEmpty { username = lastUsernameByHost[host] ?? "" } else { lastUsernameByHost[host] = username }
             guard !vault.isSaved(host: host, username: username, password: password, profile: profileId) else { return }
@@ -579,7 +581,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             }
             lwv.onOpenInNewWindow = { [weak self] url in
                 guard let self else { return }
-                BrowserWindows.open(profileId: self.profileId, adopting: TabTransfer(tab: Tab(url: url)))
+                BrowserWindows.open(profileId: self.profileId, adopting: TabTransfer(tab: Tab(url: url)), isPrivate: self.isPrivate)
             }
             lwv.onPrint = { [weak self, weak wv] in
                 guard let self, let wv, let id = self.tabId(for: wv) else { return }
@@ -1070,7 +1072,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         var request = URLRequest(url: faviconURL)
         request.cachePolicy = .returnCacheDataElseLoad
         request.timeoutInterval = 10
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+        (isPrivate ? PrivateBrowsing.urlSession : URLSession.shared).dataTask(with: request) { [weak self] data, _, _ in
             guard let self else { return }
             // shortcut: the size cap applies after download (bounded by the timeout); stream it if icons get abused.
             guard let data, data.count <= 1_000_000, let image = NSImage(data: data), let color = Self.dominantColor(from: image) else { return }

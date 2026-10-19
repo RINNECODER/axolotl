@@ -35,10 +35,15 @@ struct BrowserShellView: View {
     /// A tab dragged here from another window, taken in on appear.
     @State private var pendingTransfer: TabTransfer?
 
-    init(initialProfileId: UUID? = nil, windowId: UUID? = nil, adopting transfer: TabTransfer? = nil) {
+    /// A private window (see `PrivateBrowsing`).
+    private let isPrivate: Bool
+
+    init(initialProfileId: UUID? = nil, windowId: UUID? = nil, adopting transfer: TabTransfer? = nil, isPrivate: Bool = false) {
         self.windowId = windowId
+        self.isPrivate = isPrivate
         _pendingTransfer = State(initialValue: transfer)
-        _sessionStore = StateObject(wrappedValue: BrowserSessionStore(initialProfileId: initialProfileId, windowId: windowId))
+        _sessionStore = StateObject(wrappedValue: BrowserSessionStore(initialProfileId: initialProfileId, windowId: windowId,
+                                                                      isPrivate: isPrivate))
     }
 
     @State private var addressBarText: String = ""
@@ -109,9 +114,9 @@ struct BrowserShellView: View {
             LunaBackdrop(material: usesSidebar ? .sidebar : .titlebar, state: .followsWindowActiveState,
                          solid: usesSidebar ? LunaSurface.window : LunaSurface.toolbar, surface: usesSidebar ? .sidebar : .toolbar)
                 .ignoresSafeArea()
-            // The window chrome carries a hue of the active profile's color.
-            activeProfile.profileColor.color
-                .opacity(0.14)
+            // The window chrome carries a hue of the active profile's color (private windows: purple).
+            (isPrivate ? PrivateBrowsing.tint : activeProfile.profileColor.color)
+                .opacity(isPrivate ? 0.22 : 0.14)
                 .ignoresSafeArea()
                 .animation(.easeInOut(duration: 0.3), value: activeProfile.colorId)
 
@@ -388,16 +393,18 @@ struct BrowserShellView: View {
             applyTrafficLights()
             // Other windows can drop tabs into this one.
             if let window {
-                // Agent tools (MCP bridge) drive the front-most browser window.
-                LunaBrowserHosts.shared.register(window: window) { sessionStore.activeSession }
+                // Agent tools (MCP bridge) drive the front-most browser window, never a private one.
+                if !isPrivate { LunaBrowserHosts.shared.register(window: window) { sessionStore.activeSession } }
                 BrowserCommandTargets.shared.register(window: window, actions: commandActions)
                 TabDropTargets.shared.register(.init(
                     window: window,
-                    profileId: { sessionStore.activeProfileId },
+                    // Private tabs move only between private windows.
+                    profileId: { isPrivate ? PrivateBrowsing.dropTargetId : sessionStore.activeProfileId },
                     adopt: { adoptTransfer($0, replacingPlaceholder: true, droppedAt: $1) }
                 ))
             }
         }
+        .environment(\.isPrivateBrowsing, isPrivate)
         .onChange(of: tabManager.currentTab) { _, _ in
             askOnPageVisible = false
             web.linkPreview = nil
@@ -677,7 +684,11 @@ struct BrowserShellView: View {
 
     private var edgeTabListEnabled: Bool { (usesSidebar && !sidebarShown) || (!usesSidebar && frameless) }
 
-    private var profileControl: some View {
+    @ViewBuilder private var profileControl: some View {
+        if isPrivate { PrivateWindowBadge() } else { profileMenu }
+    }
+
+    private var profileMenu: some View {
         ProfileMenu(
             profileManager: profileManager,
             activeProfileId: sessionStore.activeProfileId,
@@ -1198,7 +1209,7 @@ struct BrowserShellView: View {
             }
         } else {
             BrowserWindows.open(profileId: sessionStore.activeProfileId, adopting: transfer, at: screenPoint,
-                                size: hostWindow?.frame.size ?? CGSize(width: 1200, height: 800))
+                                size: hostWindow?.frame.size ?? CGSize(width: 1200, height: 800), isPrivate: isPrivate)
         }
     }
 
