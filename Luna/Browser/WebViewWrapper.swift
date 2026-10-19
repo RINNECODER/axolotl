@@ -384,7 +384,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
                 return list.map(function(i) {
                     var d = {ac: i.getAttribute('autocomplete') || '', name: i.name || '', id: i.id || '',
                              label: labelOf(i), placeholder: i.placeholder || '', type: i.type || ''};
-                    if (withValues) d.value = String(i.value || '').slice(0, 200);
+                    // The CVC never leaves the page.
+                    var csc = /cc-csc/i.test(d.ac) || /cvc|cvv|csc|security.?code|card.?verification/i.test(d.name + ' ' + d.id + ' ' + d.label);
+                    if (withValues && !csc) d.value = String(i.value || '').slice(0, 200);
                     return d;
                 });
             }
