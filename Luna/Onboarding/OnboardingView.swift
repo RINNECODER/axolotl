@@ -74,6 +74,8 @@ struct OnboardingView: View {
             }
         }
         .formStyle(.grouped)
+        // The settings sections it reuses draw as Form sections here, not settings cards.
+        .environment(\.settingsFormHosted, true)
         .scrollContentBackground(.hidden)
         .safeAreaPadding(.top, flow.step == .welcome ? 48 : 0)
         .safeAreaPadding(.bottom, 12)

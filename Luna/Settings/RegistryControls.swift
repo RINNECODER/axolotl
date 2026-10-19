@@ -31,10 +31,8 @@ struct RegistryToggle: View {
     }
 
     var body: some View {
-        Toggle(isOn: Binding(get: { value }, set: { RegistrySettings.willChange(setting.key); value = $0 })) {
-            Text(setting.title)
-            if let help = setting.help { Text(help) }
-        }
+        SettingsToggleRow(setting.title, subtitle: setting.help,
+                          isOn: Binding(get: { value }, set: { RegistrySettings.willChange(setting.key); value = $0 }))
     }
 }
 
@@ -50,7 +48,7 @@ struct RegistryPicker: View {
 
     var body: some View {
         if case .choice(let options) = setting.kind {
-            LunaPicker(setting.title, subtitle: setting.help,
+            SettingsMenuRow(setting.title, subtitle: setting.help,
                        selection: Binding(get: { value }, set: { RegistrySettings.willChange(setting.key); value = $0 }),
                        options: options.map { .init($0.value, $0.title) })
         }
@@ -69,7 +67,7 @@ struct RegistryIntPicker: View {
 
     var body: some View {
         if case .intChoice(let options) = setting.kind {
-            LunaPicker(setting.title, subtitle: setting.help,
+            SettingsMenuRow(setting.title, subtitle: setting.help,
                        selection: Binding(get: { value }, set: { RegistrySettings.willChange(setting.key); value = $0 }),
                        options: options.map { .init($0.value, $0.title) })
         }
