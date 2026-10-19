@@ -53,6 +53,7 @@ struct SidebarView: View {
                 ToolbarIconButton(systemName: "arrow.clockwise", help: "Reload (⌘R)") {
                     if let id = store.activeTabId { web.reload(in: id) }
                 }
+                ShieldsButton(web: web, extensions: extensions, tabId: store.activeTabId, url: activeTab?.url)
             }
         }
         .frame(height: Self.topRowHeight)

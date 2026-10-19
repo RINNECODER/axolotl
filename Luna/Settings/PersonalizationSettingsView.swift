@@ -35,6 +35,11 @@ struct PersonalizationSettingsView: View {
                 RegistryToggle("privacy.httpsFirst")
             }
 
+            SettingsCard("Shields", footer: "Defaults for every site. Change one site from the Shields button next to the address bar; HTTPS upgrades follow the Privacy setting above.") {
+                RegistryPicker("shields.level")
+                RegistryToggle("shields.blockScripts")
+            }
+
             SettingsCard("Browsing data") {
                 if profileManager.profiles.count > 1 {
                     SettingsMenuRow("Profile", selection: $dataProfileId,

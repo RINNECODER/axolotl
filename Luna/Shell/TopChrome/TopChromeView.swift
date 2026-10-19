@@ -200,6 +200,7 @@ struct TopChromeView: View {
                 )
                 .padding(.horizontal, 7)
                 }
+                ShieldsButton(web: web, extensions: extensions, tabId: store.activeTabId, url: activeURL)
                 ChromeToolbarButton(systemName: "sparkles", help: "Luna AI (⌘E)", action: actions.toggleAI)
                 ChromeExtensionsButton(extensions: extensions)
                 DownloadsButton()
@@ -279,6 +280,7 @@ struct TopChromeView: View {
 
     private var toolbarIcons: some View {
         HStack(spacing: 2) {
+            ShieldsButton(web: web, extensions: extensions, tabId: store.activeTabId, url: activeURL)
             ToolbarIconButton(systemName: "sparkles", help: "Luna AI (⌘E)", action: actions.toggleAI)
             DownloadsButton()
             profileControl

@@ -236,6 +236,10 @@ struct SmartSearchView: View {
                         .padding(.top, 28)
                         .transition(.opacity)
                 }
+                if inputText.isEmpty {
+                    ShieldsStatLine(counter: webViewWrapper.shieldsCounter)
+                        .padding(.top, 20)
+                }
             }
             .padding(.horizontal, max(12, min(32, geo.size.width * 0.04)))
             .padding(.top, topOffset + searchBarOffset)
