@@ -45,6 +45,15 @@ nonisolated enum SessionLocation: Equatable, Hashable, Sendable {
 
 /// Enough to resume a session: harness, id and the folder it runs in.
 nonisolated struct DevSessionRef: Equatable, Hashable, Sendable {
+    /// `id` as a safe command-line value: letters, digits, `_` and `-`, never starting with `-`
+    /// (transcript data must not turn into a CLI option). nil when it is not.
+    static func validID(_ id: String?) -> String? {
+        guard let id, !id.isEmpty, id.count <= 128, id.first != "-",
+              id.utf8.allSatisfy({ ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x41 && $0 <= 0x5A) || ($0 >= 0x61 && $0 <= 0x7A) || $0 == 0x5F || $0 == 0x2D })
+        else { return nil }
+        return id
+    }
+
     let harness: AgentCLIKind
     let id: String
     let projectDir: URL
@@ -109,6 +118,13 @@ actor SessionSync {
     private let indexURL: URL?
     private var indexLoaded = false
     private var indexDirty = false
+    // Liveness polling runs every few seconds per open session: keep it from walking
+    // ~/.codex/sessions or reading every process's arguments each time. Wall-clock TTLs.
+    private var processCache: (at: Date, list: [AgentProcess])?
+    private var rolloutCache: (at: Date, list: [(URL, FileStamp)])?
+    private var newestCache: [String: (at: Date, id: String?)] = [:]
+    private static let processTTL: TimeInterval = 3
+    private static let listingTTL: TimeInterval = 10
 
     init(claudeRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects", isDirectory: true),
          codexRoot: URL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions", isDirectory: true),
@@ -200,7 +216,7 @@ actor SessionSync {
     func liveLocation(of session: ExternalSession) -> SessionLocation? {
         if LunaActiveSessions.shared.contains(session.id) { return .luna }
         guard isStillLive(session) else { return nil }
-        let pid = processes().first { $0.harness == session.harness && Self.samePath($0.cwd, session.projectDir) }?.pid
+        let pid = cachedProcesses().first { $0.harness == session.harness && Self.samePath($0.cwd, session.projectDir) }?.pid
         return .externalTerminal(pid: pid)
     }
 
@@ -216,8 +232,25 @@ actor SessionSync {
             }
             return nil
         case .codex:
-            return codexRollouts(since: .distantPast).first { $0.0.lastPathComponent.hasSuffix("-\(id).jsonl") }?.0
+            return cachedCodexRollouts().first { $0.0.lastPathComponent.hasSuffix("-\(id).jsonl") }?.0
         }
+    }
+
+    private func cachedProcesses() -> [AgentProcess] {
+        let wall = Date()
+        if let processCache, wall.timeIntervalSince(processCache.at) < Self.processTTL { return processCache.list }
+        let list = processes()
+        processCache = (wall, list)
+        return list
+    }
+
+    /// Every rollout file, listing cached for `listingTTL` (used for id -> file lookups).
+    private func cachedCodexRollouts() -> [(URL, FileStamp)] {
+        let wall = Date()
+        if let rolloutCache, wall.timeIntervalSince(rolloutCache.at) < Self.listingTTL { return rolloutCache.list }
+        let list = codexRollouts(since: .distantPast)
+        rolloutCache = (wall, list)
+        return list
     }
 
     /// Rollout files modified since `since`.
@@ -255,8 +288,16 @@ actor SessionSync {
     func isStillLive(_ session: ExternalSession) -> Bool {
         let stamp = FileStamp(session.file)
         let updated = stamp?.modified ?? session.updatedAt
-        let live = processes().contains { $0.harness == session.harness && Self.samePath($0.cwd, session.projectDir) }
-        let newest = sessions(projectDir: session.projectDir, limit: 5).first { $0.harness == session.harness }?.id
+        let live = cachedProcesses().contains { $0.harness == session.harness && Self.samePath($0.cwd, session.projectDir) }
+        let key = "\(session.harness.rawValue)|\(session.projectDir.path)"
+        let wall = Date()
+        let newest: String?
+        if let hit = newestCache[key], wall.timeIntervalSince(hit.at) < Self.listingTTL {
+            newest = hit.id
+        } else {
+            newest = sessions(projectDir: session.projectDir, limit: 5).first { $0.harness == session.harness }?.id
+            newestCache[key] = (wall, newest)
+        }
         return Self.isLive(updatedAt: updated, now: now(), processInProject: live,
                            isNewest: newest == nil || newest == session.id, startedInLuna: session.startedInLuna)
     }
@@ -269,11 +310,14 @@ actor SessionSync {
 
     /// Tails any transcript file; waits for it to appear (a new Claude session writes its
     /// file only after the first prompt).
-    nonisolated func follow(file: URL, harness: AgentCLIKind, interval: TimeInterval = 0.4) -> AsyncStream<CLIEvent> {
+    nonisolated func follow(file: URL, harness: AgentCLIKind, interval: TimeInterval = 0.4,
+                            maxHistoryBytes: UInt64 = SessionSync.followHistoryBytes) -> AsyncStream<CLIEvent> {
         let (stream, continuation) = AsyncStream.makeStream(of: CLIEvent.self, bufferingPolicy: .unbounded)
         let task = Task.detached(priority: .utility) {
             var tailer = TranscriptTailer(harness: harness)
             var offset: UInt64 = 0
+            var started = false
+            var skipPartialLine = false
             var framer = NDJSONFramer()
             while !Task.isCancelled {
                 guard let handle = try? FileHandle(forReadingFrom: file) else {
@@ -281,14 +325,31 @@ actor SessionSync {
                     continue
                 }
                 let size = (try? handle.seekToEnd()) ?? 0
-                if size < offset { offset = 0; framer = NDJSONFramer() } // truncated or replaced
+                if !started {
+                    started = true
+                    let start = Self.tailStartOffset(size: size, maxBytes: maxHistoryBytes)
+                    if start > 0 {
+                        // Begin one byte early and drop up to the first newline, so replay starts on a line boundary.
+                        offset = start - 1
+                        skipPartialLine = true
+                        continuation.yield(.historyTruncated(skippedBytes: start))
+                    }
+                } else if size < offset { offset = 0; framer = NDJSONFramer(); skipPartialLine = false } // truncated or replaced
                 if size > offset {
                     try? handle.seek(toOffset: offset)
                     while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
                         offset += UInt64(chunk.count)
-                        for line in framer.append(chunk) {
+                        var data = chunk
+                        if skipPartialLine {
+                            guard let nl = data.firstIndex(of: 0x0A) else { continue }
+                            data = data[data.index(after: nl)...]
+                            skipPartialLine = false
+                        }
+                        for line in framer.append(data) {
                             for event in tailer.events(forLine: line) { continuation.yield(event) }
                         }
+                        await Task.yield()
+                        if Task.isCancelled { break }
                     }
                 }
                 try? handle.close()
@@ -298,6 +359,14 @@ actor SessionSync {
         }
         continuation.onTermination = { _ in task.cancel() }
         return stream
+    }
+
+    /// History replay reads at most this much from the end of a transcript.
+    static let followHistoryBytes: UInt64 = 8 << 20
+
+    /// Where replay starts: 0, or `size - maxBytes` for a larger file.
+    nonisolated static func tailStartOffset(size: UInt64, maxBytes: UInt64) -> UInt64 {
+        size > maxBytes ? size - maxBytes : 0
     }
 
     // MARK: Liveness (pure)
@@ -373,7 +442,7 @@ actor SessionSync {
         guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               object["type"] as? String == "session_meta",
               let payload = object["payload"] as? [String: Any],
-              let id = payload["id"] as? String, let cwd = payload["cwd"] as? String else { return nil }
+              let id = DevSessionRef.validID(payload["id"] as? String), let cwd = payload["cwd"] as? String else { return nil }
         return CodexHead(id: id, cwd: cwd, originator: payload["originator"] as? String)
     }
 
@@ -587,7 +656,7 @@ nonisolated struct TranscriptSummary: Equatable, Sendable {
         }
 
         func build(updatedAt: Date, fallbackID: String?) -> TranscriptSummary? {
-            guard let id = id ?? fallbackID else { return nil }
+            guard let id = DevSessionRef.validID(id) ?? DevSessionRef.validID(fallbackID) else { return nil }
             let prompt = firstPrompt.map(SessionSync.title(from:)) ?? ""
             let title = aiTitle.map(SessionSync.title(from:)) ?? prompt
             return TranscriptSummary(id: id, title: title, firstPrompt: prompt, messageCount: count,
@@ -662,7 +731,7 @@ nonisolated enum TranscriptMapper {
         guard let payload = o["payload"] as? [String: Any] else { return [] }
         switch o["type"] as? String {
         case "session_meta":
-            return (payload["id"] as? String).map { [.session($0)] } ?? []
+            return DevSessionRef.validID(payload["id"] as? String).map { [.session($0)] } ?? []
         case "response_item":
             switch payload["type"] as? String {
             case "message":
@@ -709,7 +778,8 @@ nonisolated enum TranscriptMapper {
                                       "local-command-stdout", "local-command-stderr", "local-command-caveat",
                                       "user-prompt-submit-hook", "environment_context", "user_instructions",
                                       "ide_opened_file", "ide_selection", "ide_diagnostics", "task-notification",
-                                      "INSTRUCTIONS", "permissions instructions", "collaboration_mode"]
+                                      "INSTRUCTIONS", "permissions instructions", "collaboration_mode",
+                                      "bash-input", "bash-stdout", "bash-stderr"]
 
     static func attachmentChip(_ kind: String?) -> String { kind == "document" ? "[Attachment]" : "[Image]" }
     private static func isChip(_ s: String) -> Bool { s == "[Image]" || s == "[Attachment]" }
@@ -718,19 +788,39 @@ nonisolated enum TranscriptMapper {
     /// text, pure wrappers (`<command-name>…`, `<environment_context>`) and injected instructions.
     static func userText(_ text: String?) -> String? {
         guard var t = text else { return nil }
-        for tag in wrapperTags {
-            let escaped = NSRegularExpression.escapedPattern(for: tag)
-            t = t.replacingOccurrences(of: "<\(escaped)(\\s[^>]*)?>[\\s\\S]*?</\(escaped)>", with: "",
-                                       options: .regularExpression)
-        }
-        // Pasted text keeps its content, loses the tags.
-        t = t.replacingOccurrences(of: "</?pasted[-_ ]content[^>]*>", with: "", options: .regularExpression)
+        var unclosedWrapper = false
+        for tag in wrapperTags { t = removingBlocks(of: tag, from: t, unclosed: &unclosedWrapper) }
+        // Pasted text keeps its content, loses the tags (bounded pattern: no runaway scan on an unclosed "<").
+        t = t.replacingOccurrences(of: "</?pasted[-_ ]content[^>]{0,200}>", with: "", options: .regularExpression)
         let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.hasPrefix("<"),
+        guard !trimmed.isEmpty, !unclosedWrapper,
               !trimmed.hasPrefix("# AGENTS.md instructions"),
               !trimmed.hasPrefix("Caveat: The messages below were generated by the user while running local commands"),
               !trimmed.hasPrefix("This session is being continued from a previous conversation") else { return nil }
         return trimmed
+    }
+
+    /// Removes `<tag …>…</tag>` blocks with literal searches (linear; no lazy regex). An opening tag
+    /// with no closing one sets `unclosed` (the message is then a truncated wrapper, not user text).
+    private static func removingBlocks(of tag: String, from text: String, unclosed: inout Bool) -> String {
+        let open = "<" + tag, close = "</" + tag + ">"
+        var out = ""
+        var cursor = text.startIndex
+        while let start = text.range(of: open, options: .literal, range: cursor..<text.endIndex) {
+            let after = start.upperBound
+            guard after < text.endIndex, text[after] == ">" || text[after].isWhitespace else {
+                out += text[cursor..<after]; cursor = after; continue // "<tagx": a different tag
+            }
+            guard let end = text.range(of: close, options: .literal, range: after..<text.endIndex) else {
+                unclosed = true
+                out += text[cursor..<start.lowerBound]
+                return out
+            }
+            out += text[cursor..<start.lowerBound]
+            cursor = end.upperBound
+        }
+        out += text[cursor...]
+        return out
     }
 
     static func resultText(_ content: Any?) -> String {
@@ -776,7 +866,7 @@ nonisolated struct TranscriptTailer {
     mutating func events(forLine line: Data) -> [CLIEvent] {
         guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { return [] }
         var out: [CLIEvent] = []
-        if harness == .claudeCode, !announced, let id = object["sessionId"] as? String {
+        if harness == .claudeCode, !announced, let id = DevSessionRef.validID(object["sessionId"] as? String) {
             announced = true
             out.append(.sessionStarted(id: id))
         }
@@ -949,7 +1039,18 @@ nonisolated struct SessionIndexStore: Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         guard let data = try? encoder.encode(out) else { return }
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? data.write(to: url, options: .atomic)
+        PrivateFile.write(data, to: url)
+    }
+}
+
+/// Files holding prompt-derived text (titles): created 0600 in a 0700 folder, replaced atomically.
+nonisolated enum PrivateFile {
+    static func write(_ data: Data, to url: URL) {
+        let fm = FileManager.default
+        let dir = url.deletingLastPathComponent()
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let temp = dir.appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+        guard fm.createFile(atPath: temp.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return }
+        if rename(temp.path, url.path) != 0 { try? fm.removeItem(at: temp) }
     }
 }

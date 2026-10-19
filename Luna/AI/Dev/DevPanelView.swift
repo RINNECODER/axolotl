@@ -747,6 +747,8 @@ struct DevPanelView: View {
             DevTurnFooterView(footer: footer, sessionCost: thread.sessionCostUSD, palette: p)
         case .error(let message):
             DevErrorView(message: message, detail: "", palette: p)
+        case .notice(let message):
+            Text(message).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .center)
         case .crash(let status, let signaled, let tail):
             DevErrorView(message: "\(thread.kind.displayName) quit unexpectedly (\(signaled ? "signal" : "exit") \(status)). Send a message to start a new session.",
                          detail: tail, palette: p)

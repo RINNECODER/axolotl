@@ -79,6 +79,9 @@ enum CLIEvent: Equatable {
     case approvalRequest(CLIApprovalRequest)
     case turnDone(usage: CLIUsage?, outcome: CLITurnOutcome)
     case error(String)
+    /// History replay started near the end of a very large transcript: this many bytes of older
+    /// history were not loaded. Emitted first, only by `SessionSync.follow`.
+    case historyTruncated(skippedBytes: UInt64)
     /// The CLI process ended. Always the last event; the stream finishes after it.
     case exited(CLIExit)
 }
@@ -152,6 +155,32 @@ enum AgentCLISessions {
 /// Remembers the last session/thread id per CLI and project folder.
 nonisolated struct AgentCLIResumeStore {
     var defaults: UserDefaults = .standard
+    /// Where first-prompt titles live (0600 JSON, `[id: title]`), so prompt text never sits in
+    /// UserDefaults. nil keeps titles in `defaults` (tests with a scratch suite).
+    var titlesURL: URL?
+
+    init(defaults: UserDefaults = .standard, titlesURL: URL? = nil) {
+        self.defaults = defaults
+        self.titlesURL = titlesURL ?? (defaults === UserDefaults.standard ? Self.defaultTitlesURL : nil)
+    }
+
+    static var defaultTitlesURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Luna/Dev/resume-titles.json")
+    }
+
+    private func loadTitles() -> [String: String] {
+        guard let titlesURL, let data = try? Data(contentsOf: titlesURL),
+              let titles = try? JSONDecoder().decode([String: String].self, from: data) else { return [:] }
+        return titles
+    }
+
+    private func saveTitles(_ titles: [String: String]) {
+        guard let titlesURL else { return }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let data = try? encoder.encode(titles) { PrivateFile.write(data, to: titlesURL) }
+    }
 
     static func key(kind: AgentCLIKind, projectDir: URL) -> String {
         let path = projectDir.standardizedFileURL.resolvingSymlinksInPath().path
@@ -190,7 +219,16 @@ nonisolated struct AgentCLIResumeStore {
     /// Newest first, both CLIs.
     func history(projectDir: URL) -> [Record] {
         guard let data = defaults.data(forKey: Self.historyKey(projectDir: projectDir)),
-              let records = try? JSONDecoder().decode([Record].self, from: data) else { return [] }
+              var records = try? JSONDecoder().decode([Record].self, from: data) else { return [] }
+        if titlesURL != nil {
+            var titles = loadTitles()
+            var migrated = false
+            for i in records.indices {
+                if let legacy = records[i].title { titles[records[i].id] = titles[records[i].id] ?? legacy; migrated = true }
+                records[i].title = titles[records[i].id]
+            }
+            if migrated { saveTitles(titles); store(records, projectDir: projectDir) } // moves old UserDefaults titles out
+        }
         return records.sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -212,9 +250,20 @@ nonisolated struct AgentCLIResumeStore {
         record.updatedAt = Date()
         change(&record)
         records.insert(record, at: 0)
-        if let data = try? JSONEncoder().encode(Array(records.prefix(Self.historyLimit))) {
-            defaults.set(data, forKey: Self.historyKey(projectDir: projectDir))
+        let kept = Array(records.prefix(Self.historyLimit))
+        if titlesURL != nil {
+            var titles = loadTitles()
+            for r in kept { if let t = r.title { titles[r.id] = t } }
+            saveTitles(titles)
         }
+        store(kept, projectDir: projectDir)
+    }
+
+    /// Writes the record list to UserDefaults, without titles when they live in the file.
+    private func store(_ records: [Record], projectDir: URL) {
+        var out = records
+        if titlesURL != nil { for i in out.indices { out[i].title = nil } }
+        if let data = try? JSONEncoder().encode(out) { defaults.set(data, forKey: Self.historyKey(projectDir: projectDir)) }
     }
 
     func forget(kind: AgentCLIKind, projectDir: URL) {

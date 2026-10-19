@@ -70,6 +70,7 @@ final class DevSession: Identifiable {
     @ObservationIgnored private var headless: AgentCLISession?
     @ObservationIgnored private var headlessPump: Task<Void, Never>?
     @ObservationIgnored private var followTask: Task<Void, Never>?
+    @ObservationIgnored private var followGeneration = 0
     @ObservationIgnored private var followedFile: URL?
     @ObservationIgnored private var livenessTask: Task<Void, Never>?
     @ObservationIgnored private var pendingSends: [String] = []
@@ -106,6 +107,9 @@ final class DevSession: Identifiable {
     var ref: DevSessionRef? { sessionID.map { DevSessionRef(harness: harness, id: $0, projectDir: projectDir) } }
 
     var isTerminalRunning: Bool { terminal?.isRunning == true }
+    /// The terminal was closed but its program has not exited yet (up to ~2 s): headless sends wait,
+    /// so two writers never append to the session at once.
+    var isTerminalClosing: Bool { terminal?.isTerminating == true }
     var isExternalLive: Bool { externalLocation != nil }
 
     var state: State {
@@ -128,6 +132,7 @@ final class DevSession: Identifiable {
 
     var canSend: Bool {
         if case .refused = Self.route(terminalRunning: isTerminalRunning, externalLive: isExternalLive) { return false }
+        if !isTerminalRunning, isTerminalClosing { return false }
         if !isTerminalRunning, headlessAlive, !timeline.canSend { return false }
         return true
     }
@@ -144,7 +149,8 @@ final class DevSession: Identifiable {
     func send(_ text: String) -> SendRoute {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .refused("Empty message.") }
-        let route = Self.route(terminalRunning: isTerminalRunning, externalLive: isExternalLive)
+        var route = Self.route(terminalRunning: isTerminalRunning, externalLive: isExternalLive)
+        if case .headless = route, isTerminalClosing { route = .refused("The terminal is still closing. Try again in a moment.") }
         switch route {
         case .terminal:
             // The transcript tail adds the user message to the timeline.
@@ -170,7 +176,7 @@ final class DevSession: Identifiable {
         term.onSessionDiscovered = { [weak self] id, file in self?.terminalFound(id: id, file: file) }
         term.onExit = { [weak self] _ in self?.terminalExited() }
         if let ref {
-            term.open(.resume(ref))
+            term.open(.resume(ref), resumeApproval: setup.approvalBehavior)
         } else {
             term.open(.newSession(harness, setup, projectDir: projectDir))
         }
@@ -339,23 +345,29 @@ final class DevSession: Identifiable {
         if fresh || !timeline.items.isEmpty { timeline = DevThreadState(kind: harness) }
         timeline.attached()
         followedFile = file
+        followGeneration += 1
+        let generation = followGeneration
         let stream = deps.follow(file, harness)
         followTask = Task { [weak self] in
             // History arrives as a burst of events: apply them in one pass per window, so the
             // chat renders (and scrolls) once instead of once per event.
             let coalescer = DevEventCoalescer { [weak self] events in
-                guard let self, self.followedFile == file else { return }
+                guard let self, self.followedFile == file, self.followGeneration == generation else { return }
                 for event in events { self.timeline.apply(event) }
             }
             for await event in stream {
                 guard self != nil else { return }
                 coalescer.add(event)
             }
-            coalescer.flush()
+            // A cancelled follow must not deliver its buffered tail: the file may be re-followed
+            // from the start already, and those events would duplicate in the new timeline.
+            if Task.isCancelled { coalescer.cancel() } else { coalescer.flush() }
         }
     }
 
+
     private func stopFollow() {
+        followGeneration += 1
         followTask?.cancel()
         followTask = nil
         followedFile = nil
@@ -462,6 +474,13 @@ final class DevEventCoalescer {
             guard !Task.isCancelled else { return }
             self?.flush()
         }
+    }
+
+    /// Drops what is buffered without delivering it.
+    func cancel() {
+        timer?.cancel()
+        timer = nil
+        buffer = []
     }
 
     func flush() {

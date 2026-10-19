@@ -91,6 +91,9 @@ targetTemplates:
     dependencies:
       - package: MarkdownUI
       - package: LaTeXSwiftUI
+      # SwiftTerm is linked by both apps: Dev code (DevTerminalController / DevSession, which LunaTests
+      # also exercise) shares sources, and the Dev mode UI is gated at runtime, not with #if LUNA_DEV.
+      # Moving it to LunaDev alone needs a terminal abstraction first.
       - package: SwiftTerm
     configFiles:
       Debug: Signing.xcconfig

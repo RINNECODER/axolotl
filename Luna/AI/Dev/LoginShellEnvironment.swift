@@ -16,11 +16,34 @@ nonisolated enum LoginShellEnvironment {
 
     /// PATH from `zsh -lic`, resolved once and cached; the fallback list if the shell fails.
     static func path() -> String {
+        lock.lock()
+        if let cachedPATH { lock.unlock(); return cachedPATH }
+        lock.unlock()
+        // The shell runs outside the lock so other callers are not blocked behind it.
+        let resolved = merged(shellPATH: runLoginShell(), home: NSHomeDirectory())
         lock.lock(); defer { lock.unlock() }
         if let cachedPATH { return cachedPATH }
-        let resolved = merged(shellPATH: runLoginShell(), home: NSHomeDirectory())
         cachedPATH = resolved
         return resolved
+    }
+
+    /// Both caches are filled, so `path()` / `environment()` return without spawning a shell.
+    static var isWarm: Bool {
+        lock.lock(); defer { lock.unlock() }
+        if cachedPATH == nil { return false }
+        if case .some = cachedShellEnvironment { return true }
+        return false
+    }
+
+    /// Fills both caches (blocking; call off the main actor).
+    static func prewarm() {
+        _ = path()
+        _ = baseEnvironment()
+    }
+
+    /// `prewarm()` on a background thread. Call when Dev mode starts; never blocks the caller.
+    static func prewarmAsync() async {
+        await Task.detached(priority: .userInitiated) { prewarm() }.value
     }
 
     /// The child environment for a CLI: what a fresh Terminal window would have (the login

@@ -176,3 +176,9 @@ Contributions are welcome.
 [MIT](LICENSE). Use it, fork it and ship it, as long as the copyright notice comes along.
 
 Agent mode (`/agent <goal>` in the AI panel) is a native port of [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, Copyright (c) 2026 Browser Use).
+
+## Credits
+
+- Agent mode: [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, Copyright (c) 2026 Browser Use).
+- Dev mode's chat layout and work log are inspired by [T3 Code](https://github.com/pingdotgg/t3code) (MIT). No T3 Code source is bundled.
+- Terminal rendering: [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT).

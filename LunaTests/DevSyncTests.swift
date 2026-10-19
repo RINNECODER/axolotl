@@ -271,6 +271,42 @@ final class DevSyncTests: XCTestCase {
         XCTAssertEqual(liveSessions.first { $0.harness == .codex }?.isLive, false)
     }
 
+    func testTailStartOffset() {
+        XCTAssertEqual(SessionSync.tailStartOffset(size: 100, maxBytes: 1_000), 0)
+        XCTAssertEqual(SessionSync.tailStartOffset(size: 1_000, maxBytes: 1_000), 0)
+        XCTAssertEqual(SessionSync.tailStartOffset(size: 10_000, maxBytes: 1_000), 9_000)
+    }
+
+    func testFollowOfHugeFileStartsNearTheEndOnALineBoundary() async throws {
+        let f = try makeFixture()
+        var lines = ""
+        for i in 0..<200 {
+            lines += line(["type": "user", "sessionId": "11111111-aaaa", "message": ["role": "user", "content": "message number \(i) with padding padding padding"]]) + "\n"
+        }
+        try Data(lines.utf8).write(to: f.claudeFile)
+        let sync = SessionSync(claudeRoot: f.claudeRoot, codexRoot: f.codexRoot, processes: { [] },
+                               resumeStore: AgentCLIResumeStore(defaults: scratchDefaults()))
+        var iterator = sync.follow(file: f.claudeFile, harness: .claudeCode, interval: 0.05, maxHistoryBytes: 2_000).makeAsyncIterator()
+        guard case .historyTruncated(let skipped)? = await iterator.next() else { return XCTFail("marker first") }
+        XCTAssertGreaterThan(skipped, 0)
+        var users: [String] = []
+        for _ in 0..<4 { if case .userMessage(let t)? = await iterator.next() { users.append(t) } } // + one sessionStarted
+        XCTAssertEqual(users.count, 3, "whole lines only; the partial first line was dropped")
+        XCTAssertTrue(users.allSatisfy { $0.hasPrefix("message number ") })
+        XCTAssertFalse(users.contains("message number 0 with padding padding padding"))
+    }
+
+    func testSessionIDsMustNotLookLikeOptions() {
+        XCTAssertEqual(DevSessionRef.validID("11111111-aaaa"), "11111111-aaaa")
+        XCTAssertEqual(DevSessionRef.validID("thread_1"), "thread_1")
+        XCTAssertNil(DevSessionRef.validID("--dangerously-skip-permissions"))
+        XCTAssertNil(DevSessionRef.validID("-x"))
+        XCTAssertNil(DevSessionRef.validID("a b"))
+        XCTAssertNil(DevSessionRef.validID("a/../b"))
+        XCTAssertNil(DevSessionRef.validID(""))
+        XCTAssertNil(DevSessionRef.validID(nil))
+    }
+
     func testFollowReplaysHistoryThenTails() async throws {
         let f = try makeFixture()
         let sync = SessionSync(claudeRoot: f.claudeRoot, codexRoot: f.codexRoot, processes: { [] },
@@ -466,6 +502,17 @@ final class TranscriptUserTextTests: XCTestCase {
     func testIdeContextAndHookOutputStripped() {
         let t = "<ide_opened_file>The user opened a.swift</ide_opened_file>look at this<user-prompt-submit-hook>hook</user-prompt-submit-hook>"
         XCTAssertEqual(users(claudeUser(t)), ["look at this"])
+    }
+    func testMessageStartingWithAnAngleBracketIsKept() {
+        XCTAssertEqual(users(claudeUser("<div> is broken, why?")), ["<div> is broken, why?"])
+        XCTAssertEqual(users(claudeUser("<system-reminder>x</system-reminder><div>")), ["<div>"])
+        XCTAssertEqual(users(claudeUser("<system-reminder>cut off, never closed")), [], "a truncated wrapper is not user text")
+    }
+    func testUnclosedTagsStayLinear() {
+        let t = String(repeating: "<pasted-content ", count: 4_000) + String(repeating: "<command-name ", count: 4_000)
+        let start = Date()
+        _ = users(claudeUser(t))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
     }
     func testPastedContentKeepsTextNotTags() {
         XCTAssertEqual(users(claudeUser("see <pasted-content id=\"1\">line a\nline b</pasted-content>")), ["see line a\nline b"])

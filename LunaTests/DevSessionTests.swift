@@ -283,6 +283,10 @@ final class DevSessionTests: XCTestCase {
         XCTAssertEqual(DevTerminalCommand.keystrokes(for: "run tests").body, "run tests")
         XCTAssertEqual(DevTerminalCommand.keystrokes(for: "run tests").submit, "\r")
         XCTAssertEqual(DevTerminalCommand.keystrokes(for: "a\r\nb").body, "\u{1b}[200~a\nb\u{1b}[201~")
+        // Chat text is data: no escape, CR or ^C reaches the PTY, so it cannot end the paste early or press keys.
+        XCTAssertEqual(DevTerminalCommand.keystrokes(for: "x\u{1b}[201~!rm -rf\r\u{3}y").body, "x[201~!rm -rfy")
+        XCTAssertEqual(DevTerminalCommand.keystrokes(for: "a\u{1b}[201~\nb").body, "\u{1b}[200~a[201~\nb\u{1b}[201~")
+        XCTAssertEqual(DevTerminalCommand.keystrokes(for: "tab\there\u{7f}").body, "tab\there")
     }
 
     func testApprovalPromptDetectionOnScreenText() {
@@ -542,6 +546,16 @@ final class DevEventCoalescerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(120))
         XCTAssertEqual(batches.count, 1)
         XCTAssertEqual(batches.first?.count, 600)
+    }
+
+    func testCancelDropsBufferedEventsInsteadOfDeliveringThem() async throws {
+        var batches: [[CLIEvent]] = []
+        let c = DevEventCoalescer(window: .milliseconds(20)) { batches.append($0) }
+        c.add(.textDelta("stale"))
+        c.cancel()
+        c.flush()
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertTrue(batches.isEmpty, "a cancelled follow must not duplicate its tail into a re-followed timeline")
     }
 
     func testFlushDeliversPendingImmediately() {

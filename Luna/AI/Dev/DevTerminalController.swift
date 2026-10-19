@@ -68,10 +68,12 @@ extension DevApprovalBehavior {
 ///     codex new:   codex [-m M] -a A -s S [-c model_reasoning_effort="E"] [-c mcp_servers.luna.url=… -c mcp_servers.luna.bearer_token_env_var=…]
 ///     codex res:   codex resume -a A -s S [-c mcp…] <id>
 enum DevTerminalCommand {
-    static func launch(for mode: DevTerminalMode, approval: DevApprovalBehavior, shell: String,
+    /// `resumeApproval` (the session's own setup) wins over the global `approval` for resumes.
+    static func launch(for mode: DevTerminalMode, approval globalApproval: DevApprovalBehavior, resumeApproval: DevApprovalBehavior? = nil, shell: String,
                        executable: (AgentCLIKind) -> String, mcp: DevMCPAttachment?, claudeMCPConfig: URL?,
                        newSessionID: String = UUID().uuidString.lowercased()) -> DevTerminalLaunch {
         let dir = mode.workingDirectory
+        let approval = resumeApproval ?? globalApproval
         switch mode {
         case .shell:
             return DevTerminalLaunch(executable: shell, arguments: ["-l"], workingDirectory: dir)
@@ -115,9 +117,20 @@ enum DevTerminalCommand {
     /// What `send(text:)` writes: the text (bracketed paste when it has a newline, so a
     /// multi-line prompt is one input instead of several submits), then Return on its own.
     static func keystrokes(for text: String) -> (body: String, submit: String) {
-        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let normalized = sanitized(text.replacingOccurrences(of: "\r\n", with: "\n"))
         if normalized.contains("\n") { return ("\u{1b}[200~" + normalized + "\u{1b}[201~", "\r") }
         return (normalized, "\r")
+    }
+
+    /// Chat text is data, not keystrokes: drops ESC (an embedded `ESC[201~` would end the bracketed
+    /// paste early), CR, ^C and every other C0/C1 control and DEL. Newline and tab stay.
+    static func sanitized(_ text: String) -> String {
+        var out = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            let v = scalar.value
+            if v == 0x0A || v == 0x09 || (v >= 0x20 && v != 0x7F && !(v >= 0x80 && v <= 0x9F)) { out.append(scalar) }
+        }
+        return String(out)
     }
 }
 
@@ -144,7 +157,7 @@ nonisolated struct SessionStoreWatcher: Sendable {
                 }
                 let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.creationDateKey])) ?? []
                 for file in files where file.pathExtension == "jsonl" {
-                    let id = file.deletingPathExtension().lastPathComponent
+                    guard let id = DevSessionRef.validID(file.deletingPathExtension().lastPathComponent) else { continue }
                     if !ignoring.contains(id), Self.created(file) >= since.addingTimeInterval(-1) { return (id, file) }
                 }
             }
@@ -320,6 +333,9 @@ final class DevTerminalController {
     /// Its transcript, once written.
     private(set) var sessionFile: URL?
     private(set) var isRunning = false
+    /// `terminate()` was called and the program has not exited yet (SIGHUP, then SIGKILL after 2 s).
+    private(set) var isTerminating = false
+    @ObservationIgnored private var terminatingPTY: PTYSession?
     /// Exit code of the last run (nil while running or when killed by a signal).
     private(set) var exitCode: Int32?
     private(set) var launchError: String?
@@ -345,6 +361,9 @@ final class DevTerminalController {
     @ObservationIgnored private var mcpConfig: URL?
     @ObservationIgnored private var screenTail = Data()
     @ObservationIgnored private var pendingLaunch: DevTerminalLaunch?
+    @ObservationIgnored private var openGeneration = 0
+    @ObservationIgnored private var typeQueue: [(body: String, submit: String)] = []
+    @ObservationIgnored private var isTyping = false
     @ObservationIgnored private var readiness = DevCLIReadiness.immediate()
     @ObservationIgnored private var flushTask: Task<Void, Never>?
     @ObservationIgnored private var bridge: TerminalBridge?
@@ -379,6 +398,9 @@ final class DevTerminalController {
         return view
     }
 
+    /// UserDefaults key: let terminal programs write the clipboard (OSC 52). Default off.
+    nonisolated static let allowClipboardWritesKey = "luna.dev.terminal.allowClipboardWrites"
+
     /// The user's login shell (for `.shell`).
     nonisolated static var loginShell: String {
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? ""
@@ -387,8 +409,16 @@ final class DevTerminalController {
 
     /// Ends whatever runs and starts `mode`. Launches once the view has a real size (or after
     /// 0.5 s at 120x40 when nothing shows it), so the TUI draws its first screen at the right width.
-    func open(_ mode: DevTerminalMode) {
+    func open(_ mode: DevTerminalMode, resumeApproval: DevApprovalBehavior? = nil) {
         terminate()
+        openGeneration += 1
+        let generation = openGeneration
+        if case .resume(let ref) = mode, DevSessionRef.validID(ref.id) == nil {
+            currentMode = mode
+            launchError = "Invalid session id"
+            isRunning = false
+            return
+        }
         currentMode = mode
         launchError = nil
         exitCode = nil
@@ -404,20 +434,38 @@ final class DevTerminalController {
             readiness = .immediate()
             isReady = true
         }
+        isRunning = true
+        // The login-shell PATH / environment can take seconds on a cold cache: resolve them off the
+        // main actor, then build the launch.
+        if LoginShellEnvironment.isWarm {
+            prepareLaunch(mode, resumeApproval: resumeApproval)
+        } else {
+            Task { [weak self] in
+                await LoginShellEnvironment.prewarmAsync()
+                guard let self, self.openGeneration == generation else { return }
+                self.prepareLaunch(mode, resumeApproval: resumeApproval)
+            }
+        }
+    }
+
+    private func prepareLaunch(_ mode: DevTerminalMode, resumeApproval: DevApprovalBehavior?) {
         if mode.harness != nil {
             mcp = mcpProvider()
             if let mcp, mode.harness == .claudeCode { mcpConfig = try? mcp.writeClaudeConfig() }
         }
-        let launch = DevTerminalCommand.launch(for: mode, approval: approval(), shell: Self.loginShell,
+        let launch = DevTerminalCommand.launch(for: mode, approval: approval(), resumeApproval: resumeApproval, shell: Self.loginShell,
                                                executable: executable, mcp: mcp, claudeMCPConfig: mcpConfig)
         lastLaunch = launch
         pendingLaunch = launch
-        isRunning = true
         let terminal = terminalView.getTerminal()
         if terminalView.window != nil, terminal.cols >= 20, terminal.rows >= 5 {
             launchPending()
         } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.launchPending() }
+            let generation = openGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self, self.openGeneration == generation else { return }
+                self.launchPending()
+            }
         }
     }
 
@@ -449,6 +497,7 @@ final class DevTerminalController {
             for await chunk in pty.output {
                 guard let self, self.pty === pty else { return }
                 self.terminalView.feed(byteArray: ArraySlice([UInt8](chunk)))
+                pty.noteConsumed(chunk.count)
                 self.outputObserver?(chunk)
                 self.noteScreen(chunk)
             }
@@ -542,14 +591,25 @@ final class DevTerminalController {
         type(text)
     }
 
+    /// Sends are serialized: the next body is not written until the previous one's Return has gone.
     private func type(_ text: String) {
-        guard let pty, isRunning else { return }
-        let keys = DevTerminalCommand.keystrokes(for: text)
+        typeQueue.append(DevTerminalCommand.keystrokes(for: text))
+        pumpTypeQueue()
+    }
+
+    private func pumpTypeQueue() {
+        guard !isTyping, !typeQueue.isEmpty else { return }
+        guard let pty, isRunning else { typeQueue = []; return }
+        isTyping = true
+        let keys = typeQueue.removeFirst()
         screenTail.removeAll()
         pty.write(keys.body)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self, self.pty === pty else { return }
+            guard let self else { return }
+            self.isTyping = false
+            guard self.pty === pty else { self.typeQueue = []; return }
             pty.write(keys.submit)
+            self.pumpTypeQueue()
         }
     }
 
@@ -562,14 +622,21 @@ final class DevTerminalController {
 
     /// SIGHUP to the program (SIGKILL after 2 s), like closing a Terminal tab.
     func terminate() {
+        openGeneration += 1
         pendingLaunch = nil
         flushTask?.cancel()
         flushTask = nil
         queuedSends = []
+        typeQueue = []
+        isTyping = false
         watcherTask?.cancel()
         watcherTask = nil
         reader?.cancel()
         reader = nil
+        if let pty, !isTerminating || terminatingPTY == nil {
+            terminatingPTY = pty
+            isTerminating = true
+        }
         pty?.terminate()
         pty = nil
         if isRunning { isRunning = false }
@@ -577,6 +644,7 @@ final class DevTerminalController {
     }
 
     private func processEnded(_ code: Int32?, pty ended: PTYSession) {
+        if terminatingPTY === ended { terminatingPTY = nil; isTerminating = false }
         guard pty === ended else { return }
         exitCode = code
         isRunning = false
@@ -619,7 +687,9 @@ final class DevTerminalController {
             }
         }
 
+        /// OSC 52: a program writing to the clipboard. Off unless the user turns it on (default off).
         func clipboardCopy(source: TerminalView, content: Data) {
+            guard UserDefaults.standard.bool(forKey: DevTerminalController.allowClipboardWritesKey) else { return }
             if let text = String(data: content, encoding: .utf8) {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(text, forType: .string)

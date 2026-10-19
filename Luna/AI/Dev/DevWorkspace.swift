@@ -38,6 +38,7 @@ final class DevWorkspace {
     // MARK: Loading
 
     func loadProjects(refresh: Bool = false) async {
+        Task.detached(priority: .utility) { LoginShellEnvironment.prewarm() } // off-main, so a terminal launch never waits on `zsh -lic`
         let found = await ProjectFinder.shared.projects(refresh: refresh)
         projects = found.filter { !DevSettings.shared.isHidden($0.path) }
         projectsLoaded = true
