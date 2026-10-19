@@ -945,7 +945,9 @@ struct BrowserShellView: View {
                         webViewWrapper: web,
                         tabId: currentId,
                         messages: aiChatMessagesBinding(for: currentId),
-                        onNavigate: { url in navigateToURL(url) }
+                        onNavigate: { url in navigateToURL(url) },
+                        urlSuggestions: urlSuggestionRows(for:),
+                        onOpenURLSuggestion: openSuggestion
                     )
                     .id(currentId)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1735,13 +1737,6 @@ private struct AddressBarSuggestionsList: View {
 
     private func isSelected(historyIndex: Int) -> Bool { selectedIndex == historyIndex }
 
-    private static func icon(_ kind: AddressSuggestion.Kind) -> String {
-        switch kind {
-        case .history: return "clock.arrow.circlepath"
-        case .bookmark: return "star"
-        case .openTab: return "square.on.square"
-        }
-    }
     private func isSelected(searchIndex: Int) -> Bool { selectedIndex == urlItems.count + searchIndex }
 
     var body: some View {
@@ -1751,7 +1746,7 @@ private struct AddressBarSuggestionsList: View {
                 let selected = isSelected(historyIndex: index)
                 Button(action: { onSelectURL(item) }) {
                     HStack {
-                        Image(systemName: Self.icon(item.kind))
+                        Image(systemName: item.symbol)
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                             .frame(width: 20)

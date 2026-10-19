@@ -97,6 +97,15 @@ struct AddressSuggestion: Equatable {
     let display: String
     let url: URL
     let kind: Kind
+
+    /// The row's SF Symbol (address bar and start page).
+    var symbol: String {
+        switch kind {
+        case .history: return "clock.arrow.circlepath"
+        case .bookmark: return "star"
+        case .openTab: return "square.on.square"
+        }
+    }
 }
 
 enum AddressSuggestions {

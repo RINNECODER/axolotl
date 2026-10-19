@@ -22,6 +22,10 @@ struct SmartSearchView: View {
     var tabId: UUID?
     @Binding var messages: [ChatMessage]
     let onNavigate: (URL) -> Void
+    /// The address bar's bookmark / history / open-tab rows for a query, and how to open one,
+    /// so this box suggests pages like Chrome's new-tab box.
+    var urlSuggestions: ((String) -> [AddressSuggestion])? = nil
+    var onOpenURLSuggestion: ((AddressSuggestion) -> Void)? = nil
 
     @AppStorage("luma_ai_provider")    private var aiProviderRaw: String = AIProvider.gemini.rawValue
     @AppStorage("luma_ollama_base_url") private var ollamaBaseURL: String = "http://127.0.0.1:11434"
@@ -55,6 +59,7 @@ struct SmartSearchView: View {
 
     // Suggestions
     @State private var searchSuggestions: [String] = []
+    @State private var urlRows: [AddressSuggestion] = []
     @State private var selectedSuggestionIndex: Int = -1
     @State private var suggestionDebounceTask: DispatchWorkItem? = nil
     @State private var suggestionKeyMonitor: Any? = nil
@@ -647,6 +652,12 @@ struct SmartSearchView: View {
             rows.append(SmartSuggestionRow(id: "chat", icon: "bubble.left.fill", label: trimmed, suffix: "Chat  \u{2318}\u{21A9}", action: .chat))
         }
 
+        for (i, page) in urlRows.enumerated() {
+            let switchesTab: Bool = { if case .openTab = page.kind { return true } else { return false } }()
+            rows.append(SmartSuggestionRow(id: "url-\(i)", icon: page.symbol, label: page.display,
+                                           suffix: switchesTab ? "Switch to tab" : nil, action: .open(page)))
+        }
+
         for (i, s) in searchSuggestions.prefix(6).enumerated() {
             let lower = s.lowercased()
             if lower == trimmed.lowercased() { continue }
@@ -717,6 +728,9 @@ struct SmartSearchView: View {
             inputText = text
             clearSuggestions()
             performSearch(text)
+        case .open(let page):
+            clearSuggestions()
+            onOpenURLSuggestion?(page)
         }
     }
 
@@ -731,18 +745,15 @@ struct SmartSearchView: View {
 
     private func fetchSuggestions(for query: String) {
         suggestionDebounceTask?.cancel()
-        guard searchSuggestionsEnabled else {
-            searchSuggestions = []
-            return
-        }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, trimmed.count >= 2 else {
-            searchSuggestions = []
-            return
-        }
+        if trimmed.isEmpty { urlRows = [] }
+        let wantsPhrases = searchSuggestionsEnabled && trimmed.count >= 2
+        if !wantsPhrases { searchSuggestions = [] }
+        guard !trimmed.isEmpty, wantsPhrases || urlSuggestions != nil else { return }
 
         let work = DispatchWorkItem { [trimmed] in
-            guard let url = SearchEngine.current.suggestURL(for: trimmed) else { return }
+            urlRows = urlSuggestions?(trimmed) ?? []
+            guard wantsPhrases, let url = SearchEngine.current.suggestURL(for: trimmed) else { return }
             var request = URLRequest(url: url)
             request.timeoutInterval = 3
             URLSession.shared.dataTask(with: request) { data, _, _ in
@@ -796,6 +807,7 @@ struct SmartSearchView: View {
 
     private func clearSuggestions() {
         searchSuggestions = []
+        urlRows = []
         selectedSuggestionIndex = -1
     }
 
@@ -1387,6 +1399,8 @@ private enum SmartSuggestionAction {
     case chat
     case search
     case fillAndSearch(String)
+    /// A bookmark, history page or open tab (the address bar's rows).
+    case open(AddressSuggestion)
 }
 
 private struct SmartThinkingStep: Identifiable {
