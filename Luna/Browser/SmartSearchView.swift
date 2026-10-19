@@ -24,7 +24,7 @@ struct SmartSearchView: View {
     let onNavigate: (URL) -> Void
     /// The address bar's bookmark / history / open-tab rows for a query, and how to open one,
     /// so this box suggests pages like Chrome's new-tab box.
-    var urlSuggestions: ((String) -> [AddressSuggestion])? = nil
+    var urlSuggestions: ((String) async -> [AddressSuggestion])? = nil
     var onOpenURLSuggestion: ((AddressSuggestion) -> Void)? = nil
 
     @AppStorage("luma_ai_provider")    private var aiProviderRaw: String = AIProvider.gemini.rawValue
@@ -753,7 +753,13 @@ struct SmartSearchView: View {
         guard !trimmed.isEmpty, wantsPhrases || urlSuggestions != nil else { return }
 
         let work = DispatchWorkItem { [trimmed] in
-            urlRows = urlSuggestions?(trimmed) ?? []
+            if let urlSuggestions {
+                Task {
+                    let rows = await urlSuggestions(trimmed)
+                    // A newer keystroke makes this answer stale.
+                    if inputText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed { urlRows = rows }
+                }
+            }
             guard wantsPhrases, let url = SearchEngine.current.suggestURL(for: trimmed) else { return }
             var request = URLRequest(url: url)
             request.timeoutInterval = 3

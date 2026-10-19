@@ -2,45 +2,60 @@
 import Foundation
 import Combine
 
-/// Manages persistent storage of browsing history and chat conversations.
-/// Stores data on disk in Application Support directory.
+/// Browsing history and chat conversation summaries for one profile.
+/// Visits live in SQLite (`HistoryStore`); every store call runs on `ioQueue`, never the main thread.
+/// `historyEvents` is only the newest `recentWindow` visits kept in memory for personalization;
+/// the history page and address bar query the store asynchronously.
 final class HistoryManager: ObservableObject {
     @Published private(set) var historyEvents: [HistoryEvent] = []
     @Published private(set) var conversationSummaries: [UUID: [ConversationSummary]] = [:] // tabId -> summaries
     
     private let fileManager = FileManager.default
     private let profileId: UUID
-    private let historyFileName = "browsing_history.json"
+    private let legacyHistoryFileName = "browsing_history.json"
     private let summariesFileName = "conversation_summaries.json"
-    private let maxHistoryCount = 10_000
-    private var pendingHistorySave: DispatchWorkItem?
+    private let recentWindow = 10_000
+    private var recordsSinceExpiry = 0
     private var pendingSummariesSave: DispatchWorkItem?
-    /// Serial queue for disk writes so JSON encoding of large histories never blocks the main thread.
+    /// Serial queue for disk writes so JSON encoding never blocks the main thread.
     private let saveQueue = DispatchQueue(label: "com.luna.history-save", qos: .utility)
-    
-    private var historyFileURL: URL {
+    /// Serial queue owning `store`.
+    nonisolated private let ioQueue = DispatchQueue(label: "com.luna.history-db", qos: .utility)
+    nonisolated private let store: HistoryStore
+
+    private var profileDir: URL {
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let lumaDir = appSupport.appendingPathComponent("Luna/Profiles/\(profileId.uuidString)", isDirectory: true)
-        try? fileManager.createDirectory(at: lumaDir, withIntermediateDirectories: true)
-        return lumaDir.appendingPathComponent(historyFileName)
+        return appSupport.appendingPathComponent("Luna/Profiles/\(profileId.uuidString)", isDirectory: true)
     }
     
     private var summariesFileURL: URL {
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let lumaDir = appSupport.appendingPathComponent("Luna/Profiles/\(profileId.uuidString)", isDirectory: true)
+        let lumaDir = profileDir
         try? fileManager.createDirectory(at: lumaDir, withIntermediateDirectories: true)
         return lumaDir.appendingPathComponent(summariesFileName)
     }
     
     init(profileId: UUID) {
         self.profileId = profileId
-        loadHistory()
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = appSupport.appendingPathComponent("Luna/Profiles/\(profileId.uuidString)", isDirectory: true)
+        store = HistoryStore(fileURL: dir.appendingPathComponent("history.sqlite"))
+        loadHistory(legacyJSON: dir.appendingPathComponent(legacyHistoryFileName))
         loadSummaries()
     }
 
     // Avoid the MainActor isolated-deinit executor hop that double-frees
     // task-local storage on current macOS runtimes (swiftlang/swift#88036).
     nonisolated deinit {}
+
+    private static func event(_ r: HistoryStore.Row) -> HistoryEvent {
+        HistoryEvent(id: r.id, timestamp: r.date, type: .pageVisit, url: r.url, pageTitle: r.title)
+    }
+
+    /// Runs `work` on the store queue and hands its result back on the main actor.
+    private func query<T: Sendable>(_ work: @escaping @Sendable (HistoryStore) -> T) async -> T {
+        let store = store
+        return await withCheckedContinuation { cont in ioQueue.async { cont.resume(returning: work(store)) } }
+    }
     
     // MARK: - Page Visit Tracking
     
@@ -62,32 +77,43 @@ final class HistoryManager: ObservableObject {
             pageTitle: title
         )
         historyEvents.insert(event, at: 0)
-        if historyEvents.count > maxHistoryCount {
-            historyEvents.removeLast(historyEvents.count - maxHistoryCount)
+        if historyEvents.count > recentWindow {
+            historyEvents.removeLast(historyEvents.count - recentWindow)
         }
-        scheduleHistorySave()
+        let row = HistoryStore.Row(id: event.id, date: event.timestamp, url: urlString, title: title)
+        recordsSinceExpiry += 1
+        let expire = recordsSinceExpiry >= 1_000
+        if expire { recordsSinceExpiry = 0 }
+        let store = store
+        ioQueue.async {
+            store.insert([row])
+            if expire { store.expire() }
+        }
     }
     
     /// Adds visits imported from another browser. Skips visits already present
-    /// (same URL within the same second), keeps newest-first order and the cap.
+    /// (same URL within the same second). Blocks the calling thread for the write,
+    /// so importers call it from a background thread, one batch at a time.
     /// Returns how many were added.
     @discardableResult
-    func importVisits(_ visits: [ImportedVisit]) -> Int {
-        guard !visits.isEmpty else { return 0 }
-        func key(_ url: String, _ date: Date) -> String { "\(Int(date.timeIntervalSince1970))|\(url)" }
-        var seen = Set(historyEvents.lazy.filter { $0.type == .pageVisit }.compactMap { e in e.url.map { key($0, e.timestamp) } })
-        var added: [HistoryEvent] = []
-        for v in visits where seen.insert(key(v.url, v.date)).inserted {
-            added.append(HistoryEvent(timestamp: v.date, type: .pageVisit, url: v.url, pageTitle: v.title))
-        }
+    nonisolated func importVisits(_ visits: [ImportedVisit]) -> Int {
+        let rows = visits.map { HistoryStore.Row(id: UUID(), date: $0.date, url: $0.url, title: $0.title) }
+        let store = store
+        let added = ioQueue.sync { store.insert(rows) ?? [] }
         guard !added.isEmpty else { return 0 }
-        var merged = historyEvents + added
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { mergeRecent(added) }
+        } else {
+            DispatchQueue.main.async { self.mergeRecent(added) }
+        }
+        return added.count
+    }
+
+    private func mergeRecent(_ rows: [HistoryStore.Row]) {
+        var merged = historyEvents + rows.map(Self.event)
         merged.sort { $0.timestamp > $1.timestamp }
-        if merged.count > maxHistoryCount { merged.removeLast(merged.count - maxHistoryCount) }
-        let kept = Set(merged.map(\.id))
+        if merged.count > recentWindow { merged.removeLast(merged.count - recentWindow) }
         historyEvents = merged
-        scheduleHistorySave()
-        return added.filter { kept.contains($0.id) }.count
     }
 
     // MARK: - Chat History Management
@@ -112,70 +138,46 @@ final class HistoryManager: ObservableObject {
         case last30Days
         case allTime
     }
+
+    /// Start of the timeframe; nil for all time.
+    static func cutoff(for timeframe: ClearTimeframe, now: Date = Date()) -> Date? {
+        let calendar = Calendar.current
+        switch timeframe {
+        case .today: return calendar.startOfDay(for: now)
+        case .thisWeek: return calendar.date(byAdding: .day, value: -7, to: now) ?? now
+        case .last30Days: return calendar.date(byAdding: .day, value: -30, to: now) ?? now
+        case .allTime: return nil
+        }
+    }
     
     func clearHistory(timeframe: ClearTimeframe) {
-        let now = Date()
-        let calendar = Calendar.current
-        
-        let cutoffDate: Date
-        switch timeframe {
-        case .today:
-            cutoffDate = calendar.startOfDay(for: now)
-        case .thisWeek:
-            cutoffDate = calendar.date(byAdding: .day, value: -7, to: now) ?? now
-        case .last30Days:
-            cutoffDate = calendar.date(byAdding: .day, value: -30, to: now) ?? now
-        case .allTime:
-            historyEvents.removeAll()
-            conversationSummaries.removeAll()
-            scheduleHistorySave()
-            scheduleSummariesSave()
-            return
-        }
-        
-        historyEvents.removeAll { $0.timestamp >= cutoffDate }
-        conversationSummaries = conversationSummaries.mapValues { summaries in
-            summaries.filter { $0.timestamp < cutoffDate }
-        }.filter { !$0.value.isEmpty }
-        scheduleHistorySave()
-        scheduleSummariesSave()
+        clearHistory(since: Self.cutoff(for: timeframe) ?? .distantPast)
     }
     
     /// Clears history and chat summaries from `cutoff` to now (Chrome's "Clear browsing data" time range).
     func clearHistory(since cutoff: Date) {
         historyEvents.removeAll { $0.timestamp >= cutoff }
         conversationSummaries = conversationSummaries.mapValues { $0.filter { $0.timestamp < cutoff } }.filter { !$0.value.isEmpty }
-        scheduleHistorySave()
+        let store = store
+        ioQueue.async { cutoff == .distantPast ? store.deleteAll() : store.delete(since: cutoff) }
         scheduleSummariesSave()
     }
 
     func clearIndividualEvent(_ eventId: UUID) {
         historyEvents.removeAll { $0.id == eventId }
-        scheduleHistorySave()
+        let store = store
+        ioQueue.async { store.delete(id: eventId) }
     }
     
     // MARK: - Persistence
     
     func flush() {
-        pendingHistorySave?.cancel()
         pendingSummariesSave?.cancel()
-        pendingHistorySave = nil
         pendingSummariesSave = nil
-        saveHistory()
         saveSummaries()
-        // Drain the save queue so data is guaranteed on disk (e.g. before app quit).
+        // Drain both queues so data is guaranteed on disk (e.g. before app quit).
+        ioQueue.sync {}
         saveQueue.sync {}
-    }
-
-    private func scheduleHistorySave() {
-        // An already pending save picks up this change too; rescheduling would let steady changes postpone it forever.
-        guard pendingHistorySave == nil else { return }
-        let work = DispatchWorkItem { [weak self] in
-            self?.pendingHistorySave = nil
-            self?.saveHistory()
-        }
-        pendingHistorySave = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     private func scheduleSummariesSave() {
@@ -189,32 +191,16 @@ final class HistoryManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
-    private func saveHistory() {
-        let snapshot = historyEvents
-        let url = historyFileURL
-        saveQueue.async {
-            let encoder = JSONEncoder()
-            encoder.dateEncodingStrategy = .iso8601
-            do {
-                let data = try encoder.encode(snapshot)
-                try data.write(to: url, options: .atomic)
-            } catch {
-                print("Failed to save history: \(error)")
-            }
+    /// Opens the store off the main thread: migrates the old JSON once, expires old visits,
+    /// then loads the in-memory recent window.
+    private func loadHistory(legacyJSON: URL) {
+        let store = store, window = recentWindow
+        ioQueue.async {
+            store.migrateJSON(at: legacyJSON)
+            store.expire()
+            let rows = store.recent(limit: window)
+            DispatchQueue.main.async { self.mergeRecent(rows) }
         }
-    }
-    
-    private func loadHistory() {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        
-        guard fileManager.fileExists(atPath: historyFileURL.path),
-              let data = try? Data(contentsOf: historyFileURL),
-              let events = try? decoder.decode([HistoryEvent].self, from: data) else {
-            return
-        }
-        
-        historyEvents = events
     }
     
     private func saveSummaries() {
@@ -246,40 +232,11 @@ final class HistoryManager: ObservableObject {
     }
     
     // MARK: - Query Methods
-    
-    func getHistory(for timeframe: ClearTimeframe) -> [HistoryEvent] {
-        let now = Date()
-        let calendar = Calendar.current
-        
-        let cutoffDate: Date
-        switch timeframe {
-        case .today:
-            cutoffDate = calendar.startOfDay(for: now)
-        case .thisWeek:
-            cutoffDate = calendar.date(byAdding: .day, value: -7, to: now) ?? now
-        case .last30Days:
-            cutoffDate = calendar.date(byAdding: .day, value: -30, to: now) ?? now
-        case .allTime:
-            return historyEvents
-        }
-        
-        return historyEvents.filter { $0.timestamp >= cutoffDate }
-    }
-    
-    func searchHistory(query: String) -> [HistoryEvent] {
-        let lowercased = query.lowercased()
-        return historyEvents.filter { event in
-            if let title = event.pageTitle, title.lowercased().contains(lowercased) {
-                return true
-            }
-            if let url = event.url, url.lowercased().contains(lowercased) {
-                return true
-            }
-            if let messages = event.chatMessages {
-                return messages.contains { $0.text.lowercased().contains(lowercased) }
-            }
-            return false
-        }
+
+    /// History page: visits newest first, filtered by `query` (URL or title) when non-empty.
+    func visits(matching query: String = "", limit: Int) async -> [HistoryEvent] {
+        let rows = await self.query { query.isEmpty ? $0.recent(limit: limit) : $0.search(query, limit: limit) }
+        return rows.map(Self.event)
     }
 
     // MARK: - URL bar autocomplete (history-based suggestions)
@@ -288,58 +245,19 @@ final class HistoryManager: ObservableObject {
     /// Ranking: prefer (1) URLs with a meaningful path (e.g. discord.com/channels/@me over discord.com) so
     /// signed-in / frequently used pages surface first; (2) higher visit count; (3) more recent.
     /// display = page title if present, else host or URL.
-    func urlAutocompleteSuggestions(prefix: String, limit: Int = 5) -> [(display: String, url: URL)] {
-        let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    func urlAutocompleteSuggestions(prefix: String, limit: Int = 5) async -> [(display: String, url: URL)] {
+        let trimmed = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
-
-        // Group by URL: (visitCount, mostRecentTimestamp, display from most recent title)
-        struct URLInfo {
-            var visitCount: Int
-            var mostRecent: Date
-            var display: String
-            var url: URL
-            var hasMeaningfulPath: Bool
+        // shortcut: ranks only the 200 most-visited matching URLs; raise if path-ranked pages get crowded out.
+        let matches = await query { $0.urlMatches(trimmed, limit: 200) }
+        let ranked = matches.compactMap { m -> (match: HistoryStore.URLMatch, url: URL, hasPath: Bool)? in
+            guard let url = URL(string: m.url) else { return nil }
+            return (m, url, url.path.count > 1 && url.path != "/")
+        }.sorted { a, b in
+            if a.hasPath != b.hasPath { return a.hasPath }
+            if a.match.visitCount != b.match.visitCount { return a.match.visitCount > b.match.visitCount }
+            return a.match.lastVisit > b.match.lastVisit
         }
-        var byURL: [String: URLInfo] = [:]
-        for event in historyEvents where event.type == .pageVisit {
-            guard let urlString = event.url, let url = URL(string: urlString) else { continue }
-            let urlMatch = urlString.lowercased().contains(trimmed)
-            let titleMatch = event.pageTitle?.lowercased().contains(trimmed) ?? false
-            if !urlMatch && !titleMatch { continue }
-
-            let path = url.path
-            let hasPath = path.count > 1 && path != "/"
-
-            if let existing = byURL[urlString] {
-                let isNewer = event.timestamp > existing.mostRecent
-                let display = (!(event.pageTitle?.isEmpty ?? true)) ? (event.pageTitle ?? "") : (url.host ?? url.absoluteString)
-                byURL[urlString] = URLInfo(
-                    visitCount: existing.visitCount + 1,
-                    mostRecent: isNewer ? event.timestamp : existing.mostRecent,
-                    display: isNewer ? display : existing.display,
-                    url: url,
-                    hasMeaningfulPath: hasPath || existing.hasMeaningfulPath
-                )
-            } else {
-                let display = (!(event.pageTitle?.isEmpty ?? true)) ? (event.pageTitle ?? "") : (url.host ?? url.absoluteString)
-                byURL[urlString] = URLInfo(
-                    visitCount: 1,
-                    mostRecent: event.timestamp,
-                    display: display,
-                    url: url,
-                    hasMeaningfulPath: hasPath
-                )
-            }
-        }
-
-        let sorted = byURL.values.sorted { a, b in
-            // Prefer URLs with path (e.g. /channels/@me, /courses) over bare domain
-            if a.hasMeaningfulPath != b.hasMeaningfulPath { return a.hasMeaningfulPath }
-            // Then by visit count (more visits = more likely where user wants to go)
-            if a.visitCount != b.visitCount { return a.visitCount > b.visitCount }
-            // Then by recency
-            return a.mostRecent > b.mostRecent
-        }
-        return Array(sorted.prefix(limit).map { ($0.display, $0.url) })
+        return ranked.prefix(limit).map { ($0.match.title.isEmpty ? ($0.url.host ?? $0.url.absoluteString) : $0.match.title, $0.url) }
     }
 }
