@@ -250,7 +250,7 @@ enum WebSearchService {
         )
         request.timeoutInterval = 6
 
-        guard let (rawData, response) = try? await URLSession.shared.data(for: request, delegate: RedirectGuard()),
+        guard let (rawData, response) = await guardedData(for: request),
               let httpResp = response as? HTTPURLResponse,
               (200...299).contains(httpResp.statusCode),
               let finalURL = response.url, isSafeRemoteURL(finalURL) else {
@@ -366,6 +366,41 @@ enum WebSearchService {
         return parts.joined(separator: "\n")
     }
 
+    /// SSRF guard: the host is resolved first and refused if ANY address is private, each redirect hop
+    /// is re-checked the same way, and since URLSession resolves again itself (DNS rebinding) the body is
+    /// discarded unless every connection's actual remote address (task metrics) is public. Fails closed.
+    nonisolated static func guardedData(for request: URLRequest) async -> (Data, URLResponse)? {
+        guard let url = request.url, await isSafeToFetch(url) else { return nil }
+        let fetchGuard = FetchGuard()
+        guard let result = try? await URLSession.shared.data(for: request, delegate: fetchGuard),
+              fetchGuard.connectedOnlyToPublicAddresses else { return nil }
+        return result
+    }
+
+    nonisolated static func isSafeToFetch(_ url: URL) async -> Bool {
+        guard isSafeRemoteURL(url), let host = url.host else { return false }
+        return await !resolvesToPrivateAddress(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")))
+    }
+
+    /// True if any address `host` resolves to is private, or it doesn't resolve. getaddrinfo blocks, so it runs detached.
+    nonisolated static func resolvesToPrivateAddress(_ host: String) async -> Bool {
+        await Task.detached {
+            var hints = addrinfo()
+            hints.ai_socktype = SOCK_STREAM
+            var info: UnsafeMutablePointer<addrinfo>?
+            guard getaddrinfo(host, nil, &hints, &info) == 0, info != nil else { return true }
+            defer { freeaddrinfo(info) }
+            var node = info
+            while let n = node {
+                var name = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                guard getnameinfo(n.pointee.ai_addr, n.pointee.ai_addrlen, &name, socklen_t(name.count), nil, 0, NI_NUMERICHOST) == 0,
+                      !isPrivateAddress(String(cString: name)) else { return true }
+                node = n.pointee.ai_next
+            }
+            return false
+        }.value
+    }
+
     nonisolated static func isSafeRemoteURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = url.host?.lowercased(), !host.isEmpty else { return false }
@@ -409,10 +444,25 @@ enum WebSearchService {
     }
 }
 
-/// Checks every redirect hop before it is followed, so a public URL cannot bounce the fetch to a private address.
-private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
+/// Re-checks every redirect hop (resolving it) before it is followed, and records the remote address
+/// of every network connection so `guardedData` can reject a fetch that DNS rebinding sent somewhere private.
+nonisolated final class FetchGuard: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var remoteAddresses: [String?] = []
+
+    /// False until metrics arrive, or when any connection was private or had no known address.
+    var connectedOnlyToPublicAddresses: Bool {
+        lock.withLock { !remoteAddresses.isEmpty && remoteAddresses.allSatisfy { $0.map { !WebSearchService.isPrivateAddress($0) } ?? false } }
+    }
+
     nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                                 newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        completionHandler(request.url.map(WebSearchService.isSafeRemoteURL) == true ? request : nil)
+        guard let url = request.url else { return completionHandler(nil) }
+        Task.detached { completionHandler(await WebSearchService.isSafeToFetch(url) ? request : nil) }
+    }
+
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        let addresses = metrics.transactionMetrics.filter { $0.resourceFetchType == .networkLoad }.map(\.remoteAddress)
+        lock.withLock { remoteAddresses += addresses }
     }
 }
