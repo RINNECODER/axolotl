@@ -8,7 +8,7 @@ import SwiftUI
 /// with Luna's own look: the crescent mark, the serif for titles, the accent from Settings → Dev
 /// → Appearance, a one-row header and a capsule composer.
 ///
-/// Entering Dev shows `DevHomeView` (project → harness → model → session). Once a session is
+/// Entering Dev shows `DevHomeView` (a prompt under harness · model · project). Once a session is
 /// open, Chat and Terminal both show the same `DevSession` (`DevWorkspace.shared.session`):
 /// the chat timeline follows the terminal live, and chat sends go wherever the session runs
 /// (`DevSession.SendRoute`). ⌘↩ sends, Esc stops.
@@ -30,7 +30,7 @@ struct DevPanelView: View {
     @State private var settings = DevSettings.shared
     @State private var input = ""
     @State private var editorHeight: CGFloat = 36
-    @State private var followsBottom = true
+    @State private var follow = DevChatFollow()
     @State private var expandedGroups: Set<Int> = []
     @State private var turnStartedAt: Date?
     /// "Worked for" durations, keyed by the index of the turn's user message.
@@ -504,17 +504,44 @@ struct DevPanelView: View {
             .overlay {
                 if thread.items.isEmpty, session.sessionID == nil { newSessionHint(session) }
             }
-            .defaultScrollAnchor(.bottom)
-            .onScrollGeometryChange(for: Bool.self) { g in
-                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 40
-            } action: { _, atBottom in followsBottom = atBottom }
-            .frame(maxHeight: .infinity)
-            // Only follow new output while the reader is at the bottom; never animate.
-            .onChange(of: thread.items) { _, _ in
-                if followsBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+            .overlay(alignment: .bottom) {
+                if !follow.following, !thread.items.isEmpty {
+                    Button {
+                        follow.following = true
+                        proxy.scrollTo("bottom", anchor: .bottom)
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "arrow.down").font(.system(size: 10, weight: .semibold))
+                            Text("Jump to latest")
+                        }
+                        .font(.system(size: DevMetrics.text2xs, weight: .medium))
+                        .foregroundStyle(p.foreground)
+                        .padding(.horizontal, 11)
+                        .frame(height: 26)
+                        .background(Capsule().fill(p.card))
+                        .overlay(Capsule().strokeBorder(p.border))
+                        .shadow(color: Color.black.opacity(p.isDark ? 0.3 : 0.08), radius: 8, y: 3)
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 8)
+                    .transition(.opacity)
+                }
             }
-            .onAppear { followsBottom = true; proxy.scrollTo("bottom", anchor: .bottom) }
+            .defaultScrollAnchor(.bottom)
+            // Scroll after layout (the geometry changed), not when items change: history arrives in
+            // batches and lazy rows measure late, so a scroll requested on `items` lands short.
+            .onScrollGeometryChange(for: DevChatFollow.Geometry.self) { g in
+                DevChatFollow.Geometry(offsetY: g.contentOffset.y, contentHeight: g.contentSize.height,
+                                       viewportHeight: g.containerSize.height)
+            } action: { old, new in
+                if follow.update(from: old, to: new) { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .frame(maxHeight: .infinity)
+            .onAppear { follow = DevChatFollow(); proxy.scrollTo("bottom", anchor: .bottom) }
         }
+        // A fresh scroll view per session: switching sessions starts at the bottom again.
+        .id(session.id)
     }
 
     /// A new, empty session: what it runs with, and two starters.
@@ -1538,5 +1565,31 @@ private struct Line: Shape {
         path.move(to: CGPoint(x: rect.minX, y: rect.midY))
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
         return path
+    }
+}
+
+
+/// Whether the chat keeps the newest message in view. Content or viewport growth (history arriving
+/// in batches, lazy rows measuring themselves, the composer growing) never turns following off;
+/// only the reader's own scroll does.
+nonisolated struct DevChatFollow: Equatable {
+    struct Geometry: Equatable {
+        var offsetY: CGFloat
+        var contentHeight: CGFloat
+        var viewportHeight: CGFloat
+        var atBottom: Bool { offsetY + viewportHeight >= contentHeight - 40 }
+    }
+
+    var following = true
+
+    /// Applies a geometry change; true = scroll to the bottom now.
+    // shortcut: a user scroll in the same frame as a content resize counts as a resize; use
+    // onScrollPhaseChange if streaming ever snaps a reader back down.
+    mutating func update(from old: Geometry, to new: Geometry) -> Bool {
+        guard old.contentHeight != new.contentHeight || old.viewportHeight != new.viewportHeight else {
+            following = new.atBottom
+            return false
+        }
+        return following && !new.atBottom
     }
 }

@@ -1,32 +1,54 @@
 import AppKit
 import SwiftUI
 
-/// Dev's home: entering Dev shows this instead of an empty chat. Centered "bubbles" choose,
-/// one step at a time, the project, the harness, the model / effort, then a recent session or
-/// "New session" (`DevHomeFlow`). A "Continue last" bubble jumps straight back in.
+/// Dev's home: a compact composer. One row of dropdowns (harness · model · project, prefilled
+/// from the last-used / default setup) sits under a prompt; Return starts the session with that
+/// prompt. Below it, the five newest sessions to resume and "Show all".
 struct DevHomeView: View {
     @Bindable var workspace: DevWorkspace
     let palette: DevPalette
     let harnesses: [HarnessInfo]
     var onOpenFolder: () -> Void
     var onOpenSettings: () -> Void
+    /// A model list to show instead of asking the harness (offscreen snapshots).
+    var initialListing: ModelListing?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var settings = DevSettings.shared
     @State private var listing: ModelListing?
     @State private var modelsLoading = false
-    @State private var pickedModel: String?
-    @State private var pickedEffort: String?
-    @State private var projectSearchOpen = false
+    @State private var prompt = ""
+    @State private var editorHeight: CGFloat = 40
+    @State private var openDropdown: String?
+    @FocusState private var promptFocused: Bool
+
+    static let recentCount = 5
 
     private var p: DevPalette { palette }
     private var flow: DevHomeFlow { workspace.flow }
     private var motion: Animation? { reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.86) }
+    private var defaults: DevSessionSetup { settings.defaultSetup }
 
     /// Installed harnesses Dev can drive.
     private var usable: [AgentCLIKind] {
         let kinds = harnesses.filter(\.supported).compactMap(\.id.agentKind)
         return kinds.isEmpty && harnesses.isEmpty ? AgentCLIKind.allCases : kinds
+    }
+
+    // The choices: what the user picked here, else the default setup (Settings → Dev).
+    private var harness: AgentCLIKind {
+        flow.harness ?? (usable.contains(defaults.harness) ? defaults.harness : usable.first ?? defaults.harness)
+    }
+    private var model: String? {
+        flow.harness != nil ? flow.model : (harness == defaults.harness ? defaults.model : nil)
+    }
+    private var effort: String? {
+        flow.harness != nil ? flow.effort : (harness == defaults.harness ? defaults.effort : nil)
+    }
+    private var project: String? { flow.project ?? defaults.projectPath().flatMap { $0.isEmpty ? nil : $0 } }
+
+    private var recent: [ExternalSession] {
+        Array(workspace.recentSessions.filter { !settings.isHidden($0.projectDir.path) }.prefix(Self.recentCount))
     }
 
     var body: some View {
@@ -35,328 +57,198 @@ struct DevHomeView: View {
                 .transition(.opacity.combined(with: .move(edge: .trailing)))
         } else {
             ScrollView {
-                VStack(spacing: DevMetrics.compact ? 14 : 18) {
-                    heading
-                    if !trail.isEmpty { trailView }
-                    stepContent
-                        .id(flow.step)
-                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(y: 10)),
-                                                removal: .opacity))
-                    if flow.step == .project, let last = workspace.continueLast { continueBubble(last) }
+                VStack(alignment: .leading, spacing: DevMetrics.compact ? 14 : 18) {
+                    HStack(spacing: 7) {
+                        DevMoonMark(size: 16, palette: p)
+                        Text("New session")
+                            .font(LunaType.brand(size: DevMetrics.text(17), weight: .regular))
+                            .foregroundStyle(p.foreground)
+                    }
+                    .padding(.leading, 4)
+                    startCard
+                    if !recent.isEmpty { recentList }
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 28)
+                .padding(.horizontal, 16)
+                .padding(.top, 36)
+                .padding(.bottom, 20)
                 .frame(maxWidth: 560)
                 .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.never)
-            .animation(motion, value: flow)
-            .task(id: flow.harness) { await loadModels() }
-            .task(id: flow.project) {
-                if let path = flow.project { await workspace.loadSessions(project: path) }
-            }
+            .task(id: harness) { await loadModels() }
+            .onAppear { promptFocused = true }
         }
     }
 
-    // MARK: Heading
+    // MARK: Start card (prompt + harness · model · project)
 
-    private var heading: some View {
-        VStack(spacing: 8) {
-            DevMoonMark(size: 22, palette: p)
-            Text(title)
-                .font(LunaType.brand(size: DevMetrics.text(21), weight: .regular))
-                .foregroundStyle(p.foreground)
-                .multilineTextAlignment(.center)
-                .contentTransition(.opacity)
-            Text(subtitle)
-                .font(.system(size: DevMetrics.textXs))
-                .foregroundStyle(p.mutedForeground)
-                .multilineTextAlignment(.center)
-        }
-        .padding(.top, 8)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var title: String {
-        switch flow.step {
-        case .project: return "What are we building tonight?"
-        case .harness: return "Who should write the code?"
-        case .model: return "Pick a model"
-        case .session: return "Pick up a session, or start fresh"
-        }
-    }
-
-    private var subtitle: String {
-        switch flow.step {
-        case .project: return "Projects come from your Claude Code and Codex sessions."
-        case .harness: return "Your own CLI and login, on this Mac."
-        case .model: return "Fixed per session. Effort applies where the model supports it."
-        case .session: return settings.approvalBehavior == .fullAuto ? "Full auto: commands and edits run without asking."
-            : "The Terminal tab opens the same session."
-        }
-    }
-
-    // MARK: Breadcrumb trail (chosen steps; click to change)
-
-    private var trail: [(DevHomeFlow.Step, String, String?)] {
-        var out: [(DevHomeFlow.Step, String, String?)] = []
-        if let path = flow.project { out.append((.project, (path as NSString).lastPathComponent, "folder")) }
-        if let h = flow.harness { out.append((.harness, h.displayName, DevPanelView.providerIcon(h))) }
-        if flow.step == .session {
-            let name = flow.model.flatMap { id in listing?.models.first { $0.id == id }?.displayName } ?? flow.model ?? "Default model"
-            let effort = flow.effort.map { " · " + DevPanelView.effortName($0) } ?? ""
-            out.append((.model, DevPanelView.shortModelName(name) + effort, "cpu"))
-        }
-        return out
-    }
-
-    private var trailView: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(trail.enumerated()), id: \.offset) { index, entry in
-                if index > 0 {
-                    Image(systemName: "chevron.compact.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(p.mutedForeground.opacity(0.6))
-                }
-                Button { withAnimation(motion) { workspace.flow.edit(entry.0) } } label: {
-                    HStack(spacing: 5) {
-                        if let icon = entry.2 { Image(systemName: icon).font(.system(size: 10, weight: .medium)) }
-                        Text(entry.1).lineLimit(1)
-                    }
-                    .font(.system(size: DevMetrics.text2xs, weight: .medium))
-                    .padding(.horizontal, 9)
-                    .frame(height: 22)
-                    .background(Capsule().fill(p.primarySoft))
-                    .foregroundStyle(p.foreground.opacity(0.85))
-                    .contentShape(Capsule())
+    private var startCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PanelTextEditor(
+                text: $prompt,
+                placeholder: project == nil ? "Pick a project, then ask \(harness.displayName) anything…"
+                    : "Ask \(harness.displayName) anything…",
+                minHeight: 40,
+                isFocused: $promptFocused,
+                onSubmit: start,
+                reportedHeight: $editorHeight,
+                accessibilityLabel: "First message to \(harness.displayName)"
+            )
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            HStack(spacing: 2) {
+                harnessDropdown
+                modelDropdown
+                projectDropdown
+                Spacer(minLength: 4)
+                Button(action: start) {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 12.5, weight: .bold))
+                        .foregroundStyle(p.primaryForeground)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(p.primary))
+                        .opacity(canStart ? 1 : 0.4)
                 }
                 .buttonStyle(.plain)
-                .help("Change \(entry.0.title.lowercased())")
-                .accessibilityLabel("\(entry.0.title): \(entry.1). Change")
+                .disabled(!canStart)
+                .help("Start session (↩)")
+                .accessibilityLabel("Start session")
             }
+            .padding(.leading, 6)
+            .padding(.trailing, 7)
+            .padding(.bottom, 7)
+            .padding(.top, 2)
         }
+        .background(RoundedRectangle(cornerRadius: DevMetrics.radius2xl + 4, style: .continuous).fill(p.card))
+        .overlay(RoundedRectangle(cornerRadius: DevMetrics.radius2xl + 4, style: .continuous)
+            .strokeBorder(promptFocused ? p.primary.opacity(0.45) : p.composerOutline, lineWidth: 1))
+        .shadow(color: (p.isDark ? Color.black : p.primary).opacity(p.isDark ? 0.3 : 0.07), radius: 16, y: 6)
+        .zIndex(1)
     }
 
-    // MARK: Steps
-
-    @ViewBuilder
-    private var stepContent: some View {
-        switch flow.step {
-        case .project: projectStep
-        case .harness: harnessStep
-        case .model: modelStep
-        case .session: sessionStep
-        }
+    private func binding(_ id: String) -> Binding<Bool> {
+        Binding(get: { openDropdown == id }, set: { openDropdown = $0 ? id : nil })
     }
 
-    private var projectStep: some View {
-        VStack(spacing: 12) {
-            if !workspace.projectsLoaded {
-                DevChipFlow(spacing: 8) { ForEach(0..<5, id: \.self) { i in DevSkeletonChip(width: [96, 130, 84, 112, 70][i], palette: p) } }
-            } else if workspace.projects.isEmpty {
-                Text("No projects found yet. Open a folder to start.")
-                    .font(.system(size: DevMetrics.textXs))
-                    .foregroundStyle(p.mutedForeground)
-            } else {
-                DevChipFlow(spacing: 8) {
-                    ForEach(workspace.projects.prefix(6)) { project in
-                        DevBubble(icon: project.isGitRepo ? "arrow.triangle.branch" : "folder", title: project.name,
-                                  caption: projectCaption(project), badges: project.harnesses.compactMap(\.agentKind), palette: p) {
-                            withAnimation(motion) { workspace.flow.choose(project: project.path) }
-                        }
-                        .lunaContextMenu {
-                            [
-                                .button("Hide from Dev", icon: "eye.slash") {
-                                    withAnimation(motion) { workspace.hide(project: project.path) }
-                                },
-                                .button("Reveal in Finder", icon: "folder") {
-                                    NSWorkspace.shared.activateFileViewerSelecting([project.url])
-                                },
-                            ]
-                        }
-                        .help(project.path)
-                    }
-                }
-            }
-            HStack(spacing: 8) {
-                if workspace.projects.count > 6 {
-                    DevDropdown(isOpen: $projectSearchOpen, items: Self.projectItems(workspace.projects, includeOpen: false),
-                                selectedID: nil, palette: p, edge: .below, width: 300, help: "All projects",
-                                onSelect: { item in withAnimation(motion) { workspace.flow.choose(project: item.id) } }) {
-                        DevBubbleLabel(icon: "magnifyingglass", title: "All projects (\(workspace.projects.count))", palette: p, quiet: true)
-                    }
-                    .fixedSize()
-                }
-                DevBubble(icon: "folder.badge.plus", title: "Open folder…", palette: p, quiet: true, action: onOpenFolder)
-            }
+    private var harnessDropdown: some View {
+        let items = usable.map { kind in
+            let info = harnesses.first { $0.id == kind.harnessID }
+            return DevDropdownItem(id: kind.rawValue, title: kind.displayName,
+                                   subtitle: info?.signedIn == false ? "Signed out. Run `\(kind.executableName) login`" : nil,
+                                   detail: info?.version.map { "v" + $0 },
+                                   icon: DevPanelView.providerIcon(kind), iconColor: DevPanelView.providerColor(kind),
+                                   section: "Harnesses")
         }
-    }
-
-    private func projectCaption(_ project: DevProject) -> String? {
-        var parts: [String] = []
-        if let branch = project.branch { parts.append(branch) }
-        if let date = project.lastActivity { parts.append(DevRelativeTime.string(date)) }
-        if project.sessionCount > 0 { parts.append("\(project.sessionCount) session\(project.sessionCount == 1 ? "" : "s")") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
-    }
-
-    private var harnessStep: some View {
-        VStack(spacing: 10) {
-            DevChipFlow(spacing: 8) {
-                ForEach(usable, id: \.self) { kind in
-                    let info = harnesses.first { $0.id == kind.harnessID }
-                    DevBubble(icon: DevPanelView.providerIcon(kind), iconColor: DevPanelView.providerColor(kind),
-                              title: kind.displayName,
-                              caption: info?.signedIn == false ? "Signed out" : info?.version.map { "v" + $0 },
-                              palette: p) {
-                        withAnimation(motion) { workspace.flow.choose(harness: kind) }
-                    }
-                }
-            }
-            if usable.isEmpty {
-                Text("Install Claude Code or Codex to use Dev.")
-                    .font(.system(size: DevMetrics.textXs))
-                    .foregroundStyle(p.mutedForeground)
-            }
+        return DevDropdown(isOpen: binding("harness"), items: items, selectedID: harness.rawValue, palette: p,
+                           edge: .below, width: 260, help: "Harness", onSelect: { item in
+            if let kind = AgentCLIKind(rawValue: item.id) { workspace.flow.choose(harness: kind) }
+        }) {
+            DevPickerLabel(icon: DevPanelView.providerIcon(harness), iconColor: DevPanelView.providerColor(harness),
+                           text: harness.displayName, palette: p)
         }
+        .fixedSize()
+        .accessibilityLabel("Harness: \(harness.displayName)")
     }
 
     private var models: [HarnessModel] {
-        guard let h = flow.harness, listing?.harness == h.harnessID else { return [] }
+        guard listing?.harness == harness.harnessID else { return [] }
         return listing?.models ?? []
     }
 
-    private var modelStep: some View {
-        let current = pickedModel.flatMap { id in models.first { $0.id == id } } ?? models.first { $0.isDefault }
-        let efforts = current?.efforts ?? []
-        return VStack(spacing: 12) {
-            if models.isEmpty, modelsLoading {
-                DevChipFlow(spacing: 8) { ForEach(0..<4, id: \.self) { i in DevSkeletonChip(width: [80, 64, 92, 72][i], palette: p) } }
-            } else {
-                DevChipFlow(spacing: 8) {
-                    if models.isEmpty {
-                        DevBubble(icon: "sparkle", title: "Default", palette: p, selected: true) { commitModel(nil) }
-                    }
-                    ForEach(models) { m in
-                        DevBubble(title: DevPanelView.shortModelName(m.displayName), caption: m.isDefault && !m.displayName.lowercased().hasPrefix("default") ? "default" : nil,
-                                  palette: p, selected: m.id == current?.id) {
-                            withAnimation(motion) {
-                                pickedModel = m.id
-                                if !(m.efforts ?? []).contains(pickedEffort ?? "") { pickedEffort = nil }
-                            }
-                            if (m.efforts ?? []).isEmpty { commitModel(m.id) }
-                        }
-                    }
-                }
-            }
-            if !efforts.isEmpty {
-                VStack(spacing: 8) {
-                    Text("Effort")
-                        .font(.system(size: DevMetrics.text2xs, weight: .medium))
-                        .foregroundStyle(p.mutedForeground)
-                    DevChipFlow(spacing: 6) {
-                        ForEach(efforts, id: \.self) { e in
-                            DevBubble(title: DevPanelView.effortName(e), palette: p, compact: true,
-                                      selected: e == (pickedEffort ?? current?.defaultEffort)) {
-                                pickedEffort = e
-                            }
-                        }
-                    }
-                }
-                .transition(.opacity)
-                DevBubble(icon: "arrow.right", title: "Continue", palette: p, primary: true) {
-                    commitModel(current?.id, effort: pickedEffort)
-                }
-            }
+    private var modelDropdown: some View {
+        let current = model.flatMap { id in models.first { $0.id == id } } ?? (model == nil ? models.first { $0.isDefault } : nil)
+        let label = DevPanelView.shortModelName(current?.displayName ?? model.map(DevSessionRow.shortModel)
+                                                ?? (modelsLoading ? "Loading…" : "Default"))
+        var items = models.map { m in
+            DevDropdownItem(id: m.id, title: m.displayName, subtitle: m.description,
+                            badge: m.isDefault ? "Default" : nil, section: harness.displayName + " models",
+                            keywords: [m.id, m.resolvedModel ?? ""])
         }
-    }
-
-    private func commitModel(_ id: String?, effort: String? = nil) {
-        withAnimation(motion) { workspace.flow.chooseModel(id, effort: effort) }
-    }
-
-    private var sessionStep: some View {
-        let sessions = flow.project.flatMap { workspace.projectSessions[$0] }?
-            .filter { $0.harness == flow.harness } ?? []
-        return VStack(spacing: 12) {
-            DevBubble(icon: "plus", title: "New session", palette: p, primary: true) { startNew() }
-                .keyboardShortcut(.return, modifiers: [])
-            if !sessions.isEmpty {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Recent in this project")
-                        .font(.system(size: DevMetrics.text2xs, weight: .medium))
-                        .foregroundStyle(p.mutedForeground)
-                        .padding(.horizontal, 8)
-                        .padding(.bottom, 2)
-                    ForEach(sessions.prefix(5)) { s in
-                        DevSessionRow(session: s, palette: p, showsProject: false) { workspace.open(s) }
-                    }
-                }
-                .padding(6)
-                .background(RoundedRectangle(cornerRadius: DevMetrics.radiusLg + 4, style: .continuous).fill(p.card))
-                .overlay(RoundedRectangle(cornerRadius: DevMetrics.radiusLg + 4, style: .continuous).strokeBorder(p.border))
-                .frame(maxWidth: 440)
-            }
-            Button { withAnimation(motion) { workspace.showingAllSessions = true } } label: {
-                HStack(spacing: 3) {
-                    Text("All sessions")
-                    Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
-                }
-                .font(.system(size: DevMetrics.text2xs, weight: .medium))
-                .padding(.horizontal, 8)
-                .frame(height: 22)
-            }
-            .buttonStyle(DevGhostButtonStyle(palette: p, radius: 11))
+        if let model, !models.contains(where: { $0.id == model }) {
+            items.insert(DevDropdownItem(id: model, title: model, subtitle: "Not in the harness's list", section: "Current"), at: 0)
         }
+        return DevDropdown(isOpen: binding("model"), items: items, selectedID: current?.id ?? model, palette: p,
+                           edge: .below, width: 300,
+                           footnote: items.isEmpty ? (modelsLoading ? "Asking \(harness.executableName) for its models…" : "Uses the harness's default model.") : nil,
+                           help: "Model", onSelect: { item in
+            if flow.harness == nil { workspace.flow.choose(harness: harness) }
+            workspace.flow.chooseModel(item.id, effort: nil)
+        }) {
+            DevPickerLabel(text: label, maxTextWidth: 130, palette: p)
+        }
+        .fixedSize()
+        .accessibilityLabel("Model: \(label)")
     }
 
-    private func startNew() {
-        guard let project = flow.project, let setup = flow.setup(base: settings.defaultSetup) else { return }
-        workspace.startNew(harness: setup.harness, projectDir: URL(fileURLWithPath: project, isDirectory: true), setup: setup)
+    private var projectDropdown: some View {
+        let name = project.map { ($0 as NSString).lastPathComponent } ?? "Choose project"
+        return DevDropdown(isOpen: binding("project"), items: Self.projectItems(workspace.projects, includeOpen: true, current: project),
+                           selectedID: project, palette: p, edge: .below, width: 300, help: project ?? "Project",
+                           onSelect: { item in
+            switch item.id {
+            case "__open": onOpenFolder()
+            case "__hide": if let project { workspace.hide(project: project) }
+            default: workspace.flow.choose(project: item.id)
+            }
+        }) {
+            DevPickerLabel(icon: "folder", text: name, maxTextWidth: 150, palette: p)
+        }
+        .fixedSize()
+        .accessibilityLabel("Project: \(name)")
     }
 
-    private func continueBubble(_ s: ExternalSession) -> some View {
-        Button { workspace.open(s) } label: {
-            HStack(spacing: 9) {
-                DevHarnessBadge(kind: s.harness, size: 22)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Continue last")
-                        .font(.system(size: DevMetrics.text2xs, weight: .medium))
-                        .foregroundStyle(p.primary)
-                    Text(s.title.isEmpty ? "Untitled session" : s.title)
-                        .font(.system(size: DevMetrics.textXs, weight: .medium))
-                        .foregroundStyle(p.foreground)
-                        .lineLimit(1)
-                }
-                Text("\(s.projectDir.lastPathComponent) · \(DevRelativeTime.string(s.updatedAt))")
-                    .font(.system(size: DevMetrics.text2xs))
+    private var canStart: Bool {
+        project != nil && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// One step: the typed prompt starts a session with the row's choices.
+    private func start() {
+        guard let project else { openDropdown = "project"; return }
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        var setup = defaults
+        setup.harness = harness
+        setup.model = model
+        setup.effort = effort
+        setup.project = .specific(project)
+        workspace.startNew(harness: harness, projectDir: URL(fileURLWithPath: project, isDirectory: true), setup: setup)
+        _ = workspace.session?.send(text)
+        prompt = ""
+    }
+
+    // MARK: Recent
+
+    private var recentList: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack {
+                Text("Recent")
+                    .font(.system(size: DevMetrics.text2xs, weight: .medium))
                     .foregroundStyle(p.mutedForeground)
-                    .lineLimit(1)
-                Image(systemName: "arrow.uturn.forward").font(.system(size: 10, weight: .semibold)).foregroundStyle(p.mutedForeground)
+                Spacer()
+                Button { withAnimation(motion) { workspace.showingAllSessions = true } } label: {
+                    Text("Show all")
+                        .font(.system(size: DevMetrics.text2xs, weight: .medium))
+                        .padding(.horizontal, 6)
+                        .frame(height: 20)
+                }
+                .buttonStyle(DevGhostButtonStyle(palette: p, radius: 10))
             }
-            .padding(.leading, 6)
-            .padding(.trailing, 12)
-            .frame(height: 40)
-            .background(Capsule().fill(p.card))
-            .overlay(Capsule().strokeBorder(p.primary.opacity(0.35), lineWidth: 1))
-            .contentShape(Capsule())
+            .padding(.leading, 8)
+            .padding(.bottom, 2)
+            ForEach(recent) { s in
+                DevSessionRow(session: s, palette: p) { workspace.open(s) }
+            }
         }
-        .buttonStyle(.plain)
-        .frame(maxWidth: 440)
-        .padding(.top, 6)
-        .accessibilityLabel("Continue last session: \(s.title)")
     }
 
     private func loadModels() async {
-        guard let harness = flow.harness?.harnessID else { return }
-        pickedModel = flow.model
-        pickedEffort = flow.effort
+        if let initialListing { listing = initialListing; return }
         modelsLoading = true
         defer { modelsLoading = false }
-        listing = try? await HarnessModelCatalog.shared.listing(for: harness, refresh: false)
+        listing = try? await HarnessModelCatalog.shared.listing(for: harness.harnessID, refresh: false)
     }
 
-    /// Projects as dropdown items (header picker and "All projects").
+    /// Projects as dropdown items (header picker and the home project picker).
     static func projectItems(_ projects: [DevProject], includeOpen: Bool, current: String? = nil) -> [DevDropdownItem] {
         var items = projects.map { project in
             DevDropdownItem(id: project.path, title: project.name,
@@ -380,177 +272,6 @@ struct DevHomeView: View {
 
 private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
-}
-
-// MARK: - Bubbles
-
-/// A home-view choice: a capsule with an optional icon and a caption line.
-struct DevBubble: View {
-    var icon: String?
-    var iconColor: Color?
-    let title: String
-    var caption: String?
-    /// Small harness marks after the title (projects: which CLIs have sessions there).
-    var badges: [AgentCLIKind] = []
-    let palette: DevPalette
-    var quiet = false
-    var compact = false
-    var selected = false
-    var primary = false
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            DevBubbleLabel(icon: icon, iconColor: iconColor, title: title, caption: caption, badges: badges, palette: palette,
-                           quiet: quiet, compact: compact, selected: selected, primary: primary)
-        }
-        .buttonStyle(DevBubblePress())
-        .accessibilityLabel([title, caption].compactMap { $0 }.joined(separator: ", "))
-        .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-}
-
-struct DevBubbleLabel: View {
-    var icon: String?
-    var iconColor: Color?
-    let title: String
-    var caption: String?
-    var badges: [AgentCLIKind] = []
-    let palette: DevPalette
-    var quiet = false
-    var compact = false
-    var selected = false
-    var primary = false
-    @State private var hovering = false
-
-    private var p: DevPalette { palette }
-
-    var body: some View {
-        HStack(spacing: 7) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.system(size: DevMetrics.text(11), weight: .semibold))
-                    .foregroundStyle(primary ? p.primaryForeground : (iconColor ?? (selected ? p.primary : p.mutedForeground)))
-            }
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 5) {
-                    Text(title)
-                        .font(.system(size: DevMetrics.text(compact ? 11.5 : 12.5), weight: .medium))
-                        .foregroundStyle(primary ? p.primaryForeground : (quiet ? p.mutedForeground : p.foreground))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    ForEach(badges, id: \.self) { kind in
-                        Image(systemName: DevPanelView.providerIcon(kind))
-                            .font(.system(size: DevMetrics.text(8), weight: .bold))
-                            .foregroundStyle(DevPanelView.providerColor(kind))
-                            .accessibilityHidden(true)
-                    }
-                }
-                .frame(maxWidth: 230, alignment: .leading)
-                if let caption {
-                    Text(caption)
-                        .font(.system(size: DevMetrics.text(10)))
-                        .foregroundStyle(primary ? p.primaryForeground.opacity(0.8) : p.mutedForeground)
-                        .lineLimit(1)
-                }
-            }
-        }
-        .padding(.horizontal, compact ? 10 : 13)
-        .frame(minHeight: compact ? 26 : (caption == nil ? 32 : 40))
-        .background(Capsule(style: .continuous).fill(fill))
-        .overlay(Capsule(style: .continuous).strokeBorder(stroke, lineWidth: selected ? 1.5 : 1))
-        .shadow(color: .black.opacity(p.isDark || quiet ? 0 : (hovering ? 0.08 : 0.04)), radius: hovering ? 6 : 3, y: 1.5)
-        .contentShape(Capsule())
-        .onHover { hovering = $0 }
-        .animation(.easeOut(duration: 0.12), value: hovering)
-    }
-
-    private var fill: Color {
-        if primary { return hovering ? p.primary.opacity(0.88) : p.primary }
-        if selected { return p.primarySoft }
-        if quiet { return hovering ? p.accent : .clear }
-        return hovering ? p.accent : p.card
-    }
-
-    private var stroke: Color {
-        if primary { return .clear }
-        if selected { return p.primary.opacity(0.7) }
-        return hovering ? p.input : p.border
-    }
-}
-
-private struct DevBubblePress: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
-    }
-}
-
-struct DevSkeletonChip: View {
-    let width: CGFloat
-    let palette: DevPalette
-    @State private var on = false
-
-    var body: some View {
-        Capsule()
-            .fill(palette.accent)
-            .frame(width: width, height: 32)
-            .opacity(on ? 1 : 0.45)
-            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: on)
-            .onAppear { on = true }
-            .accessibilityHidden(true)
-    }
-}
-
-/// Wraps chips onto centered lines.
-struct DevChipFlow: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(width: proposal.width ?? .infinity, subviews: subviews)
-        let width = rows.map(\.width).max() ?? 0
-        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
-        return CGSize(width: min(width, proposal.width ?? width), height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var y = bounds.minY
-        for row in arrange(width: bounds.width, subviews: subviews) {
-            var x = bounds.minX + (bounds.width - row.width) / 2
-            for index in row.items {
-                let size = fit(subviews[index], width: bounds.width)
-                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
-                x += size.width + spacing
-            }
-            y += row.height + spacing
-        }
-    }
-
-    /// Natural size, but never wider than the line, so a long chip truncates instead of overflowing.
-    private func fit(_ view: LayoutSubview, width: CGFloat) -> CGSize {
-        let natural = view.sizeThatFits(.unspecified)
-        guard width.isFinite, natural.width > width else { return natural }
-        return view.sizeThatFits(ProposedViewSize(width: width, height: nil))
-    }
-
-    private struct Row { var items: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
-
-    private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
-        var rows: [Row] = [Row()]
-        for (i, view) in subviews.enumerated() {
-            let size = fit(view, width: width)
-            let extra = rows[rows.count - 1].items.isEmpty ? size.width : size.width + spacing
-            if rows[rows.count - 1].width + extra > width, !rows[rows.count - 1].items.isEmpty {
-                rows.append(Row())
-            }
-            let gap: CGFloat = rows[rows.count - 1].items.isEmpty ? 0 : spacing
-            rows[rows.count - 1].items.append(i)
-            rows[rows.count - 1].width += size.width + gap
-            rows[rows.count - 1].height = max(rows[rows.count - 1].height, size.height)
-        }
-        return rows.filter { !$0.items.isEmpty }
-    }
 }
 
 // MARK: - Sessions
@@ -611,6 +332,7 @@ struct DevSessionRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(DevGhostButtonStyle(palette: p, radius: DevMetrics.radiusMd))
+        .onKeyPress(.return) { action(); return .handled }
         .help(session.liveLocation == nil ? "Resume this session" : "Open this live session")
         .accessibilityLabel([session.title, session.harness.displayName, Self.liveText(session.liveLocation).map { "live in " + $0 }]
             .compactMap { $0 }.joined(separator: ", "))

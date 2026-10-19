@@ -68,6 +68,16 @@ final class DevWorkspace {
         recentSessions.first { !DevSettings.shared.isHidden($0.projectDir.path) }
     }
 
+    #if DEBUG
+    /// Offscreen snapshots: fixture projects and sessions instead of the user's.
+    func seedForSnapshots(projects: [DevProject], recent: [ExternalSession]) {
+        self.projects = projects
+        recentSessions = recent
+        projectsLoaded = true
+        recentLoaded = true
+    }
+    #endif
+
     // MARK: Navigation
 
     /// Applies Settings → Dev → Skip home once per launch (the first time Dev shows).
