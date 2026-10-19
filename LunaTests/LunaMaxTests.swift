@@ -46,6 +46,13 @@ final class LunaMaxTests: XCTestCase {
         XCTAssertEqual(store.activeSpace.today, ids.map { .tab($0) })
     }
 
+    func testBlankPageTitleShowsAsNewTab() {
+        let store = WorkspaceStore(persistence: nil)
+        let id = store.newTab(url: URL(string: "about:blank"))
+        store.updateTitle(id, "about:blank")
+        XCTAssertEqual(displayTitle(for: store.tab(id)!), "New Tab")
+    }
+
     func testCustomTitleWinsOverPageTitleAndCanBeCleared() {
         let store = WorkspaceStore(persistence: nil)
         let id = store.newTab(url: URL(string: "https://example.com"))

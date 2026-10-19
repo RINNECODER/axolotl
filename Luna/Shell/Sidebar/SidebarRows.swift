@@ -5,7 +5,8 @@ import SwiftUI
 
 func displayTitle(for tab: Tab) -> String {
     if let custom = tab.customTitle, !custom.isEmpty { return custom }
-    if !tab.title.isEmpty { return tab.title }
+    // WebKit titles an empty page "about:blank"; show that tab as "New Tab".
+    if !tab.title.isEmpty, tab.title != "about:blank" { return tab.title }
     guard let url = tab.url, url.absoluteString != "about:blank" else { return "New Tab" }
     if url.scheme == "luma" { return url.host == "history" ? "History" : "AI Chat" }
     if url.isFileURL { return url.lastPathComponent }
