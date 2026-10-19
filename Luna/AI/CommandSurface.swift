@@ -470,7 +470,7 @@ struct CommandSurfaceView: View {
                     .padding(.bottom, 3)
                 if composerMode == .chat {
                     ChatAddContextButton(isActive: addContextPresented) { addContextPresented.toggle() }
-                    .popover(isPresented: $addContextPresented, arrowEdge: .top) {
+                    .lunaPopover(isPresented: $addContextPresented, arrowEdge: .top) {
                         AddContextPopover(
                             tabs: otherTabItems,
                             included: Set(includedOtherTabIds),

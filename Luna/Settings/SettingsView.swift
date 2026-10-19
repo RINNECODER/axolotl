@@ -22,7 +22,25 @@ struct SettingsView: View {
         }
     }
 
+    @AppStorage(LiquidGlass.defaultsKey) private var liquidGlass = LiquidGlass.defaultValue
+
     var body: some View {
+        Group {
+            if liquidGlass { nativeLayout } else { solidLayout }
+        }
+        .frame(minWidth: 760, idealWidth: 820, minHeight: 520, idealHeight: 600)
+        .onChange(of: query) { _, _ in
+            if let selection, !visiblePanes.contains(selection) { self.selection = visiblePanes.first }
+        }
+        .onReceive(SettingsRouter.shared.$requestedPane.compactMap { $0 }) { pane in
+            query = ""
+            selection = pane
+            SettingsRouter.shared.requestedPane = nil
+        }
+    }
+
+    /// System Settings style split view (Liquid Glass sidebar on macOS 26).
+    private var nativeLayout: some View {
         NavigationSplitView {
             List(visiblePanes, selection: $selection) { pane in
                 Label(pane.title, systemImage: pane.icon)
@@ -30,10 +48,51 @@ struct SettingsView: View {
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 240)
             .searchable(text: $query, placement: .sidebar, prompt: "Search settings")
-            .onChange(of: query) { _, _ in
-                if let selection, !visiblePanes.contains(selection) { self.selection = visiblePanes.first }
-            }
         } detail: {
+            detail.navigationTitle((selection ?? .appearance).title)
+        }
+    }
+
+    /// Liquid Glass off: the same sidebar and panes on Luna's solid surfaces.
+    private var solidLayout: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    TextField("Search settings", text: $query).textFieldStyle(.plain).font(.system(size: 12.5))
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(LunaSurface.raised))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(LunaSurface.stroke))
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(visiblePanes) { pane in
+                            SolidSidebarRow(pane: pane, isSelected: (selection ?? .appearance) == pane) { selection = pane }
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 38)
+            .frame(width: 210)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(LunaSurface.sidebar)
+            Rectangle().fill(LunaSurface.stroke).frame(width: 1)
+            VStack(alignment: .leading, spacing: 0) {
+                Text((selection ?? .appearance).title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .padding(.horizontal, 20)
+                    .frame(height: 38, alignment: .center)
+                detail
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .ignoresSafeArea(.container, edges: .top)
+    }
+
+    private var detail: some View {
             Group {
                 switch selection ?? .appearance {
                 case .profiles: ProfileSettingsView()
@@ -49,14 +108,37 @@ struct SettingsView: View {
                 case .about: AboutSettingsView()
                 }
             }
-            .navigationTitle((selection ?? .appearance).title)
+    }
+}
+
+/// A settings sidebar row on the solid layout.
+private struct SolidSidebarRow: View {
+    let pane: SettingsPane
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: pane.icon)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(isSelected ? Color.white : Color.accentColor)
+                    .frame(width: 18)
+                Text(pane.title)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? Color.accentColor : (hovering ? LunaSurface.hover : .clear)))
+            .contentShape(Rectangle())
         }
-        .frame(minWidth: 760, idealWidth: 820, minHeight: 520, idealHeight: 600)
-        .onReceive(SettingsRouter.shared.$requestedPane.compactMap { $0 }) { pane in
-            query = ""
-            selection = pane
-            SettingsRouter.shared.requestedPane = nil
-        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 

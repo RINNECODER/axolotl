@@ -93,9 +93,11 @@ struct StartShortcutsRow: View {
             FaviconView(url: s.url)
                 .scaleEffect(1.15)
         }
-        .contextMenu {
-            Button("Edit…") { editing = s }
-            Button("Remove", role: .destructive) { remove(s) }
+        .lunaContextMenu {
+            [
+                .button("Edit…", icon: "pencil") { editing = s },
+                .button("Remove", icon: "trash", destructive: true) { remove(s) },
+            ]
         }
     }
 
@@ -109,10 +111,10 @@ struct StartShortcutsRow: View {
                 .font(.system(size: 15, weight: .medium))
                 .foregroundStyle(.secondary)
         }
-        .popover(isPresented: $addingShortcut, arrowEdge: .bottom) {
+        .lunaPopover(isPresented: $addingShortcut, arrowEdge: .bottom) {
             ShortcutEditor(title: "Add Shortcut", confirm: "Add", initial: nil) { store.add($0) }
         }
-        .popover(item: $editing, arrowEdge: .bottom) { s in
+        .lunaPopover(item: $editing, arrowEdge: .bottom) { s in
             ShortcutEditor(title: "Edit Shortcut", confirm: "Save", initial: s) { store.update($0) }
         }
     }

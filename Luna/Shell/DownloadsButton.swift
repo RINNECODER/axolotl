@@ -51,7 +51,7 @@ struct DownloadsButton: View {
         .accessibilityLabel("Downloads")
         .accessibilityValue(accessibilityProgress)
         .background(WindowReader { window = $0 })
-        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+        .lunaPopover(isPresented: $isPresented, arrowEdge: .bottom) {
             DownloadsHubView()
         }
         .onChange(of: manager.presentRequest) { _, _ in

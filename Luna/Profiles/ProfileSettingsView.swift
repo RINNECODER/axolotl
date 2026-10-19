@@ -99,7 +99,7 @@ private struct ProfileIconPicker: View {
                 .frame(width: 18)
         }
         .help("Avatar icon")
-        .popover(isPresented: $open, arrowEdge: .bottom) {
+        .lunaPopover(isPresented: $open, arrowEdge: .bottom) {
             VStack(alignment: .leading, spacing: 8) {
                 LazyVGrid(columns: Array(repeating: GridItem(.fixed(30), spacing: 6), count: 6), spacing: 6) {
                     ForEach(ProfileIcons.choices, id: \.self) { symbol in

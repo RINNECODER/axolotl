@@ -142,13 +142,15 @@ struct DevDropdownList: View {
     }
 
     private var p: DevPalette { palette }
-    static func popoverFill(_ p: DevPalette) -> Color { p.isDark ? Color(hex: 0x161616) : .white }
+    /// Same tokens as every Luna menu (LunaMenu, pickers), so all dropdowns look like one family.
+    private var menuStyle: LunaMenuStyle { LunaMenuStyle.resolve(.luna, dark: p.isDark, glass: false) }
+    static func popoverFill(_ p: DevPalette) -> Color { LunaMenuStyle.resolve(.luna, dark: p.isDark, glass: false).background }
 
     var body: some View {
         VStack(spacing: 0) {
             if model.showsSearch {
                 searchField
-                Rectangle().fill(p.border).frame(height: 1)
+                Rectangle().fill(menuStyle.separator).frame(height: 1)
             }
             ViewThatFits(in: .vertical) {
                 rows
@@ -164,7 +166,7 @@ struct DevDropdownList: View {
             .frame(maxHeight: maxHeight - (model.showsSearch ? 38 : 0) - (footnote == nil ? 0 : 28))
             .fixedSize(horizontal: false, vertical: true)
             if let footnote {
-                Rectangle().fill(p.border).frame(height: 1)
+                Rectangle().fill(menuStyle.separator).frame(height: 1)
                 Text(footnote)
                     .font(.system(size: DevMetrics.text2xs))
                     .foregroundStyle(p.mutedForeground)
@@ -174,11 +176,7 @@ struct DevDropdownList: View {
             }
         }
         .frame(width: width)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Self.popoverFill(p)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .strokeBorder(p.isDark ? Color.white.opacity(0.09) : Color.black.opacity(0.1), lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .shadow(color: .black.opacity(p.isDark ? 0.5 : 0.14), radius: 18, y: 8)
+        .modifier(LunaMenuChrome(style: menuStyle))
         .focusable(!model.showsSearch)
         .focusEffectDisabled()
         .focused($focused)
@@ -217,7 +215,7 @@ struct DevDropdownList: View {
             let sections = model.sections
             ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
                 if index > 0 {
-                    Rectangle().fill(p.border).frame(height: 1).padding(.vertical, 4).padding(.horizontal, -4)
+                    Rectangle().fill(menuStyle.separator).frame(height: 1).padding(.vertical, 4).padding(.horizontal, -4)
                 }
                 if let title = section.title {
                     Text(title)
@@ -295,7 +293,7 @@ struct DevDropdownList: View {
             .padding(.vertical, item.subtitle == nil ? 0 : 5)
             .frame(minHeight: 28)
             .background(RoundedRectangle(cornerRadius: DevMetrics.radiusSm, style: .continuous)
-                .fill(highlighted ? p.accent.opacity(p.isDark ? 1.6 : 1) : .clear))
+                .fill(highlighted ? menuStyle.hover : .clear))
             .opacity(item.isEnabled ? 1 : 0.45)
             .contentShape(Rectangle())
         }
@@ -378,7 +376,8 @@ struct DevDropdown<Label: View>: View {
         func body(content: Content) -> some View {
             switch owner.presentation {
             case .popover:
-                content.popover(isPresented: owner.$isOpen, arrowEdge: owner.edge == .above ? .top : .bottom) {
+                content.lunaPopover(isPresented: owner.$isOpen, arrowEdge: owner.edge == .above ? .top : .bottom,
+                                    decorated: false) {
                     owner.list(maxHeight: 360).padding(6)
                 }
             case .inWindow:

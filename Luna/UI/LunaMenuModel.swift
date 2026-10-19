@@ -119,8 +119,8 @@ extension LunaMenuEntry {
                 out.append(.item(LunaMenuItem(
                     id: "ns.\(index).\(item.title)", title: item.title, icon: item.image.map { .image($0) },
                     shortcut: shortcutText(item), isEnabled: item.isEnabled, isChecked: item.state == .on,
-                    action: { [weak item] in
-                        guard let item, let action = item.action else { return }
+                    action: {
+                        guard let action = item.action else { return }
                         NSApp.sendAction(action, to: item.target, from: item)
                     })))
             }

@@ -436,7 +436,7 @@ struct SmartSearchView: View {
 
             HStack(alignment: .bottom, spacing: 0) {
                 ChatAddContextButton(isActive: addContextFromChat) { addContextFromChat.toggle() }
-                .popover(isPresented: $addContextFromChat, arrowEdge: .top) { addContextPopover(dismiss: { addContextFromChat = false }) }
+                .lunaPopover(isPresented: $addContextFromChat, arrowEdge: .top) { addContextPopover(dismiss: { addContextFromChat = false }) }
                 .padding(.bottom, 3)
 
                 SmartGrowingInput(
@@ -541,7 +541,7 @@ struct SmartSearchView: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .popover(isPresented: $addContextFromCard, arrowEdge: .bottom) { addContextPopover(dismiss: { addContextFromCard = false }) }
+                .lunaPopover(isPresented: $addContextFromCard, arrowEdge: .bottom) { addContextPopover(dismiss: { addContextFromCard = false }) }
 
                 Spacer()
 

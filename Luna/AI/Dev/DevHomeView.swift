@@ -164,9 +164,15 @@ struct DevHomeView: View {
                                   caption: projectCaption(project), badges: project.harnesses.compactMap(\.agentKind), palette: p) {
                             withAnimation(motion) { workspace.flow.choose(project: project.path) }
                         }
-                        .contextMenu {
-                            Button("Hide from Dev") { withAnimation(motion) { workspace.hide(project: project.path) } }
-                            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([project.url]) }
+                        .lunaContextMenu {
+                            [
+                                .button("Hide from Dev", icon: "eye.slash") {
+                                    withAnimation(motion) { workspace.hide(project: project.path) }
+                                },
+                                .button("Reveal in Finder", icon: "folder") {
+                                    NSWorkspace.shared.activateFileViewerSelecting([project.url])
+                                },
+                            ]
                         }
                         .help(project.path)
                     }
