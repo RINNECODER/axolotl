@@ -20,8 +20,8 @@ const palettes = Object.fromEntries([...model.matchAll(/id: "(\w+)", name: "[^"]
   .map(([, id, bg, a, b]) => [id, { bg, a, b }]))
 const accents = Object.fromEntries([...model.matchAll(/id: "(\w+)", name: "[^"]*", hex: "(#\w+)"/g)].map(([, id, hex]) => [id, hex]))
 const styles = {}
-for (const [, cases, palette, accent] of model.matchAll(/case ([.\w, ]+): return WallpaperStyle\(palette: "(\w+)", accent: "(\w+)"\)/g))
-  for (const c of cases.split(',')) styles[c.trim().slice(1)] = { palette, accent }
+for (const [, cases, palette, accent, grain] of model.matchAll(/case ([.\w, ]+): return WallpaperStyle\(palette: "(\w+)", accent: "(\w+)"(?:, grain: ([\d.]+))?\)/g))
+  for (const c of cases.split(',')) styles[c.trim().slice(1)] = { palette, accent, grain: Number(grain ?? 0) }
 delete styles.none
 
 const types = { html: 'text/html', js: 'text/javascript' }
@@ -35,14 +35,14 @@ await new Promise((r) => server.once('listening', r))
 const browser = await chromium.launch({ args: ['--enable-unsafe-webgpu', '--ignore-gpu-blocklist', '--enable-gpu', '--use-angle=metal'] })
 fs.mkdirSync(out, { recursive: true })
 fs.writeFileSync(path.join(out, 'Contents.json'), JSON.stringify({ info: { author: 'xcode', version: 1 } }, null, 2) + '\n')
-for (const [preset, { palette, accent }] of Object.entries(styles)) {
+for (const [preset, { palette, accent, grain }] of Object.entries(styles)) {
   const page = await browser.newPage({ viewport: { width: 132, height: 66 }, deviceScaleFactor: 2 })
   await page.goto(`http://127.0.0.1:${server.address().port}/index.html`)
   await page.evaluate((cfg) => {
     window.webkit = { messageHandlers: { axolotlWallpaper: { postMessage: (m) => { window.lastState = m.state } } } }
     window.axolotlWallpaper.apply(cfg)
     window.axolotlWallpaper.setActive(true)
-  }, { preset, colors: { ...palettes[palette], accent: accents[accent] }, speed: 1, intensity: 1, fps: 60, scale: 1, still: false })
+  }, { preset, colors: { ...palettes[palette], accent: accents[accent] }, speed: 1, intensity: 1, grain, fps: 60, scale: 1, still: false })
   await page.waitForTimeout(2000) // let the shader move off its first frame
   // The page falls back to a CSS gradient without WebGPU; never commit that as a thumbnail.
   const state = await page.evaluate(() => window.lastState)

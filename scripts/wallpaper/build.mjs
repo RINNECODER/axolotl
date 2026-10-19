@@ -16,7 +16,7 @@ const dist = path.resolve(here, 'node_modules/shaders/dist')
 
 // Keep in sync with the component types used in Axolotl/Wallpaper/WallpaperWeb/wallpaper.js.
 export const COMPONENTS = [
-  'Aurora', 'Dither', 'FilmGrain', 'FloatingParticles', 'FlowingGradient', 'Fog', 'Godrays',
+  'Aurora', 'CursorRipples', 'Dither', 'FilmGrain', 'FloatingParticles', 'FlowingGradient', 'Fog', 'Godrays',
   'Halftone', 'LinearGradient', 'Marble', 'MeshGradient', 'Plasma', 'RadialGradient',
   'SimplexNoise', 'SineWave', 'SolidColor', 'Vignette',
 ]

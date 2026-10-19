@@ -9,7 +9,7 @@ struct WallpaperSettingsSection: View {
 
     var body: some View {
         SettingsCard("Wallpaper", footer: store.preset != .none
-                     ? "Wallpapers draw only while a start page is on screen, and hold still with Reduce Motion or Low Power Mode."
+                     ? "Wallpapers draw only while a start page is on screen, and hold still with no pointer effects in Reduce Motion or Low Power Mode."
                      : nil) {
             SettingsContentRow {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
@@ -20,6 +20,9 @@ struct WallpaperSettingsSection: View {
                 }
             }
             .padding(.vertical, 4)
+            }
+            SettingsRow("Surprise me", subtitle: "A random wallpaper, colors and look.") {
+                Button("Surprise Me") { store.surpriseMe() }
             }
 
             if store.preset != .none {
@@ -84,11 +87,19 @@ struct WallpaperSettingsSection: View {
             }
         }
         sliderRow("Speed", value: style.speed, in: WallpaperStyle.speedRange,
-                  label: { String(format: "%.2g×", $0) })
+                  label: { $0 == 0 ? "Still" : String(format: "%.2g×", $0) })
         sliderRow("Intensity", value: style.intensity, in: WallpaperStyle.intensityRange,
                   label: { "\(Int(($0 * 100).rounded()))%" })
         sliderRow("Dim", value: style.dim, in: WallpaperStyle.dimRange,
                   label: { "\(Int(($0 * 100).rounded()))%" })
+        sliderRow("Grain", value: style.grain, in: WallpaperStyle.grainRange,
+                  label: { "\(Int(($0 * 100).rounded()))%" })
+        sliderRow("Zoom", value: style.zoom, in: WallpaperStyle.zoomRange,
+                  label: { String(format: "%.2g×", $0) })
+        SettingsMenuRow("Pointer", subtitle: "How the wallpaper follows the pointer on the start page.",
+                        selection: style.pointer,
+                        options: [.init(.off, "Off"), .init(.glow, "Glow"), .init(.ripple, "Ripple"), .init(.parallax, "Parallax")])
+        SettingsMenuRow("Click", selection: style.click, options: [.init(.off, "Off"), .init(.burst, "Burst")])
 
         SettingsToggleRow("Show logo on top", subtitle: "Keep the logo above the greeting while a wallpaper is on.",
                           isOn: $store.showMoon)

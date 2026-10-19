@@ -36,21 +36,23 @@ private struct WallpaperWebViewRepresentable: NSViewRepresentable {
 
     func makeCoordinator() -> WallpaperBridge { WallpaperBridge() }
 
-    func makeNSView(context: Context) -> WKWebView {
+    func makeNSView(context: Context) -> PassthroughWebView {
         context.coordinator.onState = { state in
             if state == "fallback" { DispatchQueue.main.async { onFallback?() } }
         }
         let webView = WallpaperWeb.makeWebView(bridge: context.coordinator)
         context.coordinator.webView = webView
+        webView.onMouseMoved = { [weak bridge = context.coordinator] in bridge?.pointerMoved($0) }
         return webView
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
+    func updateNSView(_ webView: PassthroughWebView, context: Context) {
         context.coordinator.update(config: config, mode: mode)
     }
 
-    static func dismantleNSView(_ webView: WKWebView, coordinator: WallpaperBridge) {
+    static func dismantleNSView(_ webView: PassthroughWebView, coordinator: WallpaperBridge) {
         coordinator.update(config: nil, mode: .paused)
+        webView.onMouseMoved = nil
         webView.configuration.userContentController.removeAllScriptMessageHandlers()
         webView.stopLoading()
     }
@@ -58,7 +60,7 @@ private struct WallpaperWebViewRepresentable: NSViewRepresentable {
 
 /// Talks to `window.axolotlWallpaper`, queuing calls until the page has loaded.
 final class WallpaperBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
-    weak var webView: WKWebView?
+    weak var webView: PassthroughWebView?
     private var loaded = false
     private var config: WallpaperRenderConfig?
     private var mode: WallpaperActivity.Mode = .paused
@@ -66,6 +68,10 @@ final class WallpaperBridge: NSObject, WKScriptMessageHandler, WKNavigationDeleg
     private var sentActive: Bool?
     var onState: ((String) -> Void)?
     private var crashCount = 0
+    private var tracking: NSTrackingArea?
+    private var clickMonitor: Any?
+    private var pendingPointer: CGPoint?
+    private var lastPointerSent: CFTimeInterval = 0
     static let maxReloads = 3
 
     /// Only the initial `axolotl-wallpaper` page load is allowed; everything else is cancelled.
@@ -115,6 +121,70 @@ final class WallpaperBridge: NSObject, WKScriptMessageHandler, WKNavigationDeleg
             sentActive = active
             webView.evaluateJavaScript("window.axolotlWallpaper && window.axolotlWallpaper.setActive(\(active))")
         }
+        syncPointerInput()
+    }
+
+    // MARK: Pointer input
+    // Only while the wallpaper is animating on screen with an effect on; otherwise no
+    // tracking area or event monitor exists, so the pointer costs nothing.
+
+    private func syncPointerInput() {
+        let on = loaded && mode == .running
+        let wantsMove = on && (config?.pointer ?? "off") != "off"
+        let wantsClick = on && (config?.click ?? "off") != "off"
+        if wantsMove != (tracking != nil), let webView {
+            if let tracking { webView.removeTrackingArea(tracking); self.tracking = nil }
+            if wantsMove {
+                let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeInActiveApp, .inVisibleRect],
+                                          owner: webView, userInfo: nil)
+                webView.addTrackingArea(area)
+                tracking = area
+            }
+        }
+        if wantsClick != (clickMonitor != nil) {
+            if let clickMonitor { NSEvent.removeMonitor(clickMonitor); self.clickMonitor = nil }
+            if wantsClick {
+                // Clicks still go to the start page; the wallpaper only watches them.
+                clickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+                    self?.send(event, click: true)
+                    return event
+                }
+            }
+        }
+    }
+
+    func pointerMoved(_ event: NSEvent) {
+        guard tracking != nil, let webView, let p = Self.normalized(event, in: webView) else { return }
+        // At most 60 updates a second; the latest position wins.
+        let due = pendingPointer == nil
+        pendingPointer = p
+        guard due else { return }
+        let wait = max(0, lastPointerSent + 1.0 / 60 - CACurrentMediaTime())
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
+            guard let self, let p = self.pendingPointer else { return }
+            self.pendingPointer = nil
+            self.lastPointerSent = CACurrentMediaTime()
+            self.sendPointer(p, click: false)
+        }
+    }
+
+    private func send(_ event: NSEvent, click: Bool) {
+        guard let webView, event.window === webView.window, let p = Self.normalized(event, in: webView) else { return }
+        sendPointer(p, click: click)
+    }
+
+    private func sendPointer(_ p: CGPoint, click: Bool) {
+        guard loaded, mode == .running else { return }
+        webView?.evaluateJavaScript("window.axolotlWallpaper && window.axolotlWallpaper.pointer(\(p.x), \(p.y), \(click))")
+    }
+
+    /// The event's position in `view` as 0...1 with y down, or nil outside it.
+    static func normalized(_ event: NSEvent, in view: NSView) -> CGPoint? {
+        let p = view.convert(event.locationInWindow, from: nil)
+        let b = view.bounds
+        guard b.width > 0, b.height > 0, b.contains(p) else { return nil }
+        let y = (p.y - b.minY) / b.height
+        return CGPoint(x: (p.x - b.minX) / b.width, y: view.isFlipped ? y : 1 - y)
     }
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -160,7 +230,7 @@ enum WallpaperWeb {
     private static let processPool = WKProcessPool()
     private static let dataStore = WKWebsiteDataStore.nonPersistent()
 
-    static func makeWebView(bridge: WallpaperBridge) -> WKWebView {
+    static func makeWebView(bridge: WallpaperBridge) -> PassthroughWebView {
         let config = WKWebViewConfiguration()
         config.processPool = processPool
         config.websiteDataStore = dataStore
@@ -188,8 +258,11 @@ enum WallpaperWeb {
     }
 }
 
-/// Ignores the mouse so clicks and scrolls go to the start page above it.
-private final class PassthroughWebView: WKWebView {
+/// Ignores the mouse so clicks and scrolls go to the start page above it. Pointer moves
+/// reach the page only through `onMouseMoved` (see `WallpaperBridge.syncPointerInput`).
+final class PassthroughWebView: WKWebView {
+    var onMouseMoved: ((NSEvent) -> Void)?
+    override func mouseMoved(with event: NSEvent) { onMouseMoved?(event) }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override var acceptsFirstResponder: Bool { false }
     override func scrollWheel(with event: NSEvent) { nextResponder?.scrollWheel(with: event) }

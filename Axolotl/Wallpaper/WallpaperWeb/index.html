@@ -13,6 +13,10 @@
   canvas { opacity: 0; transition: opacity .6s ease; }
   canvas.ready { opacity: var(--intensity, 1); }
   #fallback.shown { opacity: var(--intensity, 1); }
+  .burst { position: fixed; width: 240px; height: 240px; margin: -120px 0 0 -120px; border-radius: 50%;
+    background: radial-gradient(closest-side, transparent 55%, var(--accent) 72%, transparent 100%);
+    mix-blend-mode: screen; opacity: 0; animation: burst .7s ease-out; }
+  @keyframes burst { from { transform: scale(.15); opacity: .55; } to { transform: scale(1.4); opacity: 0; } }
 </style>
 </head>
 <body>

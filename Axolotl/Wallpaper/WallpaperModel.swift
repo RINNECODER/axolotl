@@ -89,38 +89,53 @@ enum WallpaperPreset: String, CaseIterable, Identifiable {
     var defaultStyle: WallpaperStyle {
         switch self {
         case .none, .nightDrift: return WallpaperStyle(palette: "midnight", accent: "moonlight")
-        case .polarVeil: return WallpaperStyle(palette: "midnight", accent: "mint")
-        case .inkBloom: return WallpaperStyle(palette: "orchid", accent: "rose")
-        case .velvetMesh: return WallpaperStyle(palette: "orchid", accent: "amber")
-        case .moonlitHaze: return WallpaperStyle(palette: "graphite", accent: "moonlight")
+        case .polarVeil: return WallpaperStyle(palette: "midnight", accent: "mint", grain: 0.4)
+        case .inkBloom: return WallpaperStyle(palette: "orchid", accent: "rose", grain: 0.4)
+        case .velvetMesh: return WallpaperStyle(palette: "orchid", accent: "amber", grain: 0.55)
+        case .moonlitHaze: return WallpaperStyle(palette: "graphite", accent: "moonlight", grain: 0.35)
         case .tidalDither: return WallpaperStyle(palette: "lagoon", accent: "cyan")
-        case .emberPlasma: return WallpaperStyle(palette: "ember", accent: "amber")
+        case .emberPlasma: return WallpaperStyle(palette: "ember", accent: "amber", grain: 0.4)
         case .halftoneDusk: return WallpaperStyle(palette: "midnight", accent: "rose")
-        case .marbleSmoke: return WallpaperStyle(palette: "graphite", accent: "lavender")
-        case .lunarRays: return WallpaperStyle(palette: "midnight", accent: "lavender")
+        case .marbleSmoke: return WallpaperStyle(palette: "graphite", accent: "lavender", grain: 0.5)
+        case .lunarRays: return WallpaperStyle(palette: "midnight", accent: "lavender", grain: 0.4)
         }
     }
 }
 
-/// Per-preset look. Decoding never fails on bad stored values: unknown swatches fall
-/// back to the preset's defaults and numbers are clamped into range.
+/// Per-preset look. Decoding never fails on bad stored values: unknown swatches and
+/// effects fall back to the preset's defaults and numbers are clamped into range.
 struct WallpaperStyle: Codable, Equatable {
-    static let speedRange: ClosedRange<Double> = 0.25...2
+    /// What the start page's pointer does to the wallpaper.
+    enum Pointer: String, Codable, CaseIterable { case off, glow, ripple, parallax }
+    enum Click: String, Codable, CaseIterable { case off, burst }
+
+    static let speedRange: ClosedRange<Double> = 0...2
     static let intensityRange: ClosedRange<Double> = 0.3...1
     static let dimRange: ClosedRange<Double> = 0...0.7
+    static let grainRange: ClosedRange<Double> = 0...1
+    static let zoomRange: ClosedRange<Double> = 1...2
 
     var palette: String
     var accent: String
     var speed: Double = 1
     var intensity: Double = 1
     var dim: Double = 0.25
+    var grain: Double = 0
+    var zoom: Double = 1
+    var pointer = Pointer.off
+    var click = Click.off
 
-    init(palette: String, accent: String, speed: Double = 1, intensity: Double = 1, dim: Double = 0.25) {
+    init(palette: String, accent: String, speed: Double = 1, intensity: Double = 1, dim: Double = 0.25,
+         grain: Double = 0, zoom: Double = 1, pointer: Pointer = .off, click: Click = .off) {
         self.palette = palette
         self.accent = accent
         self.speed = speed
         self.intensity = intensity
         self.dim = dim
+        self.grain = grain
+        self.zoom = zoom
+        self.pointer = pointer
+        self.click = click
     }
 
     init(from decoder: Decoder) throws {
@@ -130,6 +145,11 @@ struct WallpaperStyle: Codable, Equatable {
         speed = (try? c.decode(Double.self, forKey: .speed)) ?? 1
         intensity = (try? c.decode(Double.self, forKey: .intensity)) ?? 1
         dim = (try? c.decode(Double.self, forKey: .dim)) ?? 0.25
+        // Grain's default differs per preset; NaN makes `validated(for:)` fill it in.
+        grain = (try? c.decode(Double.self, forKey: .grain)) ?? .nan
+        zoom = (try? c.decode(Double.self, forKey: .zoom)) ?? 1
+        pointer = (try? c.decode(Pointer.self, forKey: .pointer)) ?? .off
+        click = (try? c.decode(Click.self, forKey: .click)) ?? .off
     }
 
     /// The same style with every field valid for `preset`.
@@ -143,7 +163,25 @@ struct WallpaperStyle: Codable, Equatable {
             accent: WallpaperAccent.named(accent) != nil ? accent : fallback.accent,
             speed: clamp(speed, Self.speedRange, 1),
             intensity: clamp(intensity, Self.intensityRange, 1),
-            dim: clamp(dim, Self.dimRange, 0.25))
+            dim: clamp(dim, Self.dimRange, 0.25),
+            grain: clamp(grain, Self.grainRange, fallback.grain),
+            zoom: clamp(zoom, Self.zoomRange, 1),
+            pointer: pointer, click: click)
+    }
+
+    /// A random, good-looking style for `preset`: any swatches, knobs kept near the defaults.
+    /// Pointer and click effects stay as they are.
+    func surprise(for preset: WallpaperPreset, using rng: inout some RandomNumberGenerator) -> WallpaperStyle {
+        let d = preset.defaultStyle
+        return WallpaperStyle(
+            palette: WallpaperPalette.all.randomElement(using: &rng)!.id,
+            accent: WallpaperAccent.all.randomElement(using: &rng)!.id,
+            speed: .random(in: 0.6...1.4, using: &rng),
+            intensity: .random(in: 0.75...1, using: &rng),
+            dim: dim,
+            grain: min(1, d.grain + .random(in: 0...0.3, using: &rng)),
+            zoom: .random(in: 1...1.5, using: &rng),
+            pointer: pointer, click: click)
     }
 }
 
@@ -162,6 +200,11 @@ struct WallpaperRenderConfig: Codable, Equatable {
     let colors: Colors
     let speed: Double
     let intensity: Double
+    let grain: Double
+    let zoom: Double
+    /// `WallpaperStyle.Pointer` / `.Click` raw values.
+    let pointer: String
+    let click: String
     let fps: Int
     /// Fraction of the device pixel ratio the canvas renders at.
     let scale: Double
@@ -176,6 +219,10 @@ struct WallpaperRenderConfig: Codable, Equatable {
         colors = Colors(bg: p.base, a: p.mid, b: p.high, accent: accent.hex)
         speed = s.speed
         intensity = s.intensity
+        grain = s.grain
+        zoom = s.zoom
+        pointer = s.pointer.rawValue
+        click = s.click.rawValue
         self.fps = Self.allowedFrameRates.contains(fps) ? fps : 30
         self.scale = min(max(scale, 0.25), 1)
         self.still = still
@@ -234,6 +281,14 @@ final class WallpaperStore: ObservableObject {
 
     func style(for preset: WallpaperPreset) -> WallpaperStyle {
         styles[preset.rawValue]?.validated(for: preset) ?? preset.defaultStyle
+    }
+
+    /// Picks another wallpaper and gives it a random look.
+    func surpriseMe() {
+        var rng = SystemRandomNumberGenerator()
+        let next = WallpaperPreset.allCases.filter { $0 != .none && $0 != preset }.randomElement(using: &rng)!
+        setStyle(style(for: preset == .none ? next : preset).surprise(for: next, using: &rng), for: next)
+        preset = next
     }
 
     func setStyle(_ style: WallpaperStyle, for preset: WallpaperPreset) {
