@@ -19,7 +19,7 @@ struct AskOnPageBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                Image(systemName: "sparkles")
+                Image(icon: "axolotl", pointSize: 13)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.secondary)
                 TextField("Ask about this page…", text: $question)

@@ -42,7 +42,7 @@ struct OnboardingView: View {
                     .help("Skip the rest (Esc). You can open this again from Help → Show Welcome…")
             }
             Group {
-                if flow.step == .welcome {
+                if flow.step.symbol == "AxolotlMark" {
                     Image(flow.step.symbol).renderingMode(.template).resizable().scaledToFit().padding(11)
                 } else {
                     Image(systemName: flow.step.symbol)

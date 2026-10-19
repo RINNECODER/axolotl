@@ -33,7 +33,7 @@ enum OnboardingStep: String, CaseIterable, Identifiable {
         switch self {
         case .welcome: return "AxolotlMark" // asset, not an SF Symbol (see OnboardingView)
         case .importData: return "square.and.arrow.down.on.square"
-        case .ai: return "sparkles"
+        case .ai: return "AxolotlMark"
         case .look: return "paintbrush.pointed"
         case .privacy: return "hand.raised.fill"
         case .developer: return "chevron.left.forwardslash.chevron.right"

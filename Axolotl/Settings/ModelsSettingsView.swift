@@ -252,7 +252,7 @@ private struct AxolotlMaxSections: View {
             RegistryToggle("axolotlMax.askOnPage")
             RegistryToggle("axolotlMax.linkPreviews")
         }
-        SettingsCard("Axolotl Max: automatic", footer: "Automatic features send tab titles or file names to your AI provider. Tidy Today is always in the ✦ button on the sidebar's Today divider.") {
+        SettingsCard("Axolotl Max: automatic", footer: "Automatic features send tab titles or file names to your AI provider. Tidy Today is always in the axolotl button on the sidebar's Today divider.") {
             RegistryToggle("axolotlMax.tidyTitles")
             RegistryToggle("axolotlMax.tidyDownloads")
         }

@@ -589,7 +589,7 @@ private struct AxolotlMenuRow: View {
         } else {
             switch item.icon {
             case .system(let name):
-                Image(systemName: name)
+                Image(icon: name, pointSize: 14)
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(style.secondary)
             case .image(let image):

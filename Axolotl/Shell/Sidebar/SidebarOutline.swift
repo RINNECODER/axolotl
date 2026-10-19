@@ -479,7 +479,7 @@ struct SidebarOutline: NSViewRepresentable {
             case .divider:
                 let canTidy = snapshot.space.today.count >= 3
                 cell.show(AnyView(SidebarDividerRow()), closeAction: canTidy ? { [actions] in actions.tidyToday() } : nil,
-                          closeSymbol: "sparkles", closeHelp: "Tidy Today's tabs into folders")
+                          closeSymbol: "axolotl", closeHelp: "Tidy Today's tabs into folders")
             case .newTab:
                 cell.show(AnyView(SidebarNewTabRow()), closeAction: nil)
             case .node(let node):
@@ -699,8 +699,8 @@ final class SidebarCell: NSTableCellView {
         self.closeAction = closeAction
         closeButton.toolTip = closeHelp
         closeButton.setAccessibilityLabel(closeHelp)
-        closeButton.image = NSImage(systemSymbolName: closeSymbol, accessibilityDescription: "Close")?
-            .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
+        let closeImage = NSImage.icon(closeSymbol, pointSize: 10)
+        closeButton.image = closeImage?.withSymbolConfiguration(.init(pointSize: 10, weight: .semibold)) ?? closeImage
         updateCloseVisibility()
     }
 

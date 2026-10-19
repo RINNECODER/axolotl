@@ -247,6 +247,26 @@ struct ChromeToolbarButton: View {
     }
 }
 
+extension NSImage {
+    /// "axolotl" is the app's own mark (sized like a symbol); anything else is an SF Symbol.
+    static func icon(_ name: String, pointSize: CGFloat = 15) -> NSImage? {
+        guard name == "axolotl" else { return NSImage(systemSymbolName: name, accessibilityDescription: nil) }
+        guard let mark = NSImage(named: "AxolotlMark")?.copy() as? NSImage else { return nil }
+        let width = pointSize * 1.25
+        mark.size = NSSize(width: width, height: width * mark.size.height / max(mark.size.width, 1))
+        mark.isTemplate = true
+        return mark
+    }
+}
+
+extension Image {
+    /// SF Symbol, or the axolotl mark for "axolotl".
+    init(icon name: String, pointSize: CGFloat = 15) {
+        if name == "axolotl", let mark = NSImage.icon(name, pointSize: pointSize) { self.init(nsImage: mark) }
+        else { self.init(systemName: name) }
+    }
+}
+
 struct ChromeIcon: View {
     let systemName: String
     let color: Color
@@ -254,7 +274,7 @@ struct ChromeIcon: View {
     var size: CGFloat = 15
 
     var body: some View {
-        Image(systemName: systemName)
+        Image(icon: systemName, pointSize: size)
             .font(.system(size: size, weight: .regular))
             .foregroundStyle(color)
             .rotationEffect(rotation)

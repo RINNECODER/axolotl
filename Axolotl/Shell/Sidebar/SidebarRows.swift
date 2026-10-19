@@ -23,7 +23,7 @@ struct TabIcon: View {
             if let url = tab.url, url.scheme == "http" || url.scheme == "https" || url.isFileURL {
                 FaviconView(url: url, faviconURL: faviconURL)
             } else if InternalPage.isInternal(tab.url) {
-                Image(systemName: InternalPage.icon(tab.url))
+                Image(icon: InternalPage.icon(tab.url))
                     .foregroundStyle(.secondary)
             } else {
                 Image(systemName: "magnifyingglass")

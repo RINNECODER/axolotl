@@ -83,7 +83,7 @@ enum InternalPage {
         if isDownloads(url) { return "arrow.down.circle" }
         if isPasswords(url) { return "key" }
         if viewSourcePage(url) != nil { return "chevron.left.forwardslash.chevron.right" }
-        return url?.host == "history" ? "clock" : "sparkles"
+        return url?.host == "history" ? "clock" : "axolotl"
     }
 }
 

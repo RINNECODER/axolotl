@@ -172,7 +172,7 @@ private struct SettingsNavRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 14) {
-                Image(systemName: pane.icon)
+                Image(icon: pane.icon, pointSize: 13.5)
                     .font(.system(size: 13.5, weight: isSelected ? .semibold : .regular))
                     .foregroundStyle(isSelected ? AxolotlSurface.accent : Color.secondary)
                     .frame(width: 20)
@@ -432,7 +432,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .general: return "gearshape"
         case .appearance: return "paintbrush"
         case .tabs: return "square.on.square"
-        case .ai: return "sparkles"
+        case .ai: return "axolotl"
         case .passwords: return "key.fill"
         case .privacy: return "hand.raised"
         case .siteSettings: return "slider.horizontal.3"

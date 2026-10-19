@@ -50,7 +50,7 @@ enum ProfileIcons {
         "hammer.fill", "paintbrush.fill", "camera.fill", "music.note", "gamecontroller.fill", "film.fill",
         "cart.fill", "creditcard.fill", "airplane", "car.fill", "leaf.fill", "pawprint.fill",
         "heart.fill", "star.fill", "bolt.fill", "flame.fill", "moon.fill", "sun.max.fill",
-        "globe.americas.fill", "sparkles", "lock.fill", "chart.bar.fill", "stethoscope", "dumbbell.fill",
+        "globe.americas.fill", "fish.fill", "lock.fill", "chart.bar.fill", "stethoscope", "dumbbell.fill",
     ]
 }
 

@@ -41,7 +41,7 @@ enum AppMenuEntries {
             .button("New tab", icon: "plus.square.on.square", shortcut: "⌘T", action: actions.newTab),
             .button("New window", icon: "macwindow.badge.plus", action: actions.newWindow),
             .divider("s1"),
-            .button("Ask on Page", icon: "sparkles", enabled: actions.canAskOnPage, action: actions.askOnPage),
+            .button("Ask on Page", icon: "axolotl", enabled: actions.canAskOnPage, action: actions.askOnPage),
             .divider("s2"),
             .button("History", icon: "clock.arrow.circlepath", shortcut: "⌘Y", action: actions.showHistory),
             .button("Downloads", icon: "arrow.down.to.line", action: actions.showDownloads),
@@ -207,7 +207,7 @@ struct TopChromeView: View {
                 .padding(.horizontal, 7)
                 }
                 ShieldsButton(web: web, extensions: extensions, tabId: store.activeTabId, url: activeURL)
-                ChromeToolbarButton(systemName: "sparkles", help: "Axolotl AI (⌘E)", action: actions.toggleAI)
+                ChromeToolbarButton(systemName: "axolotl", help: "Axolotl AI (⌘E)", action: actions.toggleAI)
                 ChromeExtensionsButton(extensions: extensions)
                 DownloadsButton()
                 profileControl
@@ -289,7 +289,7 @@ struct TopChromeView: View {
     private var toolbarIcons: some View {
         HStack(spacing: 2) {
             ShieldsButton(web: web, extensions: extensions, tabId: store.activeTabId, url: activeURL)
-            ToolbarIconButton(systemName: "sparkles", help: "Axolotl AI (⌘E)", action: actions.toggleAI)
+            ToolbarIconButton(systemName: "axolotl", help: "Axolotl AI (⌘E)", action: actions.toggleAI)
             DownloadsButton()
             profileControl
             UpdatePill()

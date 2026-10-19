@@ -194,7 +194,7 @@ private struct DownloadRow: View {
                 }
                 if item.state == .finished {
                     if isHovering, item.originalFileURL == nil, !item.isTidying {
-                        iconButton("sparkles", help: "Tidy file name") { manager.tidy(item.id) }
+                        iconButton("axolotl", help: "Tidy file name") { manager.tidy(item.id) }
                     }
                     iconButton("magnifyingglass", help: "Show in Finder") { manager.revealInFinder(item) }
                 }
@@ -247,7 +247,7 @@ private struct DownloadRow: View {
 
     private func iconButton(_ systemName: String, help: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: systemName)
+            Image(icon: systemName, pointSize: 11)
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 20, height: 20)
