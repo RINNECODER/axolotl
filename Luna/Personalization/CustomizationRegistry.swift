@@ -204,7 +204,15 @@ enum CustomizationRegistry {
         bool("lunaMax.tidyDownloads", LunaMaxPrefs.tidyDownloads, "Tidy downloads",
              "Rename downloaded files (sends file names to the AI provider).", default: false,
              help: "Renames downloaded files so they're easier to find. Undo it in Downloads."),
-    ] + themeSettings + glassSettings
+    ] + themeSettings + glassSettings + sitePermissionDefaults
+
+    /// Site settings defaults (`sitePermissions.camera` …); per-site exceptions live in SitePermissionStore.
+    private static var sitePermissionDefaults: [CustomizableSetting] {
+        SitePermission.allCases.map { p in
+            choice(p.registryKey, p.defaultsKey, p.title, "Default for sites without their own setting.",
+                   default: p.builtInDefault.rawValue, p.defaultChoices.map { ($0.rawValue, $0.title(for: p)) })
+        }
+    }
 
     static func setting(_ key: String) -> CustomizableSetting? { all.first { $0.key == key } }
 

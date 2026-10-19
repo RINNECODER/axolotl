@@ -1065,6 +1065,14 @@ struct BrowserShellView: View {
                             }
                             .id(preview.url)
                         }
+                        if let request = web.pendingPermissions[currentId] {
+                            SitePermissionBubble(request: request)
+                                .id(request.id)
+                                .padding(.top, 8)
+                                .padding(.leading, 12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .transition(.opacity)
+                        }
                         // Luna Passwords: fill / save offers for this tab.
                         VStack(alignment: .trailing, spacing: 8) {
                             if let offer = web.passwordSaveOffer, offer.tabId == currentId {

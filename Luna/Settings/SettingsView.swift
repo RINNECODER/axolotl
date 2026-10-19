@@ -119,6 +119,7 @@ struct SettingsPaneContent: View {
         case .ai: ModelsSettingsView()
         case .passwords: PasswordsImportView()
         case .privacy: PersonalizationSettingsView()
+        case .siteSettings: SiteSettingsView()
         case .extensions: ExtensionsSettingsView()
         case .agents: AgentsSettingsView()
         case .about: AboutSettingsView()
@@ -238,6 +239,7 @@ extension SettingsPane {
                                ("Keep data for", nil), ("View usage data", nil),
                                ("Cookies and site data", "Clear cookies and site data."),
                                ("Clear browsing data", "Clear history for a time range.")]
+        case .siteSettings: return [("Sites with their own settings", "Allowed and blocked sites.")]
         case .extensions: return [("Extensions", "Installed extensions."), ("Chrome Web Store", "Add extensions.")]
         case .agents: return [("Let agents drive Luna", "An MCP server for Claude Code, Codex and other agents, on this Mac only."),
                               ("Port", nil), ("Don't ask before agents act", nil), ("Regenerate token", nil),
@@ -372,7 +374,9 @@ private struct StandaloneWindowChrome: ViewModifier {
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
-    case general, appearance, tabs, ai, passwords, privacy, extensions, agents, about
+    case general, appearance, tabs, ai, passwords, privacy
+    case siteSettings = "site-settings"
+    case extensions, agents, about
 
     /// Panes this build shows. Agents is in both builds (Connect agents); its Dev mode part is Luna Dev only.
     static var available: [SettingsPane] { allCases }
@@ -414,6 +418,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .ai: return "AI"
         case .passwords: return "Passwords & Import"
         case .privacy: return "Privacy & Data"
+        case .siteSettings: return "Site Settings"
         case .extensions: return "Extensions"
         case .agents: return "Agents"
         case .about: return "About Luna"
@@ -428,6 +433,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .ai: return "sparkles"
         case .passwords: return "key.fill"
         case .privacy: return "hand.raised"
+        case .siteSettings: return "slider.horizontal.3"
         case .extensions: return "puzzlepiece.extension"
         case .agents: return "chevron.left.forwardslash.chevron.right"
         case .about: return "info.circle"
@@ -447,6 +453,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .tabs: return ["tabs.unloadAfterMinutes"]
         case .ai: return ["aiPanel.fontSize", "lunaMax.askOnPage", "lunaMax.linkPreviews", "lunaMax.tidyTitles",
                           "lunaMax.tidyDownloads"]
+        case .siteSettings: return SitePermission.allCases.map(\.registryKey)
         case .passwords, .privacy, .extensions, .agents, .about: return []
         }
     }
@@ -471,6 +478,8 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
                                  "bookmarks", "history", "sync"]
         case .privacy: return ["privacy", "usage", "data", "record", "personalization", "cookies", "site data",
                                "history", "clear", "browsing data", "customize"]
+        case .siteSettings: return ["site settings", "permissions", "camera", "microphone", "location", "pop-ups", "popups",
+                                    "redirects", "allow", "block", "exceptions"]
         case .extensions: return ["extension", "add-on", "plugin", "chrome web store", "ublock", "adblock"]
         case .agents: return ["mcp", "connect agents", "port", "token", "claude code", "codex", "harness", "cli",
                                  "terminal", "dev mode", "sync", "approval", "developer", "recent ai changes", "undo", "changes"]

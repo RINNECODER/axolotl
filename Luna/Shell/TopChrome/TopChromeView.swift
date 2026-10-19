@@ -195,6 +195,7 @@ struct TopChromeView: View {
                     height: ChromeMetrics.omniboxHeight,
                     chromeStyle: true,
                     trailing: AnyView(ChromeStar(url: activeURL, bookmarks: bookmarks, add: actions.bookmarkPage)),
+                    web: web,
                     onSubmit: actions.submitAddress
                 )
                 .padding(.horizontal, 7)
@@ -258,6 +259,7 @@ struct TopChromeView: View {
                 focused: addressFocused,
                 loadingProgress: runtime.loadingProgress,
                 centered: centeredAddressBar,
+                web: web,
                 onSubmit: actions.submitAddress
             )
         }

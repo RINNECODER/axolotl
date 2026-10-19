@@ -105,6 +105,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         let password: String
     }
     @Published var passwordFillOffer: PasswordFillOffer?
+    /// Camera / microphone / location prompts waiting for the user, one per tab.
+    @Published var pendingPermissions: [UUID: SitePermissionRequest] = [:]
+    /// This profile's site settings; a non-persistent (private) data store keeps them in memory only.
+    lazy var sitePermissions: SitePermissionStore = websiteDataStore.isPersistent
+        ? .forProfile(profileId) : SitePermissionStore(fileURL: nil)
     @Published var passwordSaveOffer: PasswordSaveOffer?
     /// HTTPS-first: the http URL each tab's pending https try stands in for.
     private var httpsUpgrades: [UUID: URL] = [:]
@@ -1201,6 +1206,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         webViews.removeValue(forKey: tabId)
         popupTabIds.remove(tabId)
         popupTimes.removeValue(forKey: tabId)
+        pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
         faviconOriginByTab.removeValue(forKey: tabId)
         faviconWorkByTab.removeValue(forKey: tabId)?.cancel()
         tabRuntime.setLoadingProgress(nil, for: tabId)
@@ -1402,6 +1408,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         // The old document's media is gone; frames of the new one report again.
         setAudible(false, frame: nil, in: tabId)
         if passwordFillOffer?.tabId == tabId { passwordFillOffer = nil }
+        // Chrome drops an unanswered prompt when the page navigates away.
+        pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -1588,7 +1596,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         let opener = tabId(for: webView)
         let now = Date()
         let recent = opener.flatMap { popupTimes[$0] } ?? []
-        guard Self.allowsPopup(userActivated: navigationAction.navigationType == .linkActivated || lwv?.hadUserInput(within: 1) == true,
+        let popupsAllowed = sitePermissions.decision(.popups, host: webView.url?.host) == .allow
+        guard popupsAllowed || Self.allowsPopup(userActivated: navigationAction.navigationType == .linkActivated || lwv?.hadUserInput(within: 1) == true,
                                recent: recent, now: now) else { return nil }
         if let opener { popupTimes[opener] = recent.filter { now.timeIntervalSince($0) < 60 } + [now] }
         // One popup per click comes to the front; any more open in the background.
@@ -1610,6 +1619,39 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         if foreground { setActiveTab(id) }
         // Do NOT call `load()` here — WebKit will load `navigationAction.request` into the returned webview.
         return wv
+    }
+
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
+                 type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        requestSitePermissions(SitePermission.forMedia(type), host: origin.host, webView: webView, decisionHandler: decisionHandler)
+    }
+
+    @available(macOS 27.0, *)
+    func webView(_ webView: WKWebView, requestGeolocationPermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        requestSitePermissions([.location], host: origin.host, webView: webView, decisionHandler: decisionHandler)
+    }
+
+    /// Applies saved decisions, else shows the tab's permission bubble. "Remember" saves the answer for the host.
+    func requestSitePermissions(_ permissions: [SitePermission], host: String, webView: WKWebView,
+                                decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        let store = sitePermissions
+        switch SitePermissionDecision.combined(permissions.map { store.decision($0, host: host) }) {
+        case .allow: decisionHandler(.grant)
+        case .block: decisionHandler(.deny)
+        case .ask:
+            guard let tabId = tabId(for: webView) else { return decisionHandler(.deny) }
+            let asking = permissions.filter { store.decision($0, host: host) == .ask }
+            // shortcut: one prompt per tab; a newer request denies the older one. Queue them if sites need both.
+            pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
+            var request: SitePermissionRequest!
+            request = SitePermissionRequest(host: host, permissions: asking) { [weak self] allow, remember in
+                if self?.pendingPermissions[tabId] === request { self?.pendingPermissions[tabId] = nil }
+                if remember { for p in asking { store.set(allow ? .allow : .block, p, host: host) } }
+                decisionHandler(allow ? .grant : .deny)
+            }
+            pendingPermissions[tabId] = request
+        }
     }
 
     func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
