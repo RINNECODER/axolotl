@@ -44,11 +44,11 @@ nonisolated struct LegacyLunaMigration {
     static let legacyCreator: UInt32 = 0x4C75_6E61 // "Luna"
 
     /// Data folders and files under `Library`, old → new (Caches are rebuilt, so skipped).
-    /// WebKit keeps its data (per-profile `WKWebsiteDataStore(forIdentifier:)` stores under
-    /// WebsiteData/Default) in `WebKit/<bundle id>`, or straight in `WebKit` inside a sandbox container.
-    static func libraryItems(oldID: String, newID: String, sandboxed: Bool) -> [(old: String, new: String)] {
+    /// WebKit keeps all its data (per-profile `WKWebsiteDataStore(forIdentifier:)` stores included)
+    /// in `WebKit/<bundle id>`, or straight in `WebKit` inside a sandbox container. Axolotl is unsandboxed.
+    static func libraryItems(oldID: String, newID: String, oldInContainer: Bool) -> [(old: String, new: String)] {
         [("Application Support/Luna", "Application Support/Axolotl"),
-         sandboxed ? ("WebKit", "WebKit") : ("WebKit/\(oldID)", "WebKit/\(newID)"),
+         (oldInContainer ? "WebKit" : "WebKit/\(oldID)", "WebKit/\(newID)"),
          ("HTTPStorages/\(oldID)", "HTTPStorages/\(newID)"),
          ("HTTPStorages/\(oldID).binarycookies", "HTTPStorages/\(newID).binarycookies")]
     }
@@ -59,34 +59,31 @@ nonisolated struct LegacyLunaMigration {
     let newID: String
     /// Luna's `~/Library` (inside its container for the sandboxed app).
     let oldLibrary: URL
-    /// Axolotl's `~/Library` (inside its container for the sandboxed app).
+    /// Axolotl's `~/Library`.
     let newLibrary: URL
     let defaults: UserDefaults
     let keychain: KeychainBackend
     /// Keychain access groups ("TEAMID.com.luna.browser" → "TEAMID.com.axolotl.browser"); nil skips the Keychain.
     let keychainGroups: (old: String, new: String)?
-    var sandboxed = false
+    /// Luna was the sandboxed app: `oldLibrary` is its container.
+    var oldInContainer = false
     let fileManager = FileManager.default
 
-    /// The live app's locations. The sandboxed app reads Luna's container through a
-    /// read-only temporary-exception entitlement; the Dev app is unsandboxed.
+    /// The live app's locations. Luna's release app was sandboxed (its data is in its container);
+    /// Luna Dev was not.
     static func live() -> LegacyLunaMigration? {
         guard let newID = Bundle.main.bundleIdentifier, newID.hasPrefix("com.axolotl.") else { return nil }
         let oldID = newID.replacingOccurrences(of: "com.axolotl.", with: "com.luna.")
         let newLibrary = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-        var oldLibrary = newLibrary
-        let sandboxed = ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
-        if sandboxed, let home = getpwuid(getuid())?.pointee.pw_dir {
-            oldLibrary = URL(fileURLWithPath: String(cString: home))
-                .appendingPathComponent("Library/Containers/\(oldID)/Data/Library", isDirectory: true)
-        }
+        let container = newLibrary.appendingPathComponent("Containers/\(oldID)/Data/Library", isDirectory: true)
+        let oldInContainer = FileManager.default.fileExists(atPath: container.path)
         let groups = KeychainStore.entitledAccessGroup().flatMap { group -> (String, String)? in
             guard group.hasSuffix(newID) else { return nil }
             return (String(group.dropLast(newID.count)) + oldID, group)
         }
-        return LegacyLunaMigration(oldID: oldID, newID: newID, oldLibrary: oldLibrary, newLibrary: newLibrary,
-                                   defaults: .standard, keychain: SystemKeychainBackend(), keychainGroups: groups,
-                                   sandboxed: sandboxed)
+        return LegacyLunaMigration(oldID: oldID, newID: newID, oldLibrary: oldInContainer ? container : newLibrary,
+                                   newLibrary: newLibrary, defaults: .standard, keychain: SystemKeychainBackend(),
+                                   keychainGroups: groups, oldInContainer: oldInContainer)
     }
 
     /// Call first thing at launch. Never in unit tests (they run inside the app).
@@ -100,8 +97,8 @@ nonisolated struct LegacyLunaMigration {
     func run() {
         guard !defaults.bool(forKey: Self.doneKey) else { return }
         migrateDefaults()
-        for item in Self.libraryItems(oldID: oldID, newID: newID, sandboxed: sandboxed) {
-            let copied = copyMissing(oldLibrary.appendingPathComponent(item.old), to: newLibrary.appendingPathComponent(item.new))
+        for item in Self.libraryItems(oldID: oldID, newID: newID, oldInContainer: oldInContainer) {
+            let copied = Self.copyMissing(oldLibrary.appendingPathComponent(item.old), to: newLibrary.appendingPathComponent(item.new))
             if item.new.hasPrefix("Application Support/") { copied.forEach(rewriteStoredURLs) }
         }
         if let keychainGroups { migrateKeychain(from: keychainGroups.old, to: keychainGroups.new) }
@@ -152,7 +149,8 @@ nonisolated struct LegacyLunaMigration {
     /// else folder by folder. Existing files are never overwritten, and neither are the
     /// SQLite sidecars (-wal/-shm/-journal) of an existing database. Returns the copied items.
     @discardableResult
-    func copyMissing(_ from: URL, to: URL) -> [URL] {
+    static func copyMissing(_ from: URL, to: URL) -> [URL] {
+        let fileManager = FileManager.default
         var isDir: ObjCBool = false
         guard fileManager.fileExists(atPath: from.path, isDirectory: &isDir) else { return [] }
         guard fileManager.fileExists(atPath: to.path) else {

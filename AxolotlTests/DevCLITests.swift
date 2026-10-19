@@ -305,7 +305,6 @@ final class DevCLITests: XCTestCase {
     }
 
     func testCrashIsReportedWithStderrTail() async throws {
-        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in AxolotlDevTests")
         let first = CLIFixtures.claudeTextTurn.split(separator: "\n").first!
         let (dir, exe) = try fakeCLI("read line\necho '\(first)'\necho 'boom: out of cheese' >&2\nexit 3\n")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -323,7 +322,6 @@ final class DevCLITests: XCTestCase {
     }
 
     func testCloseEndsCleanlyAndRemovesMCPConfig() async throws {
-        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in AxolotlDevTests")
         let (dir, exe) = try fakeCLI("printf '%s\\n' \"$@\" > \"$PWD/args.log\"\nwhile read line; do echo \"$line\" >> \"$PWD/stdin.log\"; done\n")
         defer { try? FileManager.default.removeItem(at: dir) }
         var revoked = false
@@ -356,7 +354,6 @@ final class DevCLITests: XCTestCase {
     // MARK: PTY
 
     func testPTYGivesAControllingTerminal() async throws {
-        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in AxolotlDevTests")
         let pty = PTYSession(executable: "/bin/sh", arguments: ["-c", "ps -o tty= -p $$; stty size"], workingDirectory: URL(fileURLWithPath: "/tmp"))
         let exited = expectation(description: "exit")
         try pty.start(columns: 91, rows: 33) { status in
@@ -403,7 +400,6 @@ final class DevCLITests: XCTestCase {
 
 extension DevCLITests {
     func testDescendantsFindsEveryChildAndTerminateKillsThem() async throws {
-        try XCTSkipIf(DevMode.isSandboxed, "spawns processes; runs in AxolotlDevTests")
         let process = CLIProcess(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "sleep 30 & sleep 30 & wait"],
                                  workingDirectory: FileManager.default.temporaryDirectory,
                                  environment: ProcessInfo.processInfo.environment)

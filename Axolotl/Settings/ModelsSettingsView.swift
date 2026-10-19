@@ -17,20 +17,18 @@ struct ModelsSettingsView: View {
 /// CLIs), then "Use an API key instead" with OpenRouter recommended, then the chosen provider's model.
 struct AIProviderSections: View {
     @AppStorage(AIProvider.defaultsKey) private var providerRaw: String = AIProvider.current.rawValue
-    @State private var signedInCLIs: [AIProvider] = []
-    @State private var scanned = false
+    @State private var clis: [(provider: AIProvider, signedIn: Bool)] = []
     @State private var showAPI = AIProvider.current.isAPIKey && UserDefaults.standard.string(forKey: AIProvider.defaultsKey) != nil
 
     private var provider: AIProvider { AIProvider(rawValue: providerRaw) ?? .current }
 
     var body: some View {
         Group {
-            SettingsCard("Use a subscription", footer: subscriptionFooter) {
+            SettingsCard("Use a subscription") {
                 ChatGPTRow(provider: provider, use: { providerRaw = AIProvider.chatgpt.rawValue })
-                ForEach(signedInCLIs) { cli in
-                    SettingsRow(cli.displayName, subtitle: "Signed in on this Mac", icon: "terminal") {
-                        UseButton(inUse: provider == cli) { providerRaw = cli.rawValue }
-                    }
+                ForEach(clis, id: \.provider) { cli in
+                    CLIRow(cli: cli.provider, signedIn: cli.signedIn, inUse: provider == cli.provider,
+                           use: { providerRaw = cli.provider.rawValue }, recheck: { Task { await scan(refresh: true) } })
                 }
             }
 
@@ -64,33 +62,119 @@ struct AIProviderSections: View {
                 }
             }
         }
-        .task {
-            guard DevMode.isAvailable else { return }
-            signedInCLIs = CLIChatClient.signedIn(await HarnessCatalog.shared.discover())
-            scanned = true
-        }
+        .task { await scan(refresh: false) }
     }
 
-    private var subscriptionFooter: String? {
-        if !DevMode.isAvailable { return "Codex and Claude Code CLIs already signed in on this Mac can be used in Axolotl Dev." }
-        guard scanned else { return nil }
-        return signedInCLIs.isEmpty ? "No signed-in Codex or Claude Code CLI found on this Mac." : "Signed-in CLIs use their own plan; Axolotl never reads their credentials."
+    private func scan(refresh: Bool) async {
+        clis = CLIChatClient.installed(await HarnessCatalog.shared.discover(refresh: refresh))
     }
 }
 
 /// "In use" when selected, else a Use button.
 private struct UseButton: View {
     let inUse: Bool
+    var prominent = false
     let action: () -> Void
 
     var body: some View {
         if inUse {
             Label("In use", systemImage: "checkmark.circle.fill")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 12.5, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
+                .frame(minHeight: 28)
         } else {
-            Button("Use", action: action).buttonStyle(.settings)
+            Button("Use", action: action).buttonStyle(prominent ? .settingsProminent : .settings)
         }
+    }
+}
+
+/// One subscription in "Use a subscription": logo, name, sign-in status, then its action.
+struct SubscriptionRow<Trailing: View>: View {
+    let name: String
+    var detail: String?
+    let symbol: String
+    /// The provider's Mac app, whose icon is used when it's installed.
+    var appBundleID: String?
+    let signedIn: Bool
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: 12) {
+            logo.frame(width: 32, height: 32)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(name).font(.system(size: 14, weight: .semibold))
+                    Text(signedIn ? "Signed in" : "Not signed in")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(signedIn ? Color.green : Color.secondary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill((signedIn ? Color.green : Color.secondary).opacity(0.15)))
+                }
+                if let detail, !detail.isEmpty {
+                    Text(detail).font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 12)
+            trailing
+        }
+        .settingsRowPadding()
+    }
+
+    @ViewBuilder private var logo: some View {
+        if let appBundleID, let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: appBundleID) {
+            Image(nsImage: NSWorkspace.shared.icon(forFile: app.path)).resizable()
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(.quaternary))
+        }
+    }
+}
+
+/// A Codex / Claude Code CLI found on this Mac.
+struct CLIRow: View {
+    let cli: AIProvider
+    let signedIn: Bool
+    let inUse: Bool
+    let use: () -> Void
+    let recheck: () -> Void
+    @State private var showSignIn = false
+
+    private var name: String { cli.harness?.displayName ?? cli.displayName }
+    private var command: String { cli == .claudeCLI ? "claude auth login" : "codex login" }
+    private var appBundleID: String { cli == .claudeCLI ? "com.anthropic.claudefordesktop" : "com.openai.codex" }
+
+    var body: some View {
+        SubscriptionRow(name: name, symbol: "terminal", appBundleID: appBundleID, signedIn: signedIn) {
+            if signedIn {
+                UseButton(inUse: inUse, prominent: true, action: use)
+            } else {
+                Button("Sign in…") { showSignIn = true }
+                    .buttonStyle(.settings)
+                    .popover(isPresented: $showSignIn, arrowEdge: .bottom) { signInHelp }
+            }
+        }
+    }
+
+    private var signInHelp: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sign in to \(name) in Terminal, then check again.").font(.system(size: 13))
+            Text(command)
+                .font(.system(size: 12, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(.quaternary))
+            HStack {
+                Spacer()
+                Button("Check Again") { showSignIn = false; recheck() }.buttonStyle(.settingsProminent)
+            }
+        }
+        .padding(14)
+        .frame(width: 280)
     }
 }
 
@@ -102,11 +186,14 @@ private struct ChatGPTRow: View {
     let use: () -> Void
     @ObservedObject private var auth = ChatGPTAuth.shared
     @State private var error: String?
+    /// A cancelled sign-in: a quiet note that clears itself.
+    @State private var notice: String?
 
     var body: some View {
         if let creds = auth.credentials {
-            SettingsRow("ChatGPT", subtitle: creds.email.isEmpty ? (creds.name ?? "Signed in") : creds.email, icon: "bubble.left.and.text.bubble.right") {
-                UseButton(inUse: provider == .chatgpt, action: use)
+            SubscriptionRow(name: "ChatGPT", detail: creds.email.isEmpty ? creds.name : creds.email,
+                            symbol: "bubble.left.and.text.bubble.right", appBundleID: "com.openai.chat", signedIn: true) {
+                UseButton(inUse: provider == .chatgpt, prominent: true, action: use)
             }
         } else if auth.isSigningIn {
             SettingsRow("Finish signing in in your browser…", icon: "bubble.left.and.text.bubble.right") {
@@ -114,11 +201,15 @@ private struct ChatGPTRow: View {
                 Button("Cancel") { auth.cancelSignIn() }
             }
         } else {
-            SettingsRow("ChatGPT", subtitle: "Use your Plus or Pro plan.", icon: "bubble.left.and.text.bubble.right") {
+            SubscriptionRow(name: "ChatGPT", detail: "Use your Plus or Pro plan.", symbol: "bubble.left.and.text.bubble.right",
+                            appBundleID: "com.openai.chat", signedIn: false) {
                 Button("Sign in with ChatGPT") {
                     error = nil
+                    notice = nil
                     Task {
-                        do { try await auth.signIn(); use() } catch { self.error = error.localizedDescription }
+                        do { try await auth.signIn(); use() } catch {
+                            if Self.isCancel(error) { notice = error.localizedDescription } else { self.error = error.localizedDescription }
+                        }
                     }
                 }
                 .buttonStyle(.settingsProminent)
@@ -127,6 +218,20 @@ private struct ChatGPTRow: View {
         if let error {
             SettingsNoteRow(error, isError: true)
         }
+        if let notice {
+            SettingsNoteRow(notice)
+                .transition(.opacity)
+                .task(id: notice) {
+                    try? await Task.sleep(for: .seconds(4))
+                    withAnimation { if self.notice == notice { self.notice = nil } }
+                }
+        }
+    }
+
+    static func isCancel(_ error: Error) -> Bool {
+        if case .cancelled? = error as? LoopbackServer.ServerError { return true }
+        if case .denied? = error as? ChatGPTAuth.AuthError { return true }
+        return false
     }
 }
 

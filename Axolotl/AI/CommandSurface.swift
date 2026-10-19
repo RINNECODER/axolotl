@@ -206,9 +206,9 @@ struct CommandSurfaceView: View {
         .padding(.bottom, 8)
     }
 
-    /// Dev mode only exists in the Axolotl Dev build, and only works unsandboxed.
+    /// Dev mode only exists in the Axolotl Dev build.
     private var isDevMode: Bool {
-        DevMode.isDevBuild && DevMode.isAvailable && panelModeRaw == AIPanelMode.dev.rawValue
+        DevMode.isDevBuild && panelModeRaw == AIPanelMode.dev.rawValue
     }
 
     /// General | Dev as small text tabs (T3 Code-style toggle group). Shown only in the Axolotl Dev build.
@@ -242,8 +242,7 @@ struct CommandSurfaceView: View {
             }
         }
         .matchedGeometryEffect(id: "modeSwitch", in: modeSwitchNS)
-        .disabled(!DevMode.isAvailable)
-        .help(DevMode.isAvailable ? "Panel mode" : "Dev needs the unsandboxed Axolotl Dev build.")
+        .help("Panel mode")
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Panel mode")
     }

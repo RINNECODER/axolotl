@@ -238,9 +238,8 @@ enum BrowserImporter {
     static func syncAll() async {
         let detector = BrowserDetector()
         for src in sources where src.keepInSync {
-            guard ProfileManager.shared.profiles.contains(where: { $0.id == src.axolotlProfileId }),
-                  let folder = BrowserAccess.resolve(src.kind) else { continue }
-            defer { folder.stopAccessingSecurityScopedResource() }
+            guard ProfileManager.shared.profiles.contains(where: { $0.id == src.axolotlProfileId }) else { continue }
+            let folder = detector.dataFolder(for: src.kind)
             let count = detector.profiles(for: src.kind, in: folder).count
             _ = await run(kind: src.kind, dataFolder: folder, profile: src.profile, profileCount: count,
                           types: [.bookmarks, .history], axolotlProfileId: src.axolotlProfileId, incremental: true)
@@ -250,7 +249,7 @@ enum BrowserImporter {
     // MARK: Debug fixtures
 
     #if DEBUG
-    /// AXOLOTL_IMPORT_FIXTURE_HOME=<folder inside Axolotl's container> makes detection
+    /// AXOLOTL_IMPORT_FIXTURE_HOME=<folder> makes detection
     /// look there instead of the real home folder, skips the access panel, and
     /// imports into a throwaway profile so the flow can be demoed on synthetic data.
     static var fixtureHome: URL? {

@@ -2,15 +2,16 @@ import Foundation
 
 /// Chat through a coding CLI the user already signed in to (`claude -p`, `codex exec`), so replies
 /// use that CLI's plan. One process per reply, tools off / read-only, no saved session.
-/// Needs an unsandboxed process (Axolotl Dev); see `AIProvider.available`.
 struct CLIChatClient {
     let harness: HarnessID
     var run: HarnessCommandRunner = HarnessCatalog.runCommand
 
-    /// Signed-in CLIs Axolotl can chat through, from `HarnessCatalog` (each CLI's own status command;
-    /// credential files are never read).
-    static func signedIn(_ found: [HarnessInfo]) -> [AIProvider] {
-        AIProvider.allCases.filter { p in found.contains { $0.id == p.harness && $0.supported && $0.signedIn == true } }
+    /// Installed CLIs Axolotl can chat through, from `HarnessCatalog`, and which are signed in
+    /// (each CLI's own status command; credential files are never read).
+    static func installed(_ found: [HarnessInfo]) -> [(provider: AIProvider, signedIn: Bool)] {
+        AIProvider.allCases.compactMap { p in
+            found.first { $0.id == p.harness && $0.supported }.map { (p, $0.signedIn == true) }
+        }
     }
 
     /// One prompt for the CLI: earlier turns as a transcript, then the new message.
@@ -35,9 +36,6 @@ struct CLIChatClient {
     }
 
     func stream(model: String, request req: LLMRequest, onToken: @escaping (String) -> Void) async throws {
-        guard DevMode.isAvailable else {
-            throw LLMError.notConfigured("\(harness.displayName) works only in Axolotl Dev. Choose another provider in Settings → AI & Models.")
-        }
         guard let exe = await HarnessCatalog.shared.info(harness)?.executable else {
             throw LLMError.notConfigured("\(harness.displayName) isn't installed. Choose another provider in Settings → AI & Models.")
         }

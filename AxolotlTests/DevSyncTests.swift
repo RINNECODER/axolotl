@@ -39,7 +39,6 @@ final class DevSyncTests: XCTestCase {
     // MARK: Harness discovery
 
     func testDiscoversHarnessesOnFakePATH() async throws {
-        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in AxolotlDevTests")
         let bin = try scratchDir()
         try script(bin, "claude", """
         case "$1" in --version) echo "2.1.300 (Claude Code)";; auth) echo '{"loggedIn": true, "authMethod": "x"}';; esac

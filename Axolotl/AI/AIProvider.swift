@@ -56,8 +56,6 @@ enum AIProvider: String, CaseIterable, Identifiable {
 
     var isAPIKey: Bool { Self.apiProviders.contains(self) }
 
-    /// Providers this build can use: CLIs need an unsandboxed process (Axolotl Dev).
-    static var available: [AIProvider] { allCases.filter { $0.harness == nil || DevMode.isAvailable } }
 
     static var current: AIProvider {
         resolved(saved: UserDefaults.standard.string(forKey: defaultsKey),
