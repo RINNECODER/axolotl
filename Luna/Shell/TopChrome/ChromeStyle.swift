@@ -202,6 +202,7 @@ struct ChromeTabView: View {
         .buttonStyle(.plain)
         .onHover { closeHovered = $0 }
         .help("Close Tab (⌘W)")
+        .accessibilityLabel("Close Tab")
     }
 }
 
@@ -278,6 +279,7 @@ struct ChromeTabSearchButton: View {
         }
         .fixedSize()
         .help("Search Tabs")
+        .accessibilityLabel("Search Tabs")
     }
 }
 
@@ -328,6 +330,10 @@ struct TrafficLightPositioner: NSViewRepresentable {
                 return
             }
             attachedWindow = window
+            // Entering full screen: put the system button container back before the transition so macOS owns it.
+            observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willEnterFullScreenNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.apply(restoring: true) }
+            })
             for name in [NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification, NSWindow.didExitFullScreenNotification,
                          NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
                 observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
@@ -341,11 +347,13 @@ struct TrafficLightPositioner: NSViewRepresentable {
 
         private func schedule() { DispatchQueue.main.async { [weak self] in self?.apply() } }
 
-        private func apply() {
-            guard let window = window ?? attachedWindow, !window.styleMask.contains(.fullScreen) else { return }
+        private func apply(restoring: Bool = false) {
+            guard let window = window ?? attachedWindow else { return }
+            // In full screen the system owns the buttons; never reposition or capture them mid-transition.
+            if window.styleMask.contains(.fullScreen) && !restoring { return }
             let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { window.standardWindowButton($0) }
             guard buttons.count == 3, let container = buttons[0].superview?.superview else { return }
-            if !enabled {
+            if !enabled || restoring {
                 guard let original else { return }
                 container.frame = original.container
                 for (b, f) in zip(buttons, original.buttons) { b.setFrameOrigin(f.origin) }

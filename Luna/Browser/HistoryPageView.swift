@@ -36,12 +36,15 @@ struct HistoryPageView: View {
 
     /// Recomputes URL history (page visits), optionally filtered by search, and its date grouping.
     private func recomputeResults() {
-        let all: [HistoryEvent]
+        let raw: [HistoryEvent]
         if searchQuery.isEmpty {
-            all = historyManager.getHistory(for: .allTime).filter { $0.type == .pageVisit }
+            raw = historyManager.getHistory(for: .allTime).filter { $0.type == .pageVisit }
         } else {
-            all = historyManager.searchHistory(query: searchQuery).filter { $0.type == .pageVisit }
+            raw = historyManager.searchHistory(query: searchQuery).filter { $0.type == .pageVisit }
         }
+        // Reloads and redirects log the same URL back to back; show one row per run (newest first).
+        let sorted = raw.sorted { $0.timestamp > $1.timestamp }
+        let all = sorted.enumerated().filter { i, e in !(i > 0 && sorted[i - 1].url == e.url) }.map(\.element)
         filteredEvents = all
 
         let calendar = Calendar.current
@@ -65,7 +68,7 @@ struct HistoryPageView: View {
                 Text("History")
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundColor(textPrimary)
-                Text("\(filteredEvents.count) sites")
+                Text("\(filteredEvents.count) \(filteredEvents.count == 1 ? "visit" : "visits")")
                     .font(.system(size: 12))
                     .foregroundColor(textSecondary)
                 Spacer()
@@ -163,7 +166,9 @@ struct HistoryPageView: View {
                     Text(timeStr)
                         .font(.system(size: 12, weight: .medium))
                         .foregroundColor(textSecondary)
-                        .frame(width: 52, alignment: .leading)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(width: 72, alignment: .leading)
                     FaviconView(url: url)
                         .frame(width: 20, height: 20)
                     VStack(alignment: .leading, spacing: 2) {

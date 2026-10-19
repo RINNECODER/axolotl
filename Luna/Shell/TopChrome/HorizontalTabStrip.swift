@@ -128,6 +128,7 @@ struct HorizontalTabStrip: View {
                         }
                         .buttonStyle(.plain)
                         .help("New Tab (⌘T)")
+                        .accessibilityLabel("New Tab")
                         .padding(.leading, 4)
                     }
                 }
@@ -503,6 +504,7 @@ private struct StripTab: View {
                 .buttonStyle(.plain)
                 .opacity(isHovered || isActive ? 1 : 0)
                 .help("Close Tab (⌘W)")
+                .accessibilityLabel("Close Tab")
             }
         }
         .padding(.horizontal, iconOnly ? 0 : 10)
@@ -544,6 +546,7 @@ private struct ChromeNewTabButton: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .help("New Tab (⌘T)")
+        .accessibilityLabel("New Tab")
         .padding(.leading, 3)
         .overlay(alignment: .topLeading) {
             if showsSeparator {
