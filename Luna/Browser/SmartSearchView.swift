@@ -29,6 +29,7 @@ struct SmartSearchView: View {
     @AppStorage("luma_ai_panel_font_size") private var fontSizeRaw: Int = 13
     @AppStorage("luma_search_suggestions_enabled") private var searchSuggestionsEnabled: Bool = false
     @AppStorage(StartPagePrefs.showShortcuts) private var showShortcuts = true
+    @ObservedObject private var wallpaper = WallpaperStore.shared
 
     @State private var viewState: SearchViewState = .idle
     @State private var inputText: String = ""
@@ -145,9 +146,28 @@ struct SmartSearchView: View {
         ZStack {
             VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow, state: .active)
             startPageGlassTint.opacity(startPageGlassTintOpacity)
+            if wallpaper.preset != .none {
+                WallpaperView(config: wallpaper.renderConfig(still: false))
+                wallpaperScrim
+            }
         }
         .ignoresSafeArea()
     }
+
+    /// Keeps the greeting and search bar legible over any wallpaper: an even dim
+    /// the user controls, plus a soft darkening behind the centered content.
+    private var wallpaperScrim: some View {
+        let dim = wallpaper.style(for: wallpaper.preset).dim
+        return ZStack {
+            Color.black.opacity(dim)
+            RadialGradient(colors: [Color.black.opacity(0.28), .clear],
+                           center: .center, startRadius: 0, endRadius: 520)
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// The moon always shows without a wallpaper; with one, it's the user's call.
+    private var showsMoon: Bool { wallpaper.preset == .none || wallpaper.showMoon }
 
     // MARK: - Centered bar (idle)
 
@@ -155,7 +175,7 @@ struct SmartSearchView: View {
         GeometryReader { geo in
             let h = geo.size.height
             // Moon shrinks with the window and drops out when there's no room.
-            let moon = min(170, (h - 330) * 0.5)
+            let moon = showsMoon ? min(170, (h - 330) * 0.5) : 0
             // With the moon showing, lift it into the top margin and give it a
             // clear gap above the greeting; the search field stays put.
             let moonLift: CGFloat = moon >= 64 ? 12 : 0
@@ -163,7 +183,13 @@ struct SmartSearchView: View {
             ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 0) {
                 if moon >= 64 {
-                    AsciiMoon(diameter: moon, isBusy: isRouting)
+                    Group {
+                        if wallpaper.moonStyle == .shader {
+                            ShaderMoon(diameter: moon, isBusy: isRouting)
+                        } else {
+                            AsciiMoon(diameter: moon, isBusy: isRouting)
+                        }
+                    }
                         .padding(.bottom, moonLift - 6)
                 }
                 // Quiet greeting above the bar (Siri / ChatGPT-app style)
