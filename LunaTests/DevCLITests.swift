@@ -333,14 +333,19 @@ final class DevCLITests: XCTestCase {
         try await session.start(projectDir: dir, model: nil, resumeID: nil)
         XCTAssertTrue(session.isRunning)
         try session.send("hello")
-        try await Task.sleep(nanoseconds: 300_000_000)
+        // close() SIGTERMs right after closing stdin, so wait until the fake CLI has logged both lines.
+        let stdinLog = dir.appendingPathComponent("stdin.log")
+        let logged = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            ((try? String(contentsOf: stdinLog, encoding: .utf8))?.split(separator: "\n").count ?? 0) >= 2
+        }, object: nil)
+        await fulfillment(of: [logged], timeout: 10)
         session.close()
         let events = await collect(session)
         guard case .exited(let exit)? = events.last else { return XCTFail("got \(events)") }
         XCTAssertTrue(exit.expected)
         XCTAssertFalse(events.contains { if case .error = $0 { return true }; return false }, "a requested close is not a crash")
         XCTAssertTrue(revoked)
-        let sent = try String(contentsOf: dir.appendingPathComponent("stdin.log"), encoding: .utf8).split(separator: "\n")
+        let sent = try String(contentsOf: stdinLog, encoding: .utf8).split(separator: "\n")
         XCTAssertEqual(sent.count, 2, "initialize control request, then the user message")
         XCTAssertTrue(sent[1].contains(#""content":"hello""#))
         let args = try String(contentsOf: dir.appendingPathComponent("args.log"), encoding: .utf8).split(separator: "\n").map(String.init)
