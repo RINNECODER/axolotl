@@ -41,7 +41,13 @@ struct OnboardingView: View {
                     .keyboardShortcut(.cancelAction)
                     .help("Skip the rest (Esc). You can open this again from Help → Show Welcome…")
             }
-            Image(systemName: flow.step.symbol)
+            Group {
+                if flow.step == .welcome {
+                    Image(flow.step.symbol).renderingMode(.template).resizable().scaledToFit().padding(11)
+                } else {
+                    Image(systemName: flow.step.symbol)
+                }
+            }
                 .font(.system(size: 30, weight: .medium))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 60, height: 60)

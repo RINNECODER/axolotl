@@ -80,9 +80,9 @@ nonisolated struct DevSessionSetup: Codable, Equatable, Hashable, Sendable {
 
 /// Named accent colors for Dev mode (the UI maps each to its palette).
 nonisolated enum DevAccent: String, CaseIterable, Codable, Sendable {
-    /// Moonlight steel blue (the default).
-    case moon, blue, violet, green, orange, pink, graphite
-    var displayName: String { self == .moon ? "Moonlight" : rawValue.capitalized }
+    /// Steel blue (the default). Stored as "moon" from before the rebrand.
+    case axolotl = "moon", blue, violet, green, orange, pink, graphite
+    var displayName: String { self == .axolotl ? "Axolotl" : rawValue.capitalized }
 }
 
 nonisolated enum DevDensity: String, CaseIterable, Codable, Sendable {
@@ -259,7 +259,7 @@ final class DevSettings {
             ?? DevSessionSetup(harness: harness, model: models[harness.harnessID], approvalBehavior: approval)
         hiddenProjects = Self.storedHiddenProjects(defaults)
         projectSearchRoots = Self.storedProjectSearchRoots(defaults)
-        accent = defaults.string(forKey: Key.accent).flatMap(DevAccent.init(rawValue:)) ?? .moon
+        accent = defaults.string(forKey: Key.accent).flatMap(DevAccent.init(rawValue:)) ?? .axolotl
         density = defaults.string(forKey: Key.density).flatMap(DevDensity.init(rawValue:)) ?? .comfortable
         fontScale = defaults.string(forKey: Key.fontScale).flatMap(DevFontScale.init(rawValue:)) ?? .medium
         showToolDetails = defaults.object(forKey: Key.toolDetails) as? Bool ?? true

@@ -11,10 +11,17 @@ enum WallpaperPrefs {
     static let moonStyle = "axolotl_moon_style"
 }
 
+/// The start page logo. Raw values are stored ("ascii"/"shader" are the moons), so they stay.
 enum MoonStyle: String, CaseIterable, Identifiable {
-    case ascii, shader
+    case axolotl, ascii, shader
     var id: String { rawValue }
-    var title: String { self == .ascii ? "ASCII" : "Shader" }
+    var title: String {
+        switch self {
+        case .axolotl: return "Axolotl"
+        case .ascii: return "ASCII moon"
+        case .shader: return "Shader moon"
+        }
+    }
 }
 
 /// A dark base plus two mid tones. The accent is chosen separately.
@@ -215,7 +222,7 @@ final class WallpaperStore: ObservableObject {
         let fps = defaults.integer(forKey: WallpaperPrefs.frameRate)
         frameRate = WallpaperRenderConfig.allowedFrameRates.contains(fps) ? fps : 30
         showMoon = defaults.object(forKey: WallpaperPrefs.showMoon) == nil ? true : defaults.bool(forKey: WallpaperPrefs.showMoon)
-        moonStyle = MoonStyle(rawValue: defaults.string(forKey: WallpaperPrefs.moonStyle) ?? "") ?? .ascii
+        moonStyle = MoonStyle(rawValue: defaults.string(forKey: WallpaperPrefs.moonStyle) ?? "") ?? .axolotl
     }
 
     static func decodeStyles(_ data: Data?) -> [String: WallpaperStyle] {

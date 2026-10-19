@@ -22,9 +22,12 @@ struct AxolotlApp: App {
         DebugSnapshot.scheduleIfRequested()
         DebugUIDriver.install()
         #endif
-        // "Connect agents" MCP server, if turned on in Settings (never inside unit tests).
+        // "Connect agents" MCP server, if turned on in Settings, and the chosen Dock icon (never inside unit tests).
         if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
-            DispatchQueue.main.async { AxolotlMCPBridge.shared.applySettings() }
+            DispatchQueue.main.async {
+                AxolotlMCPBridge.shared.applySettings()
+                AppIcon.start()
+            }
         }
     }
 

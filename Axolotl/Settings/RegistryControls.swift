@@ -39,10 +39,13 @@ struct RegistryToggle: View {
 /// A pop-up for a registry string choice.
 struct RegistryPicker: View {
     private let setting: CustomizableSetting
+    /// Optional thumbnail per value.
+    private let image: ((String) -> NSImage?)?
     @AppStorage private var value: String
 
-    init(_ key: String) {
+    init(_ key: String, image: ((String) -> NSImage?)? = nil) {
         setting = RegistrySettings.setting(key)
+        self.image = image
         _value = AppStorage(wrappedValue: setting.read(.live).stringValue ?? "", setting.defaultsKey!)
     }
 
@@ -50,7 +53,7 @@ struct RegistryPicker: View {
         if case .choice(let options) = setting.kind {
             SettingsMenuRow(setting.title, subtitle: setting.help,
                        selection: Binding(get: { value }, set: { RegistrySettings.willChange(setting.key); value = $0 }),
-                       options: options.map { .init($0.value, $0.title) })
+                       options: options.map { .init($0.value, $0.title, image: image?($0.value)) })
         }
     }
 }

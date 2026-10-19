@@ -226,8 +226,8 @@ extension SettingsPane {
                                ("Add Profile", nil), ("Welcome", "Show the welcome tour again.")]
         case .appearance: return [("Layout template", "Axolotl or Chrome look in one click."),
                                   ("Theme colors", "Presets, accent, window, sidebar and tab colors."),
-                                  ("Tab layout", nil), ("Wallpaper", "Start page wallpaper and moon."),
-                                  ("Moon style", nil), ("Frame rate", nil), ("Remove all shortcuts", "Start page shortcuts.")]
+                                  ("Tab layout", nil), ("Wallpaper", "Start page wallpaper and logo."),
+                                  ("Start page logo", nil), ("Frame rate", nil), ("Remove all shortcuts", "Start page shortcuts.")]
         case .tabs: return []
         case .ai: return [("Model", "Which AI model Axolotl uses."), ("API keys", "Keys for cloud model providers."),
                           ("Ollama", "Local models on this Mac."), ("Axolotl Max", "Ask on page, link previews and tidy features."),
@@ -446,7 +446,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
     var registryKeys: [String] {
         switch self {
         case .general: return ["search.engine", "search.suggestions"]
-        case .appearance: return ["layout.template", "appearance.theme", "appearance.liquidGlass", "tabs.layout",
+        case .appearance: return ["layout.template", "appearance.theme", "appearance.appIcon", "appearance.liquidGlass", "tabs.layout",
                                   "toolbar.visible", "bookmarksBar.visible", "chrome.autoHide", "chrome.alwaysShowTopBar",
                                   "chrome.roundedFrame", "chrome.homeButton", "chrome.hideWindowButtons", "addressBar.centered",
                                   "addressBar.minimalURL", "addressBar.loadingProgress", "startPage.showShortcuts",
@@ -467,7 +467,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
                                "welcome", "onboarding", "startup"]
         case .appearance: return ["theme", "dark", "light", "layout", "template", "chrome", "custom", "customize", "sidebar",
                                   "compact", "dynamic", "classic", "address", "url", "frameless", "frame", "auto-hide",
-                                  "home", "toolbar", "bookmarks", "wallpaper", "background", "shader", "moon", "glass",
+                                  "home", "toolbar", "bookmarks", "wallpaper", "background", "shader", "moon", "logo", "axolotl", "app icon", "dock", "glass",
                                   "accent", "color", "colour", "preset", "density", "radius", "corner", "font", "text size",
                                   "contrast", "blur", "tint",
                                   "start page", "shortcuts"]
@@ -708,7 +708,7 @@ private struct AboutSettingsView: View {
             }
             SettingsRow("License") { Text("MIT").foregroundStyle(.secondary) }
             SettingsLinkRow("Source code on GitHub", external: true) {
-                NSWorkspace.shared.open(URL(string: "https://github.com/Rahul4301/Luna")!)
+                NSWorkspace.shared.open(URL(string: "https://github.com/RINNECODER/axolotl")!)
             }
         }
     }

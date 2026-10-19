@@ -59,7 +59,7 @@ struct DevHomeView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: DevMetrics.compact ? 14 : 18) {
                     HStack(spacing: 7) {
-                        DevMoonMark(size: 16, palette: p)
+                        DevBrandMark(size: 16, palette: p)
                         Text("New session")
                             .font(AxolotlType.brand(size: DevMetrics.text(17), weight: .regular))
                             .foregroundStyle(p.foreground)

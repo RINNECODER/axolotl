@@ -3,7 +3,7 @@ import SwiftUI
 /// Dev mode's look. The structure (neutral canvas, hairline borders, one accent, a small type
 /// ramp) follows T3 Code's chat (https://github.com/pingdotgg/t3code, MIT License,
 /// apps/web/src/index.css); the colors are Axolotl's own: a cool "night sky" neutral scale, the
-/// accent from Settings → Dev → Appearance (Moonlight by default), and Axolotl's serif
+/// accent from Settings → Dev → Appearance (Axolotl by default), and Axolotl's serif
 /// (`AxolotlType.brand`) for titles.
 struct DevPalette {
     let background: Color
@@ -85,7 +85,7 @@ extension DevAccent {
     /// Swatch colors: the light-mode tone, the dark-mode tone, and the text on the dark tone.
     var colors: (light: Color, dark: Color, onDark: Color) {
         switch self {
-        case .moon: return (Color(hex: 0x4D6A93), Color(hex: 0x9FB4D8), Color(hex: 0x0B0C10))
+        case .axolotl: return (Color(hex: 0x4D6A93), Color(hex: 0x9FB4D8), Color(hex: 0x0B0C10))
         case .blue: return (Color(hex: 0x2F62E9), Color(hex: 0x5B8BF7), .white)
         case .violet: return (Color(hex: 0x7C4DEB), Color(hex: 0xA58BFA), Color(hex: 0x0B0C10))
         case .green: return (Color(hex: 0x0E8A6A), Color(hex: 0x3CCB9C), Color(hex: 0x0B0C10))
@@ -198,29 +198,15 @@ struct DevIconButton: View {
     }
 }
 
-/// Axolotl's crescent: a circle with an offset circle cut out. Used small (header mark, empty
-/// states, the home view) so the brand shows without decoration.
-struct DevCrescent: Shape {
-    /// How far the cut-out circle is shifted, as a fraction of the diameter.
-    var phase: CGFloat = 0.32
-
-    func path(in rect: CGRect) -> Path {
-        let d = min(rect.width, rect.height)
-        let disc = CGRect(x: rect.midX - d / 2, y: rect.midY - d / 2, width: d, height: d)
-        let cut = disc.offsetBy(dx: d * phase, dy: -d * phase * 0.55)
-        return Path(ellipseIn: disc).subtracting(Path(ellipseIn: cut))
-    }
-}
-
-/// The crescent mark in the accent color.
-struct DevMoonMark: View {
+/// The axolotl mark in the accent color.
+struct DevBrandMark: View {
     var size: CGFloat = 12
     var palette: DevPalette
 
     var body: some View {
-        DevCrescent()
-            .fill(LinearGradient(colors: [palette.primary, palette.primary.opacity(0.65)],
-                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+        Image("AxolotlMark").renderingMode(.template).resizable().scaledToFit()
+            .foregroundStyle(LinearGradient(colors: [palette.primary, palette.primary.opacity(0.65)],
+                                            startPoint: .topLeading, endPoint: .bottomTrailing))
             .frame(width: size, height: size)
             .accessibilityHidden(true)
     }

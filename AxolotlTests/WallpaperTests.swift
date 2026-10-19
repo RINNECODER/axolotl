@@ -1,4 +1,5 @@
 import XCTest
+import SwiftUI
 @testable import Axolotl
 
 final class WallpaperTests: XCTestCase {
@@ -38,11 +39,11 @@ final class WallpaperTests: XCTestCase {
         XCTAssertEqual(decoded["still"] as? Bool, true)
     }
 
-    func testStorePersistsPerPresetStylesAndDefaultsToNoWallpaperWithAsciiMoon() {
+    func testStorePersistsPerPresetStylesAndDefaultsToNoWallpaperWithAsciiAxolotl() {
         let defaults = freshDefaults()
         let store = WallpaperStore(defaults: defaults)
         XCTAssertEqual(store.preset, .none)
-        XCTAssertEqual(store.moonStyle, .ascii)
+        XCTAssertEqual(store.moonStyle, .axolotl)
         XCTAssertTrue(store.showMoon)
         XCTAssertEqual(store.frameRate, 30)
 
@@ -105,5 +106,25 @@ final class WallpaperTests: XCTestCase {
         XCTAssertEqual(WallpaperBridge.reloadDelay(attempt: 1), 0.5)
         XCTAssertEqual(WallpaperBridge.reloadDelay(attempt: 2), 1)
         XCTAssertNil(WallpaperBridge.reloadDelay(attempt: WallpaperBridge.maxReloads + 1))
+    }
+
+    @MainActor
+    func testAsciiAxolotlSamplesTheMarkIntoTheGrid() throws {
+        // Start page size: 170pt → 50 × 24 cells.
+        let g = AxolotlRenderer.grid(cols: 50, rows: 24, cellAspect: 1.12 / 0.62)
+        let lit = g.cells.filter { $0 > 0.04 }.count
+        XCTAssertTrue((g.cells.count / 5...g.cells.count * 4 / 5).contains(lit), "lit \(lit) of \(g.cells.count)")
+        XCTAssertEqual(g.cells.prefix(50).max(), 0, "top row stays empty (art is centered)")
+        // Optional: AXOLOTL_LOGO_SHOT=<folder name> renders the start page logo to a PNG under the temp dir.
+        if let name = ProcessInfo.processInfo.environment["AXOLOTL_LOGO_SHOT"], !name.isEmpty {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            print("Logo shot: \(dir.path)")
+            let renderer = ImageRenderer(content: Canvas { ctx, size in AxolotlRenderer.draw(&ctx, size: size, diameter: 170, t: 40) }
+                .frame(width: 170 * 1.3, height: 170 * 1.15).background(Color.black))
+            renderer.scale = 2
+            let image = try XCTUnwrap(renderer.nsImage?.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+            try image.representation(using: .png, properties: [:])!.write(to: dir.appendingPathComponent("axolotl-170.png"))
+        }
     }
 }

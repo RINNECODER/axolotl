@@ -12,7 +12,7 @@ struct AsciiMoon: View {
     /// Spins faster while the AI is working.
     var isBusy: Bool = false
 
-    @State private var clock = MoonClock()
+    @State private var clock = AsciiClock()
     @State private var onScreen = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -94,7 +94,7 @@ struct WindowVisibilityReader: NSViewRepresentable {
 }
 
 /// Integrates time with a speed that eases between idle and busy.
-private final class MoonClock {
+final class AsciiClock {
     private var last: Date?
     private var phase: Double = 40
     private var speed: Double = 1
@@ -116,7 +116,7 @@ private final class MoonClock {
     }
 }
 
-private enum MoonRenderer {
+enum MoonRenderer {
     static let ramp = [".", ":", "-", "=", "+", "*", "o", "%", "#", "@"]
     static let colors: [NSColor] = [
         NSColor(red: 0.96, green: 0.95, blue: 0.90, alpha: 1), // moonlight
@@ -125,11 +125,12 @@ private enum MoonRenderer {
 
     private static var cache: [String: NSImage] = [:]
 
-    private static func glyph(_ s: String, size: CGFloat, color: Int) -> NSImage {
+    /// A pre-rendered glyph bitmap (shared with `AsciiAxolotl`).
+    static func glyph(_ s: String, size: CGFloat, color: NSColor) -> NSImage {
         let key = "\(s)|\(size)|\(color)"
         if let img = cache[key] { return img }
         let font = NSFont.monospacedSystemFont(ofSize: size, weight: .medium)
-        let str = NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: colors[color]])
+        let str = NSAttributedString(string: s, attributes: [.font: font, .foregroundColor: color])
         let b = str.size()
         let w = ceil(max(b.width, 1)), h = ceil(max(b.height, 1))
         let img = NSImage(size: NSSize(width: w, height: h), flipped: false) { _ in
@@ -143,7 +144,7 @@ private enum MoonRenderer {
     static func draw(_ ctx: inout GraphicsContext, size: CGSize, diameter: CGFloat, t: Float) {
         let fs = max(7, diameter / 17)
         let cw = fs * 0.62, ch = fs * 1.12
-        let atlas = colors.indices.map { c in ramp.map { ctx.resolve(Image(nsImage: glyph($0, size: fs, color: c))) } }
+        let atlas = colors.indices.map { c in ramp.map { ctx.resolve(Image(nsImage: glyph($0, size: fs, color: colors[c]))) } }
 
         let cx = size.width / 2, cy = size.height / 2
         let R = Float(diameter / 2)

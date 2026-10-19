@@ -152,6 +152,8 @@ enum CustomizationRegistry {
              "On: macOS Liquid Glass and translucent materials. Off: Axolotl's solid, opaque surfaces.",
              default: LiquidGlass.defaultValue,
              help: "Off draws Axolotl's own solid surfaces and menus instead of translucent glass."),
+        choice("appearance.appIcon", AppIcon.defaultsKey, "App icon", "The Dock icon while Axolotl runs.",
+               default: AppIcon.defaultName, AppIcon.options, help: "Changes the Dock icon while Axolotl is open."),
         choice("tabs.layout", BrowserLayout.defaultsKey, "Browser layout",
                "sidebar = vertical tabs; compact/dynamic/classic = tabs on top.", default: BrowserLayout.sidebar.rawValue,
                BrowserLayout.allCases.map { ($0.rawValue, $0.title) }),

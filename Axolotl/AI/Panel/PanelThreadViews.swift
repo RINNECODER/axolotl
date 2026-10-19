@@ -275,7 +275,7 @@ struct GrabCardView: View {
 
 // MARK: - Empty state
 
-/// The panel's empty state, as upstream: the moon, a serif title, capsule suggestions.
+/// The panel's empty state: the ASCII axolotl, a serif title, capsule suggestions.
 struct ChatEmptyState: View {
     struct Suggestion: Identifiable {
         var id: String { title }
@@ -290,7 +290,7 @@ struct ChatEmptyState: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            AsciiMoon(diameter: 92, isBusy: isBusy)
+            AsciiAxolotl(diameter: 92, isBusy: isBusy)
                 .padding(.bottom, 2)
             Text(title)
                 .font(AxolotlType.brand(size: 22))

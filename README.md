@@ -9,10 +9,10 @@
           ....'`::;~=+*xxx***xxxxoeO&@@@@&&&@@@@@@@%·             ▒▒░
       ░.     .'`,:;~++*******xxoooxaO&@@@@@@@&%@@&@@@S    ▓        ░
            ...''`,:-~++++=~+xxxxoooaaeeO#%&@@%Oe#&&%·%O  ▓ ▓        ░
-   ░░     . .'''`,:;-~=~~~=+*xoaaaaBKIT·MOONLOexoae#eoae █
+   ░░     . .'''`,:;-~=~~~=+*xoaaaaBKIT·AXOLOTexoae#eoae █
    █..      .''`,:::;-~~~==*xxxoaaaT·AXOLOTL·BROaeaooooaxxoo░█▓     ▒  ░░
 █▒▒█     ....'`,,:::;--~~~=++**xxoaR·SWIFT·WEaeaxxxoooooo+██
-█▓░        ..'``,::;;;-~~=====++*xoT·MOONLIGHOao***xooeeex░▒
+█▓░        ..'``,::;;;-~~=====++*xoT·AXOLOTL·Oao***xooeeex░▒
    .  .      '`,,:;;---~~===~~~=++xooaeaROWSEeax*+**xxaOea=
    ..  . ..  '`,,:;--~~~===+====++*xxoeOWEBKIaax+=+*+xaOOe+
 ░▓▒ .       ..'`,::;---~~~==++KIT·M**oaeGHT·AXOLOTL·B**xoeO#e*
@@ -40,9 +40,8 @@
 Native Swift and WebKit, with an AI assistant that shows up when you ask and stays out of the way when you don't.</p>
 
 <p align="center">
-  <a href="https://rahul4301.github.io/Luna/">Website</a> ·
-  <a href="https://github.com/Rahul4301/Luna/releases/latest">Download</a> ·
-  <a href="https://github.com/Rahul4301/Luna/issues">Report an issue</a>
+  <a href="https://github.com/RINNECODER/axolotl/releases/latest">Download</a> ·
+  <a href="https://github.com/RINNECODER/axolotl/issues">Report an issue</a>
 </p>
 
 <p align="center">
@@ -53,7 +52,7 @@ Native Swift and WebKit, with an AI assistant that shows up when you ask and sta
 </p>
 
 > [!WARNING]
-> Axolotl is in early development and not ready for everyday use yet. Expect rough edges, and please [tell us about them](https://github.com/Rahul4301/Luna/issues).
+> Axolotl is in early development and not ready for everyday use yet. Expect rough edges, and please [tell us about them](https://github.com/RINNECODER/axolotl/issues).
 
 ---
 
@@ -90,7 +89,7 @@ Native Swift and WebKit, with an AI assistant that shows up when you ask and sta
 
 ## Get Axolotl
 
-1. Download `Axolotl.dmg` from the [latest release](https://github.com/Rahul4301/Luna/releases/latest).
+1. Download `Axolotl.dmg` from the [latest release](https://github.com/RINNECODER/axolotl/releases/latest).
 2. Open it and drag Axolotl into Applications.
 3. Open Axolotl. Axolotl isn't notarized yet, so the first time macOS warns that it can't verify the app. Click **Done**, then go to **System Settings › Privacy & Security**, scroll to Security and click **Open Anyway** next to the message about Axolotl. Confirm with your password. You only need to do this once.
 
@@ -121,7 +120,7 @@ Then in Axolotl, open **Settings › AI & Models**, choose **Ollama** and pick t
 You need Xcode 26 and macOS 15.4 or later.
 
 ```bash
-git clone https://github.com/Rahul4301/Luna.git
+git clone https://github.com/RINNECODER/axolotl.git
 cd Axolotl
 ./scripts/setup.sh
 ```

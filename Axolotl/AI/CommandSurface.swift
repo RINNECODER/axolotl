@@ -334,7 +334,7 @@ struct CommandSurfaceView: View {
         .accessibilityLabel("Conversation")
     }
 
-    /// Mirrors the start page: the moon, a quiet title, and capsule suggestions.
+    /// Mirrors the start page: the axolotl, a quiet title, and capsule suggestions.
     private func emptyConversationState() -> some View {
         ChatEmptyState(
             title: "Ask about this page",

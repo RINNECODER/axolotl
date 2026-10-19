@@ -24,7 +24,7 @@ struct WallpaperSettingsSection: View {
             .padding(.vertical, 4)
             }
 
-            SettingsMenuRow("Moon style", subtitle: "Shader draws a softly lit moon with the GPU.",
+            SettingsMenuRow("Start page logo", subtitle: "The mark above the greeting. Shader moon draws with the GPU.",
                             selection: $store.moonStyle, options: MoonStyle.allCases.map { .init($0, $0.title) })
 
             if store.preset != .none {
@@ -72,7 +72,7 @@ struct WallpaperSettingsSection: View {
         sliderRow("Dim", value: style.dim, in: WallpaperStyle.dimRange,
                   label: { "\(Int(($0 * 100).rounded()))%" })
 
-        SettingsToggleRow("Show moon on top", subtitle: "Keep the moon above the greeting while a wallpaper is on.",
+        SettingsToggleRow("Show logo on top", subtitle: "Keep the logo above the greeting while a wallpaper is on.",
                           isOn: $store.showMoon)
         SettingsMenuRow("Frame rate", selection: $store.frameRate, options: [.init(30, "30 fps"), .init(60, "60 fps")])
         SettingsRow("Reset \(preset.title)", subtitle: "Back to this wallpaper's default look.") {
@@ -109,8 +109,8 @@ private struct WallpaperTile: View {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(Color(white: 0.08))
                     if preset == .none {
-                        Image(systemName: "moon.stars")
-                            .font(.system(size: 20, weight: .light))
+                        Image("AxolotlMark").renderingMode(.template).resizable().scaledToFit()
+                            .frame(width: 30)
                             .foregroundStyle(.white.opacity(0.7))
                     } else {
                         // Palette gradient, not a live render: no web view per tile.

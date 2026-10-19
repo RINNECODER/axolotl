@@ -257,7 +257,7 @@ struct DevPanelView: View {
                 .fixedSize()
                 .layoutPriority(2)
             Button { withAnimation(motion) { workspace.goHome() } } label: {
-                DevMoonMark(size: 13, palette: p)
+                DevBrandMark(size: 13, palette: p)
                     .frame(width: 24, height: 24)
                     .contentShape(Circle())
             }
@@ -558,7 +558,7 @@ struct DevPanelView: View {
     /// A new, empty session: what it runs with, and two starters.
     private func newSessionHint(_ session: DevSession) -> some View {
         VStack(spacing: 10) {
-            DevMoonMark(size: 20, palette: p)
+            DevBrandMark(size: 20, palette: p)
             Text("New session in \(session.projectDir.lastPathComponent)")
                 .font(AxolotlType.brand(size: DevMetrics.text(18), weight: .regular))
                 .foregroundStyle(p.foreground)

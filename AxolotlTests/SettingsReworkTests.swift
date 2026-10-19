@@ -52,6 +52,14 @@ final class SettingsPaneLinkTests: XCTestCase {
         XCTAssertEqual(AddressInput.url(for: "axolotl://settings/agents")?.absoluteString, "axolotl://settings/agents")
     }
 
+    func testAppIconOptionsLoadFromTheAssetCatalogAndDefaultToAxolotl() throws {
+        let setting = try XCTUnwrap(CustomizationRegistry.setting("appearance.appIcon"))
+        let defaults = UserDefaults(suiteName: "AppIconTests-\(UUID().uuidString)")!
+        XCTAssertEqual(setting.read(CustomizationEnvironment(defaults: defaults, shortcuts: .shared)).stringValue, "Axolotl")
+        XCTAssertThrowsError(try setting.validate("AppIcon"))
+        for (name, _) in AppIcon.options { XCTAssertNotNil(AppIcon.image(name), name) }
+    }
+
     func testEachRegistrySettingAppearsInOnePaneAndExists() {
         var seen: [String: SettingsPane] = [:]
         for pane in SettingsPane.allCases {

@@ -17,6 +17,7 @@ struct ThemeSettingsSection: View {
             SettingsCard("Theme", footer: "Picking a color shows Custom. Swatches set the light and dark color together; "
                          + "the hex field changes only the one shown.") {
                 RegistryPicker("appearance.theme")
+                RegistryPicker("appearance.appIcon", image: AppIcon.image)
                 SettingsContentRow { ThemePresetPicker(current: theme.preset, dark: dark) }
                 SettingsSegmentedRow("Colors for", selection: Binding(get: { dark }, set: { editingDark = $0 }),
                                      options: [.init(false, "Light"), .init(true, "Dark")])

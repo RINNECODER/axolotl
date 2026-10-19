@@ -174,7 +174,7 @@ struct SmartSearchView: View {
         .allowsHitTesting(false)
     }
 
-    /// The moon always shows without a wallpaper; with one, it's the user's call.
+    /// The logo (axolotl or moon) always shows without a wallpaper; with one, it's the user's call.
     private var showsMoon: Bool { wallpaper.preset == .none || wallpaper.showMoon }
 
     // MARK: - Centered bar (idle)
@@ -182,9 +182,9 @@ struct SmartSearchView: View {
     private var centeredBarLayout: some View {
         GeometryReader { geo in
             let h = geo.size.height
-            // Moon shrinks with the window and drops out when there's no room.
+            // The logo shrinks with the window and drops out when there's no room.
             let moon = showsMoon ? min(170, (h - 330) * 0.5) : 0
-            // With the moon showing, lift it into the top margin and give it a
+            // With the logo showing, lift it into the top margin and give it a
             // clear gap above the greeting; the search field stays put.
             let moonLift: CGFloat = moon >= 64 ? 12 : 0
             let topOffset = max(16, h * 0.09) - moonLift
@@ -192,10 +192,10 @@ struct SmartSearchView: View {
             VStack(spacing: 0) {
                 if moon >= 64 {
                     Group {
-                        if wallpaper.moonStyle == .shader {
-                            ShaderMoon(diameter: moon, isBusy: isRouting)
-                        } else {
-                            AsciiMoon(diameter: moon, isBusy: isRouting)
+                        switch wallpaper.moonStyle {
+                        case .axolotl: AsciiAxolotl(diameter: moon, isBusy: isRouting)
+                        case .ascii: AsciiMoon(diameter: moon, isBusy: isRouting)
+                        case .shader: ShaderMoon(diameter: moon, isBusy: isRouting)
                         }
                     }
                         .padding(.bottom, moonLift - 6)

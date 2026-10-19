@@ -497,7 +497,7 @@ final class DevSessionTests: XCTestCase {
         let defaults = scratchDefaults()
         let settings = DevSettings(defaults: defaults)
         XCTAssertFalse(settings.skipHome)
-        XCTAssertEqual(settings.accent, .moon)
+        XCTAssertEqual(settings.accent, .axolotl)
         XCTAssertEqual(settings.density, .comfortable)
         XCTAssertEqual(settings.fontScale, .medium)
         XCTAssertTrue(settings.showToolDetails)
