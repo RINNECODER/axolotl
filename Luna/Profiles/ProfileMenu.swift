@@ -186,12 +186,19 @@ struct ProfileCommandContext {
 
 extension FocusedValues {
     @Entry var profileCommands: ProfileCommandContext?
+    /// Opens the Import from Browser sheet in the focused window.
+    @Entry var showBrowserImport: (() -> Void)?
 }
 
 struct ProfileCommands: Commands {
     @FocusedValue(\.profileCommands) private var context
+    @FocusedValue(\.showBrowserImport) private var showBrowserImport
 
     var body: some Commands {
+        CommandGroup(after: .importExport) {
+            Button("Import from Browser…") { showBrowserImport?() }
+                .disabled(showBrowserImport == nil)
+        }
         CommandMenu("Profiles") {
             ProfileMenuItems(
                 profileManager: ProfileManager.shared,

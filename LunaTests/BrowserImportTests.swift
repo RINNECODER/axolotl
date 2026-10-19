@@ -1,0 +1,352 @@
+import Compression
+import SQLite3
+import XCTest
+@testable import Luna
+
+/// Importers run against synthetic fixtures built here in a fake home folder;
+/// no real browser data is ever read.
+@MainActor
+final class BrowserImportTests: XCTestCase {
+    private var home: URL!
+
+    override func setUpWithError() throws {
+        home = FileManager.default.temporaryDirectory.appendingPathComponent("import-tests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: home)
+    }
+
+    // MARK: Fixture helpers
+
+    private func dir(_ path: String) throws -> URL {
+        let url = home.appendingPathComponent(path, isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    private func write(_ text: String, to url: URL) throws {
+        try text.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func sqlite(_ url: URL, _ sql: String) throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+        var err: UnsafeMutablePointer<CChar>?
+        if sqlite3_exec(db, sql, nil, nil, &err) != SQLITE_OK {
+            let msg = err.map { String(cString: $0) } ?? "?"
+            sqlite3_free(err)
+            throw NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+    }
+
+    private func titles(_ items: [ImportedBookmark]) -> [String] {
+        items.map {
+            switch $0 {
+            case .link(let t, _): return t
+            case .folder(let n, _): return n + "/"
+            }
+        }
+    }
+
+    // MARK: Detection
+
+    func testDetectorFindsBrowsersByFolderOrAppAndReadsProfileNames() throws {
+        let chrome = try dir("Library/Application Support/Google/Chrome")
+        _ = try dir("Library/Application Support/Google/Chrome/Default")
+        _ = try dir("Library/Application Support/Google/Chrome/Profile 2")
+        try write(#"{"profile":{"info_cache":{"Profile 2":{"name":"Work"},"Default":{"name":"Personal"},"Profile 9":{"name":"Deleted"}}}}"#,
+                  to: chrome.appendingPathComponent("Local State"))
+        let firefox = try dir("Library/Application Support/Firefox")
+        try write("""
+            [Install4F96D1932A9F858E]
+            Default=Profiles/abc.default-release
+
+            [Profile1]
+            Name=default
+            IsRelative=1
+            Path=Profiles/xyz.default
+
+            [Profile0]
+            Name=default-release
+            IsRelative=1
+            Path=Profiles/abc.default-release
+            """, to: firefox.appendingPathComponent("profiles.ini"))
+        let fakeApp = URL(fileURLWithPath: "/Applications/Arc.app")
+        let detector = BrowserDetector(home: home) { $0 == "company.thebrowser.Browser" ? fakeApp : nil }
+
+        let found = detector.detect()
+        XCTAssertEqual(found.map(\.kind), [.chrome, .arc, .firefox])
+        XCTAssertEqual(found[0].profiles.map(\.name), ["Personal", "Work"], "Default first; missing profile folders dropped")
+        XCTAssertEqual(found[1].appURL, fakeApp)
+        XCTAssertEqual(found[1].profiles, [], "Arc app installed but no data folder")
+        XCTAssertEqual(found[2].profiles.map(\.id), ["Profiles/abc.default-release", "Profiles/xyz.default"],
+                       "Firefox's install default comes first")
+    }
+
+    // MARK: Chromium
+
+    func testChromiumBookmarksAndHistory() throws {
+        let profile = try dir("Chrome/Default")
+        try write("""
+            {"roots":{
+              "bookmark_bar":{"type":"folder","name":"Bookmarks bar","children":[
+                {"type":"url","name":"Example","url":"https://example.com/"},
+                {"type":"folder","name":"Work","children":[
+                  {"type":"url","name":"Docs","url":"https://docs.example.com/a"},
+                  {"type":"url","name":"Script","url":"javascript:alert(1)"}]},
+                {"type":"folder","name":"Empty","children":[]}]},
+              "other":{"type":"folder","name":"Other bookmarks","children":[
+                {"type":"url","name":"Swift","url":"https://swift.org"}]},
+              "synced":{"type":"folder","name":"Mobile bookmarks","children":[]}}}
+            """, to: profile.appendingPathComponent("Bookmarks"))
+
+        let bookmarks = try ChromiumImporter.bookmarks(profileFolder: profile)
+        XCTAssertEqual(titles(bookmarks), ["Example", "Work/", "Other Bookmarks/"])
+        guard case .folder(_, let work) = bookmarks[1] else { return XCTFail() }
+        XCTAssertEqual(titles(work), ["Docs"], "non-web URLs are skipped")
+        XCTAssertEqual(bookmarks.reduce(0) { $0 + $1.linkCount }, 3)
+
+        let t1 = ChromiumImporter.chromiumTime(from: Date(timeIntervalSince1970: 1_700_000_000))
+        let t2 = ChromiumImporter.chromiumTime(from: Date(timeIntervalSince1970: 1_700_000_100))
+        try sqlite(profile.appendingPathComponent("History"), """
+            CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, last_visit_time INTEGER);
+            CREATE TABLE visits(id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER);
+            INSERT INTO urls VALUES (1,'https://a.example.com/','A',2,\(t2)), (2,'chrome://settings','Settings',1,\(t2));
+            INSERT INTO visits VALUES (1,1,\(t1)), (2,1,\(t2)), (3,2,\(t2));
+            """)
+        let visits = try ChromiumImporter.history(profileFolder: profile)
+        XCTAssertEqual(visits.map(\.date.timeIntervalSince1970), [1_700_000_100, 1_700_000_000])
+        XCTAssertEqual(visits.first?.title, "A")
+
+        let newer = try ChromiumImporter.history(profileFolder: profile, since: Date(timeIntervalSince1970: 1_700_000_050))
+        XCTAssertEqual(newer.count, 1, "incremental sync only reads newer visits")
+    }
+
+    // MARK: Firefox
+
+    func testFirefoxPlacesBookmarksAndHistory() throws {
+        let profile = try dir("Firefox/Profiles/abc.default")
+        try sqlite(profile.appendingPathComponent("places.sqlite"), """
+            CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url TEXT, title TEXT);
+            CREATE TABLE moz_bookmarks(id INTEGER PRIMARY KEY, type INTEGER, fk INTEGER, parent INTEGER, position INTEGER, title TEXT, guid TEXT);
+            CREATE TABLE moz_historyvisits(id INTEGER PRIMARY KEY, place_id INTEGER, visit_date INTEGER);
+            INSERT INTO moz_places VALUES (1,'https://mozilla.org/','Mozilla'), (2,'https://news.example.com/','News'), (3,'place:sort=8','Recent');
+            INSERT INTO moz_bookmarks VALUES
+              (1,2,NULL,0,0,'','root________'),
+              (2,2,NULL,1,0,'menu','menu________'),
+              (3,2,NULL,1,1,'toolbar','toolbar_____'),
+              (4,2,NULL,1,2,'tags','tags________'),
+              (5,2,NULL,1,3,'unfiled','unfiled_____'),
+              (10,1,1,3,0,'Mozilla','a1'),
+              (11,2,NULL,3,1,'Reading','a2'),
+              (12,1,2,11,0,'News','a3'),
+              (13,1,3,2,0,'Recent','a4'),
+              (14,1,2,5,0,'News again','a5');
+            INSERT INTO moz_historyvisits VALUES (1,1,1700000000000000), (2,2,1700000500000000);
+            """)
+        let bookmarks = try FirefoxImporter.bookmarks(profileFolder: profile)
+        XCTAssertEqual(titles(bookmarks), ["Mozilla", "Reading/", "Other Bookmarks/"],
+                       "toolbar items top level; menu with only a place: query is dropped")
+        let visits = try FirefoxImporter.history(profileFolder: profile)
+        XCTAssertEqual(visits.map(\.url), ["https://news.example.com/", "https://mozilla.org/"])
+        XCTAssertEqual(visits.last?.date, Date(timeIntervalSince1970: 1_700_000_000))
+    }
+
+    // MARK: Safari / HTML
+
+    func testSafariBookmarksPlist() throws {
+        let plist: [String: Any] = ["Children": [
+            ["Title": "BookmarksBar", "WebBookmarkType": "WebBookmarkTypeList", "Children": [
+                ["WebBookmarkType": "WebBookmarkTypeLeaf", "URLString": "https://apple.com", "URIDictionary": ["title": "Apple"]],
+            ]],
+            ["Title": "BookmarksMenu", "WebBookmarkType": "WebBookmarkTypeList", "Children": [
+                ["Title": "Dev", "WebBookmarkType": "WebBookmarkTypeList", "Children": [
+                    ["WebBookmarkType": "WebBookmarkTypeLeaf", "URLString": "https://developer.apple.com", "URIDictionary": ["title": "Developer"]],
+                ]],
+            ]],
+            ["Title": "com.apple.ReadingList", "WebBookmarkType": "WebBookmarkTypeList", "Children": []],
+        ]]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .binary, options: 0)
+        let bookmarks = try SafariImporter.parsePlist(data)
+        XCTAssertEqual(titles(bookmarks), ["Apple", "Bookmarks Menu/"])
+        guard case .folder(_, let menu) = bookmarks[1], case .folder(let dev, let items) = menu.first else { return XCTFail() }
+        XCTAssertEqual(dev, "Dev")
+        XCTAssertEqual(titles(items), ["Developer"])
+        XCTAssertThrowsError(try SafariImporter.bookmarks(safariFolder: home)) {
+            XCTAssertEqual($0 as? ImportError, .needsFullDiskAccess)
+        }
+    }
+
+    func testNetscapeHTMLParser() {
+        let html = """
+            <!DOCTYPE NETSCAPE-Bookmark-file-1>
+            <META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">
+            <TITLE>Bookmarks</TITLE>
+            <H1>Bookmarks</H1>
+            <DL><p>
+                <DT><H3 ADD_DATE="1" PERSONAL_TOOLBAR_FOLDER="true">Favorites</H3>
+                <DL><p>
+                    <DT><A HREF="https://example.com/?a=1&amp;b=2" ADD_DATE="1">Tom &amp; Jerry&#8217;s</A>
+                    <DT><H3>Nested</H3>
+                    <DL><p>
+                        <DT><a href='https://nested.example.com'>Deep</a>
+                    </DL><p>
+                    <DT><H3>Empty</H3>
+                    <DL><p>
+                    </DL><p>
+                </DL><p>
+                <DT><A HREF="https://top.example.com">Top</A>
+                <DT><A HREF="file:///etc/passwd">Local</A>
+            </DL><p>
+            """
+        let items = NetscapeBookmarks.parse(html)
+        XCTAssertEqual(titles(items), ["Favorites/", "Top"])
+        guard case .folder(_, let fav) = items[0] else { return XCTFail() }
+        XCTAssertEqual(fav.first, .link(title: "Tom & Jerry\u{2019}s", url: URL(string: "https://example.com/?a=1&b=2")!))
+        XCTAssertEqual(titles(fav), ["Tom & Jerry\u{2019}s", "Nested/"])
+    }
+
+    // MARK: Merge + dedupe
+
+    func testReimportingBookmarksAddsOnlyNewOnes() {
+        var ws = Workspace()
+        let first: [ImportedBookmark] = [
+            .link(title: "A", url: URL(string: "https://a.com/")!),
+            .folder(name: "Work", children: [.link(title: "B", url: URL(string: "https://b.com")!)]),
+        ]
+        let r1 = ws.mergeImportedBookmarks(first, folderName: "Imported from Chrome", existingFolderId: nil)
+        XCTAssertEqual(r1.added, 2)
+        XCTAssertEqual(ws.integrityProblems(), [])
+        guard let folderId = r1.folderId, case .folder(let root)? = ws.node(withId: folderId) else { return XCTFail() }
+        XCTAssertFalse(root.isExpanded)
+        XCTAssertEqual(ws.section(containing: ws.tabs.values.first!.id), .pinned)
+        XCTAssertEqual(ws.tabs.values.first?.savedURL, ws.tabs.values.first?.url, "imported tabs reset to their bookmark")
+
+        // Same data again (trailing slash / fragment differences), plus one new link in Work.
+        let second: [ImportedBookmark] = [
+            .link(title: "A", url: URL(string: "https://A.com#top")!),
+            .folder(name: "Work", children: [
+                .link(title: "B", url: URL(string: "https://b.com/")!),
+                .link(title: "C", url: URL(string: "https://c.com")!),
+            ]),
+        ]
+        let r2 = ws.mergeImportedBookmarks(second, folderName: "Imported from Chrome", existingFolderId: folderId)
+        XCTAssertEqual(r2.added, 1)
+        XCTAssertEqual(r2.folderId, folderId)
+        XCTAssertEqual(ws.tabs.count, 3)
+        XCTAssertEqual(ws.integrityProblems(), [])
+
+        // Lost the remembered id: the folder is found again by name.
+        XCTAssertEqual(ws.mergeImportedBookmarks(second, folderName: "Imported from Chrome", existingFolderId: UUID()).added, 0)
+        XCTAssertEqual(ws.mergeImportedBookmarks([], folderName: "Imported from Edge", existingFolderId: nil).folderId, nil)
+    }
+
+    func testImportedHistoryDedupesAndKeepsNewestFirst() {
+        let profile = UUID()
+        defer {
+            let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("Luna/Profiles/\(profile.uuidString)")
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let history = HistoryManager(profileId: profile)
+        let visits = [
+            ImportedVisit(url: "https://a.com/", title: "A", date: Date(timeIntervalSince1970: 100)),
+            ImportedVisit(url: "https://b.com/", title: "B", date: Date(timeIntervalSince1970: 300)),
+            ImportedVisit(url: "https://a.com/", title: "A", date: Date(timeIntervalSince1970: 200)),
+        ]
+        XCTAssertEqual(history.importVisits(visits), 3)
+        XCTAssertEqual(history.importVisits(visits + [ImportedVisit(url: "https://c.com/", title: "C", date: Date(timeIntervalSince1970: 250))]), 1)
+        XCTAssertEqual(history.historyEvents.map(\.timestamp.timeIntervalSince1970), [300, 250, 200, 100])
+    }
+
+    func testReadUsesTheSelectedProfileFolder() throws {
+        let data = try dir("Library/Application Support/BraveSoftware/Brave-Browser")
+        let p1 = try dir("Library/Application Support/BraveSoftware/Brave-Browser/Profile 1")
+        try write(#"{"roots":{"bookmark_bar":{"children":[{"type":"url","name":"P1","url":"https://p1.example"}]}}}"#,
+                  to: p1.appendingPathComponent("Bookmarks"))
+        let r = BrowserImporter.read(kind: .brave, dataFolder: data, profile: SourceProfile(id: "Profile 1", name: "Work"),
+                                     types: [.bookmarks, .history], since: nil)
+        XCTAssertEqual(r.bookmarks.map(titles), ["P1"])
+        XCTAssertEqual(r.visits, [], "missing History file is just empty")
+        XCTAssertEqual(r.errors, [])
+        XCTAssertEqual(BrowserImporter.folderName(.brave, SourceProfile(id: "Profile 1", name: "Work"), profileCount: 2),
+                       "Imported from Brave (Work)")
+    }
+
+    // MARK: 1Password
+
+    /// A one-entry zip (stored or raw-deflate), like 1Password's .1pux.
+    private func makeZip(_ name: String, _ payload: Data, deflate: Bool) -> Data {
+        var body = payload
+        if deflate {
+            var out = [UInt8](repeating: 0, count: payload.count + 1024)
+            let n = payload.withUnsafeBytes { src in
+                compression_encode_buffer(&out, out.count, src.bindMemory(to: UInt8.self).baseAddress!, payload.count, nil, COMPRESSION_ZLIB)
+            }
+            body = Data(out.prefix(n))
+        }
+        var d = Data()
+        func le(_ v: Int, _ bytes: Int) { for i in 0..<bytes { d.append(UInt8((v >> (8 * i)) & 0xff)) } }
+        let nameBytes = Data(name.utf8), method = deflate ? 8 : 0
+        // Local header
+        le(0x04034b50, 4); le(20, 2); le(0, 2); le(method, 2); le(0, 4); le(0, 4)
+        le(body.count, 4); le(payload.count, 4); le(nameBytes.count, 2); le(0, 2)
+        d.append(nameBytes); d.append(body)
+        let central = d.count
+        le(0x02014b50, 4); le(20, 2); le(20, 2); le(0, 2); le(method, 2); le(0, 4); le(0, 4)
+        le(body.count, 4); le(payload.count, 4); le(nameBytes.count, 2); le(0, 2); le(0, 2); le(0, 2); le(0, 2); le(0, 4); le(0, 4)
+        d.append(nameBytes)
+        let centralSize = d.count - central
+        le(0x06054b50, 4); le(0, 2); le(0, 2); le(1, 2); le(1, 2); le(centralSize, 4); le(central, 4); le(0, 2)
+        return d
+    }
+
+    private let exportData = """
+        {"accounts":[{"attrs":{"name":"Fixture"},"vaults":[{"attrs":{"name":"Private"},"items":[
+          {"uuid":"1","state":"active","categoryUuid":"001",
+           "overview":{"title":"Example","url":"https://example.com/login","urls":[{"url":"https://example.com/login"}]},
+           "details":{"loginFields":[{"designation":"username","value":"fixture-user"},{"designation":"password","value":"fixture-pass"}],
+                      "notesPlain":"","sections":[{"fields":[{"title":"one-time password","value":{"totp":"otpauth://totp/x?secret=AAAA"}}]}]}},
+          {"uuid":"2","state":"active","categoryUuid":"001",
+           "overview":{"title":"Second","urls":[{"url":"second.example.org"}]},
+           "details":{"loginFields":[{"designation":"password","value":"p2"}]}},
+          {"uuid":"3","state":"archived","categoryUuid":"001","overview":{"url":"https://old.example"},"details":{"loginFields":[{"designation":"password","value":"x"}]}},
+          {"uuid":"4","state":"active","categoryUuid":"002","overview":{"title":"Card"},"details":{}},
+          {"uuid":"5","state":"active","categoryUuid":"001","overview":{"title":"No site"},"details":{"loginFields":[{"designation":"password","value":"x"}]}}
+        ]}]}]}
+        """
+
+    func testOnePassword1PUXStoredAndDeflated() throws {
+        for deflate in [false, true] {
+            let file = home.appendingPathComponent("export-\(deflate).1pux")
+            try makeZip("export.data", Data(exportData.utf8), deflate: deflate).write(to: file)
+            let r = try OnePasswordImporter.parse1PUX(at: file)
+            XCTAssertEqual(r.logins.map(\.url), ["https://example.com/login", "second.example.org"], "deflate=\(deflate)")
+            XCTAssertEqual(r.logins.first?.username, "fixture-user")
+            XCTAssertEqual(r.logins.first?.password, "fixture-pass")
+            XCTAssertNotNil(r.logins.first?.totp)
+            XCTAssertEqual(r.droppedExtras, 1)
+            XCTAssertEqual(r.skippedOtherItems, 1)
+            XCTAssertEqual(r.skippedIncomplete, 1)
+        }
+        let notZip = home.appendingPathComponent("bad.1pux")
+        try Data("not a zip".utf8).write(to: notZip)
+        XCTAssertThrowsError(try OnePasswordImporter.parse1PUX(at: notZip))
+    }
+
+    func testOnePasswordCSVAndVaultCSVRoundTrip() {
+        let csv = "Title,Url,Username,Password,OTPAuth,Favorite,Archived,Tags,Notes\n" +
+            "Example,https://example.com,me,\"pa,ss\",,false,false,,note\n" +
+            "Old,https://old.example,me,x,,false,true,,\n" +
+            "Empty,,me,x,,false,false,,\n"
+        let r = OnePasswordImporter.parseCSV(csv)
+        XCTAssertEqual(r.logins.count, 1)
+        XCTAssertEqual(r.skippedIncomplete, 1)
+        XCTAssertEqual(r.droppedExtras, 1)
+        let rows = PasswordVault.parseCSV(OnePasswordImporter.vaultCSV(r.logins))
+        XCTAssertEqual(rows, [["url", "username", "password"], ["https://example.com", "me", "pa,ss"]])
+    }
+}

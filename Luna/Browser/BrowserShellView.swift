@@ -56,6 +56,7 @@ struct BrowserShellView: View {
     @State private var swipeConsumed = false
     /// Brief name badge after switching profiles.
     @State private var profileToast: BrowserProfile?
+    @State private var showBrowserImport = false
     @State private var pendingAction: BrowserAction? = nil
     @State private var pendingAssistantText: String = ""
     @State private var showActionConfirm: Bool = false
@@ -202,6 +203,11 @@ struct BrowserShellView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
                 .allowsHitTesting(false)
             }
+        }
+        .focusedSceneValue(\.showBrowserImport, { showBrowserImport = true })
+        .sheet(isPresented: $showBrowserImport) {
+            BrowserImportView(profileId: sessionStore.activeProfileId) { showBrowserImport = false }
+                .frame(width: 560, height: 640)
         }
         .focusedSceneValue(\.profileCommands, ProfileCommandContext(
             activeProfileId: sessionStore.activeProfileId,

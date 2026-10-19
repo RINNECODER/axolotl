@@ -345,6 +345,11 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
+    /// One undoable change made outside the sidebar (e.g. importing bookmarks).
+    func applyChange(_ actionName: String, _ change: (inout Workspace) -> Void) {
+        perform(actionName, change)
+    }
+
     // MARK: - Spaces
 
     @discardableResult
@@ -519,6 +524,9 @@ enum WorkspaceOwnership {
         owners[profileId] = WeakStore(store)
         return store
     }
+
+    /// The live store that persists this profile's workspace, if a window has it open.
+    static func owner(for profileId: UUID) -> WorkspaceStore? { owners[profileId]?.store }
 
     static func release(_ store: WorkspaceStore, profileId: UUID) {
         if owners[profileId]?.store === store { owners.removeValue(forKey: profileId) }

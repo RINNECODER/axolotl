@@ -10,6 +10,7 @@ import SwiftUI
 struct LunaApp: App {
     init() {
         NSWindow.allowsAutomaticWindowTabbing = false
+        BrowserImporter.scheduleLaunchSync()
         #if DEBUG
         DebugSnapshot.scheduleIfRequested()
         DebugUIDriver.install()

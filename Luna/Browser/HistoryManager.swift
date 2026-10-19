@@ -65,8 +65,30 @@ final class HistoryManager: ObservableObject {
         scheduleHistorySave()
     }
     
+    /// Adds visits imported from another browser. Skips visits already present
+    /// (same URL within the same second), keeps newest-first order and the cap.
+    /// Returns how many were added.
+    @discardableResult
+    func importVisits(_ visits: [ImportedVisit]) -> Int {
+        guard !visits.isEmpty else { return 0 }
+        func key(_ url: String, _ date: Date) -> String { "\(Int(date.timeIntervalSince1970))|\(url)" }
+        var seen = Set(historyEvents.lazy.filter { $0.type == .pageVisit }.compactMap { e in e.url.map { key($0, e.timestamp) } })
+        var added: [HistoryEvent] = []
+        for v in visits where seen.insert(key(v.url, v.date)).inserted {
+            added.append(HistoryEvent(timestamp: v.date, type: .pageVisit, url: v.url, pageTitle: v.title))
+        }
+        guard !added.isEmpty else { return 0 }
+        var merged = historyEvents + added
+        merged.sort { $0.timestamp > $1.timestamp }
+        if merged.count > maxHistoryCount { merged.removeLast(merged.count - maxHistoryCount) }
+        let kept = Set(merged.map(\.id))
+        historyEvents = merged
+        scheduleHistorySave()
+        return added.filter { kept.contains($0.id) }.count
+    }
+
     // MARK: - Chat History Management
-    
+
     /// Records a chat session. sessionId = tabId so all chats in the same tab belong to one session until the tab is closed.
     func recordChatSession(tabId: UUID, messages: [ChatMessage], summary: String? = nil) {
         let event = HistoryEvent(
