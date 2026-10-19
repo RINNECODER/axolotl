@@ -2,14 +2,10 @@
 import SwiftUI
 import WebKit
 
-/// Opens Settings on a pane (Luna menus run outside SwiftUI's environment, so
-/// they take this from the view that builds them).
+/// Opens the Settings tab on a pane (passed to Luna menus that link to Settings).
 struct LunaSettingsOpener {
-    let openSettings: OpenSettingsAction
-
     func callAsFunction(_ pane: SettingsPane? = nil) {
-        if let pane { SettingsRouter.shared.requestedPane = pane }
-        openSettings()
+        SettingsOpener.open(pane)
     }
 }
 

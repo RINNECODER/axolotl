@@ -289,12 +289,11 @@ struct TopChromeView: View {
 struct MoreMenu: View {
     let actions: TopChromeActions
     let extensions: ExtensionHost
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         LunaMenuButton(alignment: .trailing, minWidth: 280, help: "More", debugID: "top.more", items: {
             AppMenuEntries.build(actions: actions, extensions: extensions,
-                                 settings: LunaSettingsOpener(openSettings: openSettings))
+                                 settings: LunaSettingsOpener())
         }) { isOpen in
             Image(systemName: "ellipsis")
                 .font(.system(size: 13, weight: .medium))
@@ -351,7 +350,6 @@ private struct ChromeStar: View {
 private struct ChromeExtensionsButton: View {
     @ObservedObject var extensions: ExtensionHost
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         // Like Chrome, the puzzle piece shows once an extension is installed.
@@ -361,7 +359,7 @@ private struct ChromeExtensionsButton: View {
 
     private var menu: some View {
         LunaMenuButton(alignment: .trailing, help: "Extensions", items: {
-            let entries = ExtensionMenuEntries.build(host: extensions, settings: LunaSettingsOpener(openSettings: openSettings))
+            let entries = ExtensionMenuEntries.build(host: extensions, settings: LunaSettingsOpener())
             if case .item(let item) = entries.first, let children = item.children { return children }
             return entries
         }) { isOpen in
@@ -380,12 +378,11 @@ private struct ChromeMenuButton: View {
     let extensions: ExtensionHost
     @Environment(\.colorScheme) private var scheme
 
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         LunaMenuButton(alignment: .trailing, minWidth: 320, debugID: "chrome.app", items: {
             AppMenuEntries.build(actions: actions, extensions: extensions,
-                                 settings: LunaSettingsOpener(openSettings: openSettings))
+                                 settings: LunaSettingsOpener())
         }) { isOpen in
             ChromeIcon(systemName: "ellipsis", color: ChromePalette.for(scheme).icon, rotation: .degrees(90))
                 .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)

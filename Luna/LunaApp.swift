@@ -36,12 +36,14 @@ struct LunaApp: App {
         .commands {
             BrowserCommands()
             ProfileCommands()
+            // Settings opens as a tab (luna://settings), like Chrome; there is no Settings window.
+            CommandGroup(replacing: .appSettings) {
+                Button("Settings…") { SettingsOpener.open() }
+                    .keyboardShortcut(",")
+            }
             CommandGroup(after: .help) {
                 Button("Show Welcome…") { OnboardingState.showAgain() }
             }
-        }
-        Settings {
-            SettingsView()
         }
     }
 }
