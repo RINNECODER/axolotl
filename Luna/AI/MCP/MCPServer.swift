@@ -178,7 +178,8 @@ final class MCPServer {
         let body: Data
         if headers["transfer-encoding"]?.lowercased().contains("chunked") == true {
             switch decodeChunked(Data(rest)) {
-            case .none: return .incomplete
+            // A chunked body that never ends must not grow the buffer (and its rescans) forever.
+            case .none: return buffer.count > maxHeaderBytes + maxBodyBytes + 1024 ? .invalid(413, "Body too large") : .incomplete
             case .some(.failure): return .invalid(400, "Bad chunked body")
             case .some(.success(let decoded)): body = decoded
             }

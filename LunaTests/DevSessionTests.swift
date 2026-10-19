@@ -399,7 +399,7 @@ final class DevSessionTests: XCTestCase {
         deps.makeHeadless = { kind, _ in let f = FakeHeadless(kind: kind); made = f; return f }
         deps.makeTerminal = {
             let t = DevTerminalController(watcher: SessionStoreWatcher(claudeRoot: store, codexRoot: store),
-                                          approval: { .ask }, mcpProvider: { nil }, executable: { _ in fake.path })
+                                          approval: { .ask }, mcpProvider: { _ in nil }, executable: { _ in fake.path })
             t.outputObserver = { output.value += String(decoding: $0, as: UTF8.self) }
             return t
         }

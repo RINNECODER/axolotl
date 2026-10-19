@@ -370,7 +370,7 @@ final class DevTerminalController {
     @ObservationIgnored private var _view: TerminalView?
     @ObservationIgnored private let watcher: SessionStoreWatcher
     @ObservationIgnored private let approval: () -> DevApprovalBehavior
-    @ObservationIgnored private let mcpProvider: () -> DevMCPAttachment?
+    @ObservationIgnored private let mcpProvider: (DevApprovalBehavior) -> DevMCPAttachment?
     @ObservationIgnored private let executable: (AgentCLIKind) -> String
     /// Test hook: every byte the PTY prints.
     @ObservationIgnored var outputObserver: ((Data) -> Void)?
@@ -378,11 +378,11 @@ final class DevTerminalController {
     /// nil arguments use `DevSettings.shared` (approval mode, MCP auto-wire, CLI path overrides).
     init(watcher: SessionStoreWatcher = SessionStoreWatcher(),
          approval: (() -> DevApprovalBehavior)? = nil,
-         mcpProvider: (() -> DevMCPAttachment?)? = nil,
+         mcpProvider: ((DevApprovalBehavior) -> DevMCPAttachment?)? = nil,
          executable: ((AgentCLIKind) -> String)? = nil) {
         self.watcher = watcher
         self.approval = approval ?? { DevSettings.shared.approvalBehavior }
-        self.mcpProvider = mcpProvider ?? { DevSettings.shared.autoWireBrowserTools ? LunaMCPBridge.shared.devAttachment() : nil }
+        self.mcpProvider = mcpProvider ?? { DevSettings.shared.autoWireBrowserTools ? LunaMCPBridge.shared.devAttachment(approval: $0) : nil }
         self.executable = executable ?? { DevSettings.executable(for: $0) }
     }
 
@@ -448,9 +448,15 @@ final class DevTerminalController {
         }
     }
 
+    /// The approval mode the CLI is launched with (same rule as `DevTerminalCommand.launch`).
+    static func effectiveApproval(_ mode: DevTerminalMode, global: DevApprovalBehavior, resume: DevApprovalBehavior?) -> DevApprovalBehavior {
+        if case .newSession(_, let setup, _) = mode { return setup.approvalBehavior }
+        return resume ?? global
+    }
+
     private func prepareLaunch(_ mode: DevTerminalMode, resumeApproval: DevApprovalBehavior?) {
         if mode.harness != nil {
-            mcp = mcpProvider()
+            mcp = mcpProvider(Self.effectiveApproval(mode, global: approval(), resume: resumeApproval))
             if let mcp, mode.harness == .claudeCode { mcpConfig = try? mcp.writeClaudeConfig() }
         }
         let launch = DevTerminalCommand.launch(for: mode, approval: approval(), resumeApproval: resumeApproval, shell: Self.loginShell,

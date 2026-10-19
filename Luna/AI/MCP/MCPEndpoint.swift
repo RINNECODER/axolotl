@@ -99,7 +99,8 @@ final class MCPEndpoint {
         let id: String
         let clientName: String
         var protocolVersion: String
-        var allowAll = false
+        /// Tools the user allowed for this session; "Allow for Session" on one tool never covers another.
+        var allowedTools: Set<String> = []
         let created = Date()
         init(id: String, clientName: String, protocolVersion: String) {
             self.id = id
@@ -115,6 +116,8 @@ final class MCPEndpoint {
     /// Per-session tokens handed to Dev mode CLIs: accepted for auth, and their sessions
     /// skip Luna's approval prompt (the CLI asks the user itself).
     var trustedTokens: () -> Set<String> = { [] }
+    /// Dev mode tokens for CLIs that do not ask the user (Full auto): accepted, but Luna still prompts.
+    var promptingTokens: () -> Set<String> = { [] }
     weak var approver: MCPApproving?
     private(set) var sessions: [String: Session] = [:]
 
@@ -130,7 +133,7 @@ final class MCPEndpoint {
     }
 
     func handle(_ request: MCPHTTPRequest) async -> MCPHTTPResponse {
-        if let rejection = MCPGate.reject(request, port: port(), token: token(), alsoAccepted: trustedTokens()) { return rejection }
+        if let rejection = MCPGate.reject(request, port: port(), token: token(), alsoAccepted: trustedTokens().union(promptingTokens())) { return rejection }
         if let version = request.headers["mcp-protocol-version"], !Self.supportedVersions.contains(version) {
             return .text(400, "Unsupported MCP-Protocol-Version")
         }
@@ -239,7 +242,7 @@ final class MCPEndpoint {
         // Resolve the target window once, so the action lands where the approval preview said.
         let host = toolbox.currentHost()
         // Customization tools always show their preview; other mutating tools ask unless trusted.
-        if tool.mutates, tool.confirmsEveryCall || (!isTrusted() && !devTrusted && session?.allowAll != true) {
+        if tool.mutates, tool.confirmsEveryCall || (!isTrusted() && !devTrusted && session?.allowedTools.contains(name) != true) {
             // Don't ask the user about a call that would be rejected anyway.
             do { try tool.validate(arguments) } catch {
                 return Self.result(id: id, Self.toolResult(LunaToolResult(text: error.localizedDescription, isError: true)))
@@ -250,7 +253,7 @@ final class MCPEndpoint {
             case .deny:
                 return Self.result(id: id, Self.toolResult(LunaToolResult(text: "The user declined this action in Luna.", isError: true)))
             case .session:
-                if !tool.confirmsEveryCall { session?.allowAll = true }
+                if !tool.confirmsEveryCall { session?.allowedTools.insert(name) }
             case .once:
                 break
             }

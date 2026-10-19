@@ -156,7 +156,7 @@ final class DevHomeTests: XCTestCase {
 
         let output = LockedBox("")
         let term = DevTerminalController(watcher: SessionStoreWatcher(claudeRoot: base.appendingPathComponent("c"), codexRoot: base.appendingPathComponent("x")),
-                                         approval: { .ask }, mcpProvider: { nil }, executable: { _ in script.path })
+                                         approval: { .ask }, mcpProvider: { _ in nil }, executable: { _ in script.path })
         term.outputObserver = { data in output.value += String(decoding: data, as: UTF8.self) }
         term.open(.newSession(.claudeCode, setup, projectDir: base))
         defer { term.terminate() }

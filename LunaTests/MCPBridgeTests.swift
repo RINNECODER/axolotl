@@ -291,3 +291,62 @@ extension MCPBridgeTests {
         XCTAssertEqual(revoked.status, 401)
     }
 }
+
+extension MCPBridgeTests {
+    func testFullAutoDevTokenIsAcceptedButStillPrompts() async throws {
+        let devToken = "dev-full-auto-token-0123456789"
+        endpoint.promptingTokens = { [devToken] }
+        approver.answer = .deny
+        let r = await endpoint.handle(request(body: #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"codex","version":"1"}}}"#,
+                                              headers: ["authorization": "Bearer \(devToken)"]))
+        XCTAssertEqual(r.status, 200)
+        let session = try XCTUnwrap(r.headers["Mcp-Session-Id"])
+        let opened = await endpoint.handle(request(body: #"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tab_open","arguments":{"url":"https://dev.test"}}}"#,
+                                                   headers: ["mcp-session-id": session, "authorization": "Bearer \(devToken)"]))
+        XCTAssertEqual(isError(try json(opened)), true, "a Full auto CLI asks nobody, so Luna must")
+        XCTAssertEqual(approver.asked, ["tab_open"])
+        XCTAssertEqual(host.tabs.count, 1)
+    }
+}
+
+extension MCPBridgeTests {
+    func testSessionApprovalIsScopedToOneToolAndPreviewNamesTheTarget() async throws {
+        let session = try await initialize()
+        approver.answer = .session
+        _ = try await call(session, "tab_open", #"{"url":"https://one.test"}"#)
+        _ = try await call(session, "tab_open", #"{"url":"https://two.test"}"#)
+        approver.answer = .deny
+        _ = try await call(session, "navigate", #"{"url":"https://three.test"}"#)
+        XCTAssertEqual(approver.asked, ["tab_open", "navigate"], "allowing tab_open must not cover navigate")
+
+        XCTAssertEqual(LunaTools.elementPreview("Click", id: "e3", label: "Delete account", pageHost: "bank.test"),
+                       "Click “Delete account” (e3) on bank.test")
+        XCTAssertEqual(LunaTools.elementPreview("Click", id: "e9", label: nil, pageHost: nil), "Click e9 on the current page")
+    }
+}
+
+// MARK: - HTTP parsing limits
+
+extension MCPBridgeTests {
+    private func status(_ result: MCPServer.ParseResult) -> Int? {
+        switch result {
+        case .invalid(let status, _): return status
+        case .complete: return 200
+        case .incomplete: return nil
+        }
+    }
+
+    func testParserBoundsChunkedHeadersAndBodies() {
+        let head = "POST /mcp HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        // A chunked body that never sends its final 0-chunk is refused once past the cap, not buffered forever.
+        var chunked = Data((head + "Transfer-Encoding: chunked\r\n\r\n").utf8)
+        XCTAssertNil(status(MCPServer.parse(chunked, loopback: true)))
+        chunked.append(Data("1;\(String(repeating: "x", count: MCPServer.maxHeaderBytes + MCPServer.maxBodyBytes + 2048))".utf8))
+        XCTAssertEqual(status(MCPServer.parse(chunked, loopback: true)), 413)
+
+        XCTAssertEqual(status(MCPServer.parse(Data((head + "X: " + String(repeating: "a", count: MCPServer.maxHeaderBytes + 1)).utf8), loopback: true)), 431)
+        XCTAssertEqual(status(MCPServer.parse(Data((head + "Content-Length: \(MCPServer.maxBodyBytes + 1)\r\n\r\n").utf8), loopback: true)), 413)
+        XCTAssertEqual(status(MCPServer.parse(Data((head + "Host: evil.test\r\n\r\n").utf8), loopback: true)), 400)
+        XCTAssertEqual(status(MCPServer.parse(Data((head + "Content-Length: 2\r\n\r\nok").utf8), loopback: true)), 200)
+    }
+}
