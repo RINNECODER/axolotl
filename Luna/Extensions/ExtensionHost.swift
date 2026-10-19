@@ -57,7 +57,8 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
                 DispatchQueue.main.async { for host in changed { Task { await self?.applyShields(host: host) } } }
             }
             .store(in: &cancellables)
-        sync(with: ExtensionLibrary.shared.records)
+        // No sync here: the `$records` subscription in init already loads them on the next turn,
+        // and a second pass parsed every extension twice at launch.
     }
 
     // MARK: Loading
