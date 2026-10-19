@@ -39,8 +39,10 @@
 <p align="center"><b>A quieter browser for the Mac.</b><br>
 Native Swift and WebKit, with an AI assistant that shows up when you ask and stays out of the way when you don't.</p>
 
+<p align="center"><sub>My browser, built on <a href="https://github.com/Rahul4301/Luna">Luna</a> by Rahul Suthar.</sub></p>
+
 <p align="center">
-  <a href="https://github.com/RINNECODER/axolotl/releases/latest">Download</a> ·
+  <a href="https://github.com/RINNECODER/axolotl-releases/releases/latest">Download</a> ·
   <a href="https://github.com/RINNECODER/axolotl/issues">Report an issue</a>
 </p>
 
@@ -53,6 +55,9 @@ Native Swift and WebKit, with an AI assistant that shows up when you ask and sta
 
 > [!WARNING]
 > Axolotl is in early development and not ready for everyday use yet. Expect rough edges, and please [tell us about them](https://github.com/RINNECODER/axolotl/issues).
+
+> [!NOTE]
+> Axolotl is my own customized variation of [Luna](https://github.com/Rahul4301/Luna), the open-source macOS browser by [Rahul Suthar](https://github.com/Rahul4301). Luna is the foundation; Axolotl reshapes it around my own ideas: Chrome- and Brave-style browsing, personalization of everything, and features that cost nothing when they're off. All credit for the original browser goes to Luna and its author.
 
 ---
 
@@ -89,8 +94,8 @@ Native Swift and WebKit, with an AI assistant that shows up when you ask and sta
 
 ## Get Axolotl
 
-1. Download `Axolotl.dmg` from the [latest release](https://github.com/RINNECODER/axolotl/releases/latest).
-2. Open it and drag Axolotl into Applications.
+1. Download `Axolotl-<version>.zip` from the [latest release](https://github.com/RINNECODER/axolotl-releases/releases/latest).
+2. Unzip it and drag Axolotl into Applications. After that, Axolotl updates itself.
 3. Open Axolotl. Axolotl isn't notarized yet, so the first time macOS warns that it can't verify the app. Click **Done**, then go to **System Settings › Privacy & Security**, scroll to Security and click **Open Anyway** next to the message about Axolotl. Confirm with your password. You only need to do this once.
 
 ## Bring your own model
@@ -194,6 +199,7 @@ Agent mode (`/agent <goal>` in the AI panel) is a native port of [browser-use/je
 
 ## Credits
 
+- **[Luna](https://github.com/Rahul4301/Luna)** by [Rahul Suthar](https://github.com/Rahul4301) (MIT). Axolotl started as a fork of Luna and keeps its MIT license and copyright notice. Thank you, Rahul.
 - Agent mode: [browser-use/jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT, Copyright (c) 2026 Browser Use).
 - Dev mode's chat layout and work log are inspired by [T3 Code](https://github.com/pingdotgg/t3code) (MIT). No T3 Code source is bundled.
 - Terminal rendering: [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT).
