@@ -39,4 +39,31 @@ final class IdleCostTests: XCTestCase {
         XCTAssertTrue(on.contains { $0.contains("lunaLinkPreview") })
         XCTAssertTrue(on.contains { $0.contains("lumaPageTheme") })
     }
+
+    func testHibernatorKeepsOneOneShotTimerForTheNextDueTab() throws {
+        let session = ProfileSession(profileId: UUID(), dataStore: .nonPersistent(), workspace: WorkspaceStore(persistence: nil))
+        let store = session.workspace, hib = session.hibernator
+        let a = try XCTUnwrap(store.activeTabId)
+        _ = session.webViewWrapper.ensureWebView(for: a)
+        // Only the visible tab is loaded: nothing to unload, no timer.
+        hib.start()
+        XCTAssertNil(hib.nextSweepDate(timeout: 60))
+        XCTAssertNil(hib.timer)
+
+        let b = store.newTab(url: nil)
+        store.activate(b)
+        spin(0.3)
+        let due = try XCTUnwrap(store.tab(a)).lastActiveAt.addingTimeInterval(hib.timeout)
+        XCTAssertEqual(hib.nextSweepDate(now: due.addingTimeInterval(-1))?.timeIntervalSince(due) ?? 99, 0, accuracy: 0.01)
+        let timer = try XCTUnwrap(hib.timer, "background loaded tab schedules a sweep")
+        XCTAssertEqual(timer.timeInterval, 0, "one-shot, not repeating")
+        XCTAssertEqual(timer.fireDate.timeIntervalSince(due), 0, accuracy: 1)
+
+        // Past due but kept (busy): retry later instead of spinning.
+        let late = due.addingTimeInterval(10)
+        XCTAssertEqual(hib.nextSweepDate(now: late)?.timeIntervalSince(late) ?? 0, TabHibernator.busyRecheck, accuracy: 0.01)
+        XCTAssertNil(hib.nextSweepDate(timeout: 0), "hibernation off: no timer")
+        hib.stop()
+        XCTAssertNil(hib.timer)
+    }
 }
