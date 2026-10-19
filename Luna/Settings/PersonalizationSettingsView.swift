@@ -8,7 +8,6 @@ struct PersonalizationSettingsView: View {
     @ObservedObject private var usage = UsageStore.forProfile(Usage.profileId())
     @State private var showData = false
     @State private var confirmDelete = false
-    @State private var confirmClearSiteData = false
     @State private var showClearHistory = false
     @State private var siteDataStatus: String?
     @State private var dataProfileId = ProfileManager.shared.lastActiveProfileId
@@ -45,10 +44,8 @@ struct PersonalizationSettingsView: View {
                     SettingsMenuRow("Profile", selection: $dataProfileId,
                                     options: profileManager.profiles.map { .init($0.id, $0.name) })
                 }
-                SettingsRow("Cookies and site data", subtitle: "Signs you out of websites in this profile.", icon: "externaldrive") {
-                    Button("Clear…", role: .destructive) { confirmClearSiteData = true }
-                }
-                SettingsLinkRow("Clear browsing data", subtitle: "Clear history for a time range.", icon: "clock.arrow.circlepath") {
+                SettingsLinkRow("Clear browsing data", subtitle: "History, cookies and site data, cached files and downloads for a time range.",
+                                icon: "clock.arrow.circlepath") {
                     showClearHistory = true
                 }
                 if let siteDataStatus { SettingsNoteRow(siteDataStatus) }
@@ -57,25 +54,12 @@ struct PersonalizationSettingsView: View {
         .onChange(of: retention) { _, _ in usage.prune() }
         .sheet(isPresented: $showData) { UsageDataSheet(usage: usage) }
         .sheet(isPresented: $showClearHistory) {
-            ClearHistorySheet(history: ProfileStoreRegistry.stores(for: dataProfileId).history) { siteDataStatus = $0 }
-        }
-        .confirmationDialog("Clear cookies and site data for \(profileManager.profile(for: dataProfileId).name)?",
-                            isPresented: $confirmClearSiteData) {
-            Button("Clear", role: .destructive, action: clearSiteData)
-        } message: {
-            Text("Signs you out of websites in this profile. Saved passwords and history are kept.")
+            ClearBrowsingDataSheet(profileId: dataProfileId) { siteDataStatus = $0 }
         }
         .confirmationDialog("Delete the usage record?", isPresented: $confirmDelete) {
             Button("Delete All", role: .destructive) { usage.deleteAll() }
         } message: {
             Text("Removes every recorded count for this profile. Your browsing history is kept; clear it from History.")
-        }
-    }
-
-    private func clearSiteData() {
-        let store = ProfileManager.shared.dataStore(for: dataProfileId)
-        store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {
-            siteDataStatus = "Cookies and site data cleared."
         }
     }
 }
@@ -171,12 +155,25 @@ private struct HourBars: View {
     }
 }
 
-/// Chrome-style "Clear browsing data": pick a time range, confirm, clear history from then to now.
-struct ClearHistorySheet: View {
-    let history: HistoryManager
+/// Chrome-style "Clear browsing data": a time range and what to clear, from then to now, for one profile.
+struct ClearBrowsingDataSheet: View {
+    let profileId: UUID
     let onDone: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var range = TimeRange.hour
+    @State private var history = true
+    @State private var siteData = false
+    @State private var cache = true
+    @State private var downloads = false
+
+    static let cacheTypes: Set<String> = [WKWebsiteDataTypeDiskCache, WKWebsiteDataTypeMemoryCache,
+                                          WKWebsiteDataTypeFetchCache, WKWebsiteDataTypeOfflineWebApplicationCache]
+
+    /// WebKit data types for the checked boxes; "cookies and site data" is everything but caches.
+    static func websiteDataTypes(siteData: Bool, cache: Bool) -> Set<String> {
+        let all = WKWebsiteDataStore.allWebsiteDataTypes()
+        return (siteData ? all.subtracting(cacheTypes) : []).union(cache ? all.intersection(cacheTypes) : [])
+    }
 
     enum TimeRange: String, CaseIterable, Identifiable {
         case hour, day, week, all
@@ -201,27 +198,43 @@ struct ClearHistorySheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Clear browsing history").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
-            Text("Removes the pages you visited in this time range from History on this Mac. Cookies, passwords and bookmarks are kept.")
+            Text("Clear browsing data").font(.system(size: 17, weight: .semibold)).accessibilityAddTraits(.isHeader)
+            Text("Removes what you choose from this time range in \(ProfileManager.shared.profile(for: profileId).name). Passwords and bookmarks are kept.")
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             SettingsCard {
                 SettingsMenuRow("Time range", selection: $range, options: TimeRange.allCases.map { .init($0, $0.label) })
+                SettingsToggleRow("Browsing history", isOn: $history)
+                SettingsToggleRow("Cookies and site data", subtitle: "Signs you out of most websites.", isOn: $siteData)
+                SettingsToggleRow("Cached images and files", isOn: $cache)
+                SettingsToggleRow("Download list", subtitle: "Files you downloaded stay on disk.", isOn: $downloads)
             }
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Clear history", role: .destructive) {
-                    history.clearHistory(since: range.cutoff)
-                    onDone("History cleared (\(range.label.lowercased())).")
-                    dismiss()
-                }
-                .keyboardShortcut(.defaultAction)
+                Button("Clear data", role: .destructive, action: clear)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!(history || siteData || cache || downloads))
             }
         }
         .padding(20)
         .frame(width: 420)
         .background(SettingsStyle.page)
         .settingsControlStyles()
+    }
+
+    private func clear() {
+        let cutoff = range.cutoff, done = "Browsing data cleared (\(range.label.lowercased()))."
+        if history { ProfileStoreRegistry.stores(for: profileId).history.clearHistory(since: cutoff) }
+        if downloads {
+            DownloadManager.shared.clearInactive { $0.date >= cutoff && $0.belongs(profileId: profileId, isPrivate: false) }
+        }
+        let types = Self.websiteDataTypes(siteData: siteData, cache: cache)
+        if types.isEmpty {
+            onDone(done)
+        } else {
+            ProfileManager.shared.dataStore(for: profileId).removeData(ofTypes: types, modifiedSince: cutoff) { onDone(done) }
+        }
+        dismiss()
     }
 }
