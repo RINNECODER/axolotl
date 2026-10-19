@@ -47,23 +47,27 @@ struct SiteInfoPopover: View {
     @ObservedObject var store: SitePermissionStore
     /// The page's web view (certificate, data store); nil when unloaded.
     let webView: WKWebView?
+    /// The tab is showing a load error (e.g. a certificate failure), so nothing on screen is the secure page.
+    var hasPageError = false
     var onClose: () -> Void = {}
     @State private var records: [WKWebsiteDataRecord]?
 
     private var host: String { url.host ?? "" }
-    private var secure: Bool { url.scheme == "https" }
+    private var origin: String { SitePermissionStore.origin(url) ?? host }
+    private var secure: Bool { SiteSecurity.isSecure(url, webView: webView, hasPageError: hasPageError) }
+    private var notSecure: Bool { !secure && (url.scheme == "https" || hasPageError || SiteSecurity.showsNotSecure(url)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(host).font(.system(size: 14, weight: .semibold)).lineLimit(1).truncationMode(.middle)
                 .padding(.bottom, 12)
-            row(secure ? "lock.fill" : (SiteSecurity.showsNotSecure(url) ? "exclamationmark.triangle" : "info.circle")) {
+            row(secure ? "lock.fill" : (notSecure ? "exclamationmark.triangle" : "info.circle")) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(secure ? "Connection is secure" : (SiteSecurity.showsNotSecure(url) ? "Connection is not secure" : "This page is on your Mac"))
+                    Text(secure ? "Connection is secure" : (notSecure ? "Connection is not secure" : "This page is on your Mac"))
                         .font(.system(size: 13))
                     if secure, let issuer = SiteSecurity.certificateIssuer(webView) {
                         Text("Certificate issued by \(issuer)").font(.system(size: 11.5)).foregroundStyle(.secondary)
-                    } else if !secure && SiteSecurity.showsNotSecure(url) {
+                    } else if notSecure {
                         Text("Don't enter passwords or payment details on this site.").font(.system(size: 11.5)).foregroundStyle(.secondary)
                     }
                 }
@@ -75,8 +79,8 @@ struct SiteInfoPopover: View {
                     Text(p.title).font(.system(size: 13)).lineLimit(1)
                     Spacer(minLength: 8)
                     SettingsDropdown(title: p.title,
-                                     selection: Binding(get: { store.decision(p, host: host) },
-                                                        set: { store.set($0, p, host: host) }),
+                                     selection: Binding(get: { store.decision(p, host: origin) },
+                                                        set: { store.set($0, p, host: origin) }),
                                      options: p.choices.map { .init($0, $0.title(for: p)) }, minWidth: 96)
                 }
             }

@@ -139,6 +139,7 @@ extension AddressField {
                 .lunaPopover(isPresented: $showSiteInfo, arrowEdge: .bottom) {
                     SiteInfoPopover(url: url, store: web.sitePermissions,
                                     webView: web.activeTab.flatMap { web.webViewIfLoaded(for: $0) },
+                                    hasPageError: web.activeTab.map { web.pageErrorByTab[$0] != nil } ?? false,
                                     onClose: { showSiteInfo = false })
                 }
         } else {

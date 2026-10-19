@@ -99,8 +99,8 @@ final class SitePermissionRequest: Identifiable {
     }
 }
 
-/// Per-profile site exceptions `[host: [permission: decision]]`, saved as `site_permissions.json` in the
-/// profile folder. A store with no file (private sessions, tests) keeps decisions in memory only.
+/// Per-profile site exceptions `[origin: [permission: decision]]` (origin = scheme://host[:port]), saved as
+/// `site_permissions.json` in the profile folder. A bare host (old files, callers) means `https://host`. A store with no file (private sessions, tests) keeps decisions in memory only.
 /// Hosts without an exception follow the global default for that permission.
 @MainActor
 final class SitePermissionStore: ObservableObject {
@@ -113,7 +113,9 @@ final class SitePermissionStore: ObservableObject {
         self.defaults = defaults
         if let fileURL, let data = try? Data(contentsOf: fileURL),
            let saved = try? JSONDecoder().decode([String: [SitePermission: SitePermissionDecision]].self, from: data) {
-            sites = saved
+            // Files from before origins were keyed by host: those become https://host.
+            sites = Dictionary(saved.compactMap { k, v in Self.key(k).map { ($0, v) } }) { a, b in a.merging(b) { x, _ in x } }
+            if sites.keys.sorted() != saved.keys.sorted() { save() }
         }
     }
 
@@ -135,7 +137,7 @@ final class SitePermissionStore: ObservableObject {
     /// Screenshots: an in-memory store for this profile so its real exceptions are untouched.
     static func useSnapshotStore(for id: UUID, sites: [String: [SitePermission: SitePermissionDecision]]) {
         let store = SitePermissionStore(fileURL: nil)
-        store.sites = sites
+        store.sites = Dictionary(uniqueKeysWithValues: sites.map { (key($0.key) ?? $0.key, $0.value) })
         stores[id] = store
     }
     #endif
@@ -153,6 +155,8 @@ final class SitePermissionStore: ObservableObject {
     /// Setting the global default clears the exception, so the site follows later default changes.
     func set(_ decision: SitePermissionDecision, _ permission: SitePermission, host: String) {
         guard let host = Self.key(host) else { return }
+        // Grants for origins anyone on the network can impersonate (plain http) aren't remembered.
+        if decision == .allow, !Self.canRememberGrants(host) { return }
         var entry = sites[host] ?? [:]
         entry[permission] = decision == defaultDecision(permission) ? nil : decision
         sites[host] = entry.isEmpty ? nil : entry
@@ -165,9 +169,31 @@ final class SitePermissionStore: ObservableObject {
         save()
     }
 
-    private static func key(_ host: String?) -> String? {
-        guard let host = host?.lowercased(), !host.isEmpty else { return nil }
-        return host
+    /// The origin key: `scheme://host[:port]` (default ports dropped); a bare host means https.
+    static func key(_ site: String?) -> String? {
+        guard let site = site?.lowercased(), !site.isEmpty else { return nil }
+        guard site.contains("://") else { return "https://" + site }
+        return origin(URL(string: site)) ?? site
+    }
+
+    static func origin(_ url: URL?) -> String? {
+        guard let url, let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(), !host.isEmpty else { return nil }
+        return origin(scheme: scheme, host: host, port: url.port ?? 0)
+    }
+
+    static func origin(_ o: WKSecurityOrigin) -> String {
+        origin(scheme: o.protocol.lowercased(), host: o.host.lowercased(), port: o.port)
+    }
+
+    private static func origin(scheme: String, host: String, port: Int) -> String {
+        let isDefault = port == 0 || (scheme == "https" && port == 443) || (scheme == "http" && port == 80)
+        let h = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
+        return "\(scheme)://\(h)" + (isDefault ? "" : ":\(port)")
+    }
+
+    static func canRememberGrants(_ origin: String) -> Bool {
+        guard let url = URL(string: origin) else { return false }
+        return url.scheme == "https" || SiteSecurity.isLocal(url.host)
     }
 
     private func save() {
@@ -180,9 +206,20 @@ final class SitePermissionStore: ObservableObject {
 enum SiteSecurity {
     /// Chrome's gray "Not secure" label: plain http, except this Mac (localhost / loopback).
     static func showsNotSecure(_ url: URL?) -> Bool {
-        guard let url, url.scheme?.lowercased() == "http", let host = url.host?.lowercased() else { return false }
-        return !(host == "localhost" || host.hasSuffix(".localhost") || host == "::1" || host == "[::1]"
-                 || host.hasPrefix("127."))
+        guard let url, url.scheme?.lowercased() == "http", url.host != nil else { return false }
+        return !isLocal(url.host)
+    }
+
+    /// localhost / loopback: this Mac.
+    static func isLocal(_ host: String?) -> Bool {
+        guard let host = host?.lowercased() else { return false }
+        return host == "localhost" || host.hasSuffix(".localhost") || host == "::1" || host == "[::1]" || host.hasPrefix("127.")
+    }
+
+    /// The lock: an https page that loaded without error, with only secure subresources and a server trust.
+    static func isSecure(_ url: URL, webView: WKWebView?, hasPageError: Bool) -> Bool {
+        guard url.scheme?.lowercased() == "https", !hasPageError, let webView else { return false }
+        return webView.hasOnlySecureContent && webView.serverTrust != nil
     }
 
     /// Issuer of the page's certificate (e.g. "WE1"), from the web view's server trust.
