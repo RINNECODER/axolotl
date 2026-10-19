@@ -224,7 +224,7 @@ private struct SidebarMoreMenu: View {
     var body: some View {
         AxolotlMenuButton(alignment: .leading, minWidth: 220, help: "More", opensAbove: true, debugID: "sidebar.more", items: {
             let settings = AxolotlSettingsOpener()
-            return [.button("Bookmark This Page", icon: "star", shortcut: "⌘D", enabled: bookmarkPage != nil) { bookmarkPage?() },
+            return UpdateChrome.appMenuEntries() + [.button("Bookmark This Page", icon: "star", shortcut: "⌘D", enabled: bookmarkPage != nil) { bookmarkPage?() },
                     .divider("b")]
                 + ExtensionMenuEntries.build(host: extensions, settings: settings, icon: "puzzlepiece.extension")
                 + [.divider("s"), .button("Settings", icon: "gearshape", shortcut: "⌘,") { settings() }]

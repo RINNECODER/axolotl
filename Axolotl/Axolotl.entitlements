@@ -11,6 +11,12 @@
 	<array>
 		<string>/Library/Containers/com.luna.browser/Data/Library/</string>
 	</array>
+	<!-- Sparkle's installer launcher XPC service (sandboxed auto-update). -->
+	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
+	<array>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
+		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
+	</array>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.axolotl.browser</string>

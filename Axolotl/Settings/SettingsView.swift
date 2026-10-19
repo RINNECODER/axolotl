@@ -706,6 +706,9 @@ private struct AboutSettingsView: View {
                 }
                 .padding(.vertical, 4)
             }
+            #if !AXOLOTL_DEV
+            UpdateSettingsRows(updater: .shared)
+            #endif
             SettingsRow("License") { Text("MIT").foregroundStyle(.secondary) }
             SettingsLinkRow("Source code on GitHub", external: true) {
                 NSWorkspace.shared.open(URL(string: "https://github.com/RINNECODER/axolotl")!)
@@ -713,6 +716,41 @@ private struct AboutSettingsView: View {
         }
     }
 }
+
+#if !AXOLOTL_DEV
+/// chrome://settings/help: update status, check button and the auto-update switch.
+private struct UpdateSettingsRows: View {
+    @ObservedObject var updater: AppUpdater
+
+    private var statusText: String {
+        switch updater.status {
+        case .idle: return "Axolotl checks for updates automatically"
+        case .checking: return "Checking for updates…"
+        case .upToDate: return "Axolotl is up to date"
+        case .available: return "An update is available"
+        case .ready: return "Update ready. Relaunch to finish updating"
+        case .failed(let message): return message
+        }
+    }
+
+    var body: some View {
+        SettingsRow("Updates", subtitle: statusText) {
+            switch updater.status {
+            case .ready:
+                Button("Relaunch", action: updater.installNow).buttonStyle(SettingsButtonStyle(prominent: true))
+            case .available:
+                Button("Update…", action: updater.installNow).buttonStyle(SettingsButtonStyle(prominent: true))
+            default:
+                Button("Check for updates", action: updater.checkNow)
+                    .buttonStyle(SettingsButtonStyle())
+                    .disabled(updater.status == .checking)
+            }
+        }
+        SettingsToggleRow("Automatically update Axolotl",
+                          isOn: Binding(get: { updater.automaticallyUpdates }, set: { updater.automaticallyUpdates = $0 }))
+    }
+}
+#endif
 
 // MARK: - Layout templates
 

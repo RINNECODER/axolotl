@@ -37,7 +37,7 @@ enum AppMenuEntries {
     static func build(actions: TopChromeActions, extensions: ExtensionHost, settings: AxolotlSettingsOpener) -> [AxolotlMenuEntry] {
         let zoom = actions.zoomLevel()
         let showBar = UserDefaults.standard.bool(forKey: ChromePrefs.showBookmarksBar)
-        var entries: [AxolotlMenuEntry] = [
+        var entries: [AxolotlMenuEntry] = UpdateChrome.appMenuEntries() + [
             .button("New tab", icon: "plus.square.on.square", shortcut: "⌘T", action: actions.newTab),
             .button("New window", icon: "macwindow.badge.plus", action: actions.newWindow),
             .divider("s1"),
@@ -212,6 +212,7 @@ struct TopChromeView: View {
                 DownloadsButton()
                 profileControl
                     .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
+                UpdatePill()
                 ChromeMenuButton(actions: actions, extensions: extensions)
             }
             .padding(.horizontal, 6)
@@ -291,6 +292,7 @@ struct TopChromeView: View {
             ToolbarIconButton(systemName: "sparkles", help: "Axolotl AI (⌘E)", action: actions.toggleAI)
             DownloadsButton()
             profileControl
+            UpdatePill()
             MoreMenu(actions: actions, extensions: extensions)
         }
         .background(NonDraggableWindowView())

@@ -27,6 +27,9 @@ struct AxolotlApp: App {
             DispatchQueue.main.async {
                 AxolotlMCPBridge.shared.applySettings()
                 AppIcon.start()
+                #if !AXOLOTL_DEV
+                AppUpdater.shared.start()
+                #endif
             }
         }
     }

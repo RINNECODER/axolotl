@@ -18,6 +18,10 @@ packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     exactVersion: "1.10.1"
+  # Auto-update for the sandboxed Axolotl app only (AxolotlDev never links it).
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: "2.10.0"
 
 configFiles:
   Debug: Signing.xcconfig
@@ -32,6 +36,7 @@ targetTemplates:
       - path: Axolotl
         excludes:
           - Resources/README_NOT_RESOURCES.md
+          - Sparkle-Info.plist
           - BuiltInExtensions/**
           - Wallpaper/WallpaperWeb/**
       # Shipped as a folder (structure intact) so WebKit can load the extensions.
@@ -110,6 +115,12 @@ targetTemplates:
 targets:
   Axolotl:
     templates: [AxolotlApp]
+    settings:
+      base:
+        # Sparkle keys (feed, EdDSA public key, schedule); merged into the generated Info.plist.
+        INFOPLIST_FILE: Axolotl/Sparkle-Info.plist
+    dependencies:
+      - package: Sparkle
 
   # Unsandboxed build for Dev mode (drives the claude / codex CLIs). Same sources;
   # separate bundle id so it never shares the sandboxed app's container or settings.
