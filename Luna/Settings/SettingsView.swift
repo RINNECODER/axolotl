@@ -276,7 +276,7 @@ private struct GeneralSettingsView: View {
     }
 }
 
-private struct DefaultBrowserSection: View {
+struct DefaultBrowserSection: View {
     private let setting = DefaultBrowser.shared
     @State private var isDefault = false
     @State private var error: String?
@@ -483,7 +483,9 @@ private struct AboutSettingsView: View {
 
 /// Template cards (Settings → Appearance). Applying goes through the Customizer, so it's validated,
 /// recorded in Recent AI changes and undoable like an agent's change.
-private struct LayoutTemplatePicker: View {
+struct LayoutTemplatePicker: View {
+    /// Shown in Recent AI changes for the change this records.
+    var source = "Settings"
     @AppStorage(LayoutTemplate.defaultsKey) private var templateRaw: String = LayoutTemplate.luna.rawValue
     @State private var error: String?
 
@@ -522,7 +524,7 @@ private struct LayoutTemplatePicker: View {
         guard template.rawValue != templateRaw else { return }
         do {
             let plan = CustomizationPlan(settings: [SettingChange(key: "layout.template", value: .string(template.rawValue))])
-            _ = try Customizer.shared.apply(plan, context: nil, source: "Settings")
+            _ = try Customizer.shared.apply(plan, context: nil, source: source)
             error = nil
         } catch {
             self.error = error.localizedDescription

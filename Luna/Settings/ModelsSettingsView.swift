@@ -4,6 +4,20 @@ import SwiftUI
 /// Settings → AI: choose a provider, sign in or add a key, pick a model; the AI panel, Luna Max
 /// features, computer use and grabbed keys.
 struct ModelsSettingsView: View {
+    var body: some View {
+        Form {
+            AIProviderSections()
+            AIPanelSection()
+            LunaMaxSections()
+            ComputerUseSection()
+            GrabbedKeysSection()
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// Provider picker plus that provider's sign-in or key and model (Settings → AI, welcome flow).
+struct AIProviderSections: View {
     @AppStorage(AIProvider.defaultsKey) private var providerRaw: String = AIProvider.gemini.rawValue
 
     private var provider: Binding<AIProvider> {
@@ -11,7 +25,7 @@ struct ModelsSettingsView: View {
     }
 
     var body: some View {
-        Form {
+        Group {
             Section {
                 LunaPicker("Provider", selection: provider,
                            options: AIProvider.allCases.map { .init($0, $0.displayName) })
@@ -27,13 +41,7 @@ struct ModelsSettingsView: View {
             case .gemini: GeminiSection()
             case .ollama: OllamaSection()
             }
-
-            AIPanelSection()
-            LunaMaxSections()
-            ComputerUseSection()
-            GrabbedKeysSection()
         }
-        .formStyle(.grouped)
     }
 }
 
@@ -328,7 +336,7 @@ private struct GrabbedKeysSection: View {
 // MARK: - Shared rows
 
 /// Secure field that saves to the Keychain; shows a masked state once stored.
-private struct APIKeyField: View {
+struct APIKeyField: View {
     let account: KeychainManager.Account
     let placeholder: String
 

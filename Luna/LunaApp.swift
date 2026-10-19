@@ -31,7 +31,12 @@ struct LunaApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1200, height: 800)
-        .commands { ProfileCommands() }
+        .commands {
+            ProfileCommands()
+            CommandGroup(after: .help) {
+                Button("Show Welcome…") { OnboardingState.showAgain() }
+            }
+        }
         Settings {
             SettingsView()
         }

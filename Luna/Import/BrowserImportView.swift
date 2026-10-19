@@ -317,22 +317,27 @@ struct BrowserImportView: View {
         guard case .success(let url) = result else { return }
         let target = lunaProfileId
         Task {
-            guard await PasswordVault.shared.unlock(reason: "import passwords") else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let text = try String(contentsOf: url, encoding: .utf8)
-                let r = try PasswordVault.shared.importCSV(text, profile: target)
-                passwordStatus = "Imported \(r.imported) login\(r.imported == 1 ? "" : "s")" + (r.skipped > 0 ? ", skipped \(r.skipped)." : ".")
-            } catch {
-                passwordStatus = "Couldn't read that file. Export it again as CSV."
-            }
+            if let status = await Self.importPasswordsCSV(url, into: target) { passwordStatus = status }
+        }
+    }
+
+    /// Unlocks the vault and imports a browser's passwords CSV; returns the status line (nil if not unlocked).
+    static func importPasswordsCSV(_ url: URL, into profile: UUID) async -> String? {
+        guard await PasswordVault.shared.unlock(reason: "import passwords") else { return nil }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            let r = try PasswordVault.shared.importCSV(text, profile: profile)
+            return "Imported \(r.imported) login\(r.imported == 1 ? "" : "s")" + (r.skipped > 0 ? ", skipped \(r.skipped)." : ".")
+        } catch {
+            return "Couldn't read that file. Export it again as CSV."
         }
     }
 }
 
 /// Detected browsers (plus 1Password) as selectable cards with their app icons.
-private struct BrowserCardGrid: View {
+struct BrowserCardGrid: View {
     let browsers: [DetectedBrowser]
     let selected: BrowserKind?
     let onePasswordSelected: Bool
