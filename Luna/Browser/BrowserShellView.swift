@@ -419,6 +419,7 @@ struct BrowserShellView: View {
             }
         }
         .environment(\.isPrivateBrowsing, isPrivate)
+        .environment(\.browserProfileId, sessionStore.activeProfileId)
         .onChange(of: tabManager.currentTab) { _, _ in
             askOnPageVisible = false
             web.linkPreview = nil
@@ -769,20 +770,22 @@ struct BrowserShellView: View {
     private func openViewSource() {
         guard !isCurrentTabStartOrAIChat, let id = tabManager.currentTab else { return }
         web.pageSource(in: id) { url, html in
-            ViewSourceStore.html[url] = html
-            focusOrOpen(InternalPage.viewSourceURL(for: url))
+            // Set in the same main-thread pass, before the new tab's view first renders.
+            ViewSourceStore.html[focusOrOpen(InternalPage.viewSourceURL(for: url))] = (html, isPrivate)
         }
     }
 
-    private func focusOrOpen(_ url: URL) {
+    @discardableResult
+    private func focusOrOpen(_ url: URL) -> UUID {
         if let existing = tabManager.tabOrder.first(where: { tabManager.tabURL[$0] ?? nil == url }) {
             switchToTab(existing)
-            return
+            return existing
         }
         let id = tabManager.newTab(url: url)
         web.setActiveTab(id)
         isFirstLoad = false
         syncAddressBarFromCurrentTab()
+        return id
     }
 
     /// ⇧⌘A: this window's open tabs and its recently closed ones.
@@ -1046,7 +1049,7 @@ struct BrowserShellView: View {
                 } else if InternalPage.isDownloads(currentURL) {
                     DownloadsPageView(profileId: session.profileId, isPrivate: isPrivate)
                 } else if let page = InternalPage.viewSourcePage(currentURL) {
-                    ViewSourceView(page: page, isPrivate: isPrivate)
+                    ViewSourceView(page: page, tabId: currentId, isPrivate: isPrivate)
                 } else if currentURL?.scheme == "luma", currentURL?.host == "history" {
                     // History page (always in its own tab)
                     // Special luma://history page
@@ -1452,29 +1455,10 @@ struct BrowserShellView: View {
         }
         var request = URLRequest(url: url)
         request.timeoutInterval = 3
-        URLSession.shared.dataTask(with: request) { data, _, _ in
-            guard let data = data,
-                  var raw = String(data: data, encoding: .utf8) else {
-                DispatchQueue.main.async { self.searchSuggestions = [] }
-                return
-            }
-            if raw.hasPrefix("window."), let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]") {
-                raw = String(raw[start...end])
-            }
-            guard let jsonData = raw.data(using: .utf8),
-                  let json = try? JSONSerialization.jsonObject(with: jsonData) as? [Any],
-                  json.count >= 2,
-                  let rawSuggestions = json[1] as? [Any] else {
-                DispatchQueue.main.async { self.searchSuggestions = [] }
-                return
-            }
-            let phrases = rawSuggestions.compactMap { item -> String? in
-                if let s = item as? String { return s }
-                if let arr = item as? [Any], let first = arr.first as? String { return first }
-                return nil
-            }
+        (isPrivate ? PrivateBrowsing.urlSession : URLSession.shared).dataTask(with: request) { data, _, _ in
+            let phrases = SearchEngine.parseSuggestions(data) ?? []
             DispatchQueue.main.async {
-                // Drop stale responses: only apply if the user is still typing this query.
+                // Drop stale responses (and failures): only apply if the user is still typing this query.
                 guard self.omniEdited, self.omniTyped.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
                 self.searchSuggestions = Array(phrases.prefix(5))
             }

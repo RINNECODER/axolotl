@@ -48,6 +48,25 @@ final class PrivacyTests: XCTestCase {
         XCTAssertFalse(PrivateBrowsing.dataStore() === first)
     }
 
+    func testPrivateFaviconsStayOutOfTheSharedCache() async {
+        let icon = URL(string: "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='16'%20height='16'/%3E")!
+        let image = await FaviconCache.forPrivate(true).image(for: icon, ephemeral: true)
+        XCTAssertNotNil(image)
+        XCTAssertNil(FaviconCache.shared.cachedImage(for: icon))
+        FaviconCache.resetPrivate()
+        XCTAssertNil(FaviconCache.privateShared.cachedImage(for: icon), "the last private window's close forgets them")
+    }
+
+    func testViewSourceHTMLGoesWithItsTab() {
+        let web = WebViewWrapper(profileId: UUID(), dataStore: .nonPersistent())
+        let tab = UUID()
+        ViewSourceStore.html[tab] = ("<p>secret</p>", true)
+        web.removeWebView(for: tab, keepMetadata: true)
+        XCTAssertNotNil(ViewSourceStore.html[tab], "hibernating keeps it")
+        web.removeWebView(for: tab)
+        XCTAssertNil(ViewSourceStore.html[tab])
+    }
+
     func testPrivateSessionIgnoresProfileSwitches() {
         let store = BrowserSessionStore(isPrivate: true)
         let before = store.activeSession

@@ -6,6 +6,11 @@ import SwiftUI
 /// decoded images in memory and deduplicates in-flight requests.
 final class FaviconCache {
     static let shared = FaviconCache()
+    /// Private windows' own memory cache, so their sites never show up in (or come from) normal windows.
+    private(set) static var privateShared = FaviconCache()
+    static func forPrivate(_ isPrivate: Bool) -> FaviconCache { isPrivate ? privateShared : shared }
+    /// The last private window closed.
+    static func resetPrivate() { privateShared = FaviconCache() }
 
     private let cache = NSCache<NSURL, NSImage>()
     /// URLs that recently failed, so rows don't re-request a missing favicon on every render.
@@ -113,11 +118,12 @@ struct FaviconView: View {
                 return
             }
             // Synchronous cache hit avoids a placeholder flash on re-render.
-            if let hit = FaviconCache.shared.cachedImage(for: fav) {
+            let cache = FaviconCache.forPrivate(isPrivate)
+            if let hit = cache.cachedImage(for: fav) {
                 image = hit
                 return
             }
-            image = await FaviconCache.shared.image(for: fav, ephemeral: isPrivate)
+            image = await cache.image(for: fav, ephemeral: isPrivate)
         }
     }
 }

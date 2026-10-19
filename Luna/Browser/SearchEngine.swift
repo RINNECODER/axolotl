@@ -48,4 +48,18 @@ enum SearchEngine: String, CaseIterable, Identifiable {
         let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         return URL(string: base + encoded)
     }
+
+    /// Phrases from an OpenSearch suggest body (`["q", ["a", …]]`, optionally `window.…(…)`-wrapped); nil if unparseable.
+    static func parseSuggestions(_ data: Data?) -> [String]? {
+        guard let data, var raw = String(data: data, encoding: .utf8) else { return nil }
+        if raw.hasPrefix("window."), let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]") {
+            raw = String(raw[start...end])
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [Any],
+              json.count >= 2, let items = json[1] as? [Any] else { return nil }
+        return items.compactMap { item in
+            if let s = item as? String { return s }
+            return (item as? [Any])?.first as? String
+        }
+    }
 }

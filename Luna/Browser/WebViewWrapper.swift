@@ -1198,6 +1198,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         tabRuntime.setAudible(false, for: tabId)
         mutedTabs.remove(tabId)
         if !keepMetadata {
+            ViewSourceStore.html[tabId] = nil
             tabRuntime.remove(tabId)
             primaryTintByTab.removeValue(forKey: tabId)
             pageThemeByTab.removeValue(forKey: tabId)

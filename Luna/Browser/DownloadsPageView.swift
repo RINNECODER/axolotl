@@ -18,9 +18,7 @@ struct DownloadsPageView: View {
         }
     }
 
-    private func belongs(_ item: DownloadItem) -> Bool {
-        item.isPrivate == isPrivate && (item.profileId == nil || item.profileId == profileId)
-    }
+    private func belongs(_ item: DownloadItem) -> Bool { item.belongs(profileId: profileId, isPrivate: isPrivate) }
 
     var body: some View {
         VStack(spacing: 0) {

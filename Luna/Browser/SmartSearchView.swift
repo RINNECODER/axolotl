@@ -35,6 +35,7 @@ struct SmartSearchView: View {
     @AppStorage(StartPagePrefs.showShortcuts) private var showShortcuts = true
     @ObservedObject private var wallpaper = WallpaperStore.shared
 
+    @Environment(\.isPrivateBrowsing) private var isPrivate
     @State private var viewState: SearchViewState = .idle
     @State private var inputText: String = ""
     @State private var isSending: Bool = false
@@ -702,28 +703,10 @@ struct SmartSearchView: View {
             guard wantsPhrases, let url = SearchEngine.current.suggestURL(for: trimmed) else { return }
             var request = URLRequest(url: url)
             request.timeoutInterval = 3
-            URLSession.shared.dataTask(with: request) { data, _, _ in
-                guard let data = data, var raw = String(data: data, encoding: .utf8) else {
-                    DispatchQueue.main.async { searchSuggestions = [] }
-                    return
-                }
-                if raw.hasPrefix("window."), let start = raw.firstIndex(of: "["), let end = raw.lastIndex(of: "]") {
-                    raw = String(raw[start...end])
-                }
-                guard let jsonData = raw.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: jsonData) as? [Any],
-                      json.count >= 2,
-                      let rawSuggestions = json[1] as? [Any] else {
-                    DispatchQueue.main.async { searchSuggestions = [] }
-                    return
-                }
-                let phrases = rawSuggestions.compactMap { item -> String? in
-                    if let s = item as? String { return s }
-                    if let arr = item as? [Any], let first = arr.first as? String { return first }
-                    return nil
-                }
+            (isPrivate ? PrivateBrowsing.urlSession : URLSession.shared).dataTask(with: request) { data, _, _ in
+                let phrases = SearchEngine.parseSuggestions(data) ?? []
                 DispatchQueue.main.async {
-                    // A newer keystroke makes this answer stale.
+                    // A newer keystroke makes this answer (or failure) stale.
                     guard inputText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
                     searchSuggestions = Array(phrases.prefix(8))
                 }

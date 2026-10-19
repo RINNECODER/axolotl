@@ -89,6 +89,9 @@ private struct IndeterminateRing: View {
 
 struct DownloadsHubView: View {
     @ObservedObject private var manager = DownloadManager.shared
+    @Environment(\.isPrivateBrowsing) private var isPrivate
+    @Environment(\.browserProfileId) private var profileId
+    private var items: [DownloadItem] { manager.recentDownloads.filter { $0.belongs(profileId: profileId, isPrivate: isPrivate) } }
     /// Opens luna://downloads (⇧⌘J).
     var showAll: (() -> Void)? = nil
 
@@ -103,8 +106,8 @@ struct DownloadsHubView: View {
                         .buttonStyle(.borderless)
                         .font(.system(size: 12))
                 }
-                if manager.recentDownloads.contains(where: { !$0.isActive }) {
-                    Button("Clear") { manager.clearInactive() }
+                if items.contains(where: { !$0.isActive }) {
+                    Button("Clear") { manager.clearInactive { $0.belongs(profileId: profileId, isPrivate: isPrivate) } }
                         .buttonStyle(.borderless)
                         .font(.system(size: 12))
                 }
@@ -113,7 +116,7 @@ struct DownloadsHubView: View {
             .padding(.top, 12)
             .padding(.bottom, 8)
 
-            if manager.recentDownloads.isEmpty {
+            if items.isEmpty {
                 VStack(spacing: 8) {
                     Image(systemName: "tray.and.arrow.down")
                         .font(.system(size: 28))
@@ -127,7 +130,7 @@ struct DownloadsHubView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {
-                        ForEach(manager.recentDownloads) { item in
+                        ForEach(items) { item in
                             DownloadRow(item: item)
                         }
                     }
