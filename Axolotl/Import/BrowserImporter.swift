@@ -70,6 +70,8 @@ enum BrowserImporter {
         var keepInSync = false
         /// Bookmark keys imported from this source so far; sync skips them so deletions stick.
         var importedKeys: Set<String>?
+        /// Bookmark folders the user left out (`ImportedBookmark.folderKey`); sync leaves them out too.
+        var excludedFolders: Set<String>?
 
         func matches(_ kind: BrowserKind, _ profileId: String, _ axolotl: UUID) -> Bool {
             self.kind == kind && profile.id == profileId && axolotlProfileId == axolotl
@@ -192,13 +194,24 @@ enum BrowserImporter {
         return profileCount > 1 && !profile.name.isEmpty ? "\(base) (\(profile.name))" : base
     }
 
+    /// The bookmarks one run adds: without the source's excluded folders and, when
+    /// incremental, without links imported before. Records what it hands over.
+    static func bookmarksToApply(_ bookmarks: [ImportedBookmark], source: inout Source, incremental: Bool) -> [ImportedBookmark] {
+        let chosen = ImportedBookmark.excluding(folders: source.excludedFolders ?? [], from: bookmarks)
+        let fresh = incremental ? ImportedBookmark.removing(source.importedKeys ?? [], from: chosen) : chosen
+        source.importedKeys = (source.importedKeys ?? []).union(ImportedBookmark.keys(chosen))
+        return fresh
+    }
+
     /// Full import of one source profile. Access to `dataFolder` must already be active.
+    /// `excludedFolders` (when given) is remembered for keep-in-sync; `historySince` limits history.
     static func run(kind: BrowserKind, dataFolder: URL, profile: SourceProfile, profileCount: Int,
                     types: Set<ImportDataType>, axolotlProfileId: UUID, keepInSync: Bool? = nil,
-                    incremental: Bool = false) async -> Summary {
+                    incremental: Bool = false, excludedFolders: Set<String>? = nil, historySince: Date? = nil) async -> Summary {
         migrateLegacyImportFolders()
         var source = source(kind, profile, axolotlProfileId)
-        let since = incremental ? source.lastVisit : nil
+        if let excludedFolders { source.excludedFolders = excludedFolders }
+        let since = [incremental ? source.lastVisit : nil, historySince].compactMap { $0 }.max()
         let history = ProfileStoreRegistry.stores(for: axolotlProfileId).history
         let read = await Task.detached(priority: .userInitiated) {
             BrowserImporter.read(kind: kind, dataFolder: dataFolder, profile: profile, types: types, since: since,
@@ -206,8 +219,7 @@ enum BrowserImporter {
         }.value
         var summary = Summary(errors: read.errors)
         if let bookmarks = read.bookmarks {
-            let fresh = incremental ? ImportedBookmark.removing(source.importedKeys ?? [], from: bookmarks) : bookmarks
-            source.importedKeys = (source.importedKeys ?? []).union(ImportedBookmark.keys(bookmarks))
+            let fresh = bookmarksToApply(bookmarks, source: &source, incremental: incremental)
             summary.bookmarks = applyBookmarks(fresh, folderName: folderName(kind, profile, profileCount: profileCount),
                                                axolotlProfileId: axolotlProfileId)
         }

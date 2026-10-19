@@ -609,3 +609,104 @@ final class BrowserImportTests: XCTestCase {
         XCTAssertNil(read.cookies)
     }
 }
+
+// MARK: Customize: choosing what to import
+
+extension BrowserImportTests {
+    func testChosenBookmarkFoldersFilterImportAndKeepInSync() {
+        func u(_ s: String) -> URL { URL(string: "https://\(s).example")! }
+        let tree: [ImportedBookmark] = [
+            .link(title: "Bar", url: u("bar")),
+            .folder(name: "Work", children: [.link(title: "W", url: u("w")), .folder(name: "Old", children: [.link(title: "O", url: u("o"))])]),
+            .folder(name: "Other Bookmarks", children: [.link(title: "X", url: u("x"))]),
+        ]
+        let rows = ImportedBookmark.folderRows(tree)
+        XCTAssertEqual(rows.map(\.name), ["Links on the bookmarks bar", "Work", "Old", "Other Bookmarks"])
+        XCTAssertEqual(rows.map(\.links), [1, 2, 1, 1])
+        let old = ImportedBookmark.folderKey(["Work", "Old"])
+        XCTAssertTrue(ImportedBookmark.isInside(old, [ImportedBookmark.folderKey(["Work"])]))
+
+        let kept = ImportedBookmark.excluding(folders: [old, ImportedBookmark.barKey], from: tree)
+        XCTAssertEqual(titles(kept), ["Work/", "Other Bookmarks/"])
+        XCTAssertEqual(kept.reduce(0) { $0 + $1.linkCount }, 2)
+
+        // The choice is remembered on the source, so the silent launch sync leaves the folder out too.
+        var src = BrowserImporter.Source(kind: .chrome, profile: .init(id: "Default", name: "Default"), axolotlProfileId: UUID())
+        src.excludedFolders = [ImportedBookmark.folderKey(["Other Bookmarks"])]
+        XCTAssertEqual(ImportedBookmark.keys(BrowserImporter.bookmarksToApply(tree, source: &src, incremental: false)).count, 3)
+        let later = tree + [.folder(name: "Other Bookmarks", children: [.link(title: "Y", url: u("y"))])]
+        XCTAssertEqual(BrowserImporter.bookmarksToApply(later, source: &src, incremental: true), [], "nothing new outside the excluded folder")
+    }
+
+    func testHistoryRangeCutsOffOlderVisits() throws {
+        let profile = try dir("Chrome/Default")
+        let now = Date()
+        let times = [2, 20, 60, 200].map { ChromiumImporter.chromiumTime(from: now.addingTimeInterval(-Double($0) * 86_400)) }
+        try sqlite(profile.appendingPathComponent("History"), """
+            CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, last_visit_time INTEGER);
+            CREATE TABLE visits(id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER);
+            INSERT INTO urls VALUES (1,'https://a.example.com/','A',4,\(times[0]));
+            INSERT INTO visits VALUES (1,1,\(times[0])), (2,1,\(times[1])), (3,1,\(times[2])), (4,1,\(times[3]));
+            """)
+        func count(_ range: HistoryRange) -> Int? {
+            BrowserImporter.read(kind: .chrome, dataFolder: try! dir("Chrome"), profile: .init(id: "Default", name: "Default"),
+                                 types: [.history], since: range.cutoff(now: now)).visitsRead
+        }
+        XCTAssertEqual(HistoryRange.allCases.map(count), [1, 2, 3, 4], "7 / 30 / 90 days / all")
+    }
+
+    func testPreviewListsSitesWithoutDecryptingAndChoicesReachApply() throws {
+        let profile = try dir("Brave/Default")
+        let future = ChromiumImporter.chromiumTime(from: Date().addingTimeInterval(86_400))
+        try sqlite(profile.appendingPathComponent("Login Data"), """
+            CREATE TABLE logins(origin_url TEXT, username_value TEXT, password_value BLOB);
+            INSERT INTO logins VALUES ('https://a.example/login','me',x'763130aabb'), ('https://a.example/login','me',x'763130aabb'),
+                                      ('https://b.example/','you',x'763130ccdd'), ('https://never.example/','',x'');
+            """)
+        try sqlite(profile.appendingPathComponent("Cookies"), """
+            CREATE TABLE cookies(host_key TEXT,name TEXT,encrypted_value BLOB,path TEXT,expires_utc INTEGER,is_secure INTEGER,is_httponly INTEGER,samesite INTEGER);
+            INSERT INTO cookies VALUES ('.mail.google.com','a',x'00','/',\(future),0,0,0), ('google.com','b',x'00','/',\(future),0,0,0),
+                                       ('www.bbc.co.uk','c',x'00','/',\(future),0,0,0), ('gone.example','d',x'00','/',0,0,0,0);
+            """)
+        for (id, manifest) in [("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", #"{"name":"__MSG_n__","default_locale":"en","version":"2.1","icons":{"16":"s.png","128":"l.png"}}"#),
+                               ("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", #"{"name":"Ocean","version":"1","theme":{}}"#)] {
+            let v = try dir("Brave/Default/Extensions/\(id)/1.0")
+            try write(manifest, to: v.appendingPathComponent("manifest.json"))
+            try write(#"{"N":{"message":"Dark Reader"}}"#, to: try dir("Brave/Default/Extensions/\(id)/1.0/_locales/en").appendingPathComponent("messages.json"))
+        }
+
+        let p = BrowserImporter.preview(kind: .brave, dataFolder: try dir("Brave"), profile: .init(id: "Default", name: "Default"))
+        XCTAssertEqual(p.items[.passwords]?.map(\.title), ["a.example", "b.example"], "deduped; never-save rows left out")
+        XCTAssertEqual(p.items[.passwords]?.map(\.subtitle), ["me", "you"])
+        XCTAssertEqual(p.items[.cookies]?.map(\.id), ["bbc.co.uk", "google.com"], "grouped by site; session cookies skipped")
+        XCTAssertEqual(p.items[.cookies]?.last?.subtitle, "2 cookies")
+        let ext = p.items[.extensions] ?? []
+        XCTAssertEqual(ext.map(\.title), ["Dark Reader", "Ocean"])
+        XCTAssertEqual(ext.first?.subtitle, "2.1")
+        XCTAssertEqual(ext.first?.icon?.lastPathComponent, "l.png")
+        XCTAssertNil(ext.first?.unsupported)
+        XCTAssertEqual(ext.last?.unsupported, "Themes aren't supported")
+
+        // What the user unticks never reaches applySecure.
+        let folder = URL(fileURLWithPath: "/x")
+        let read = BrowserImporter.SecureRead(
+            cookies: [ImportedCookie(host: ".mail.google.com", name: "a", value: "1", path: "/", expires: .distantFuture, isSecure: false, isHTTPOnly: false, sameSite: -1),
+                      ImportedCookie(host: "bbc.co.uk", name: "c", value: "2", path: "/", expires: .distantFuture, isSecure: false, isHTTPOnly: false, sameSite: -1)],
+            logins: [ImportedLogin(origin: "https://a.example/login", username: "me", password: "p1"),
+                     ImportedLogin(origin: "https://b.example/", username: "you", password: "p2")],
+            addresses: [ImportedAutofillAddress(name: "Ada", city: "Reno"), ImportedAutofillAddress(name: "Bo", city: "Elko")],
+            extensionCandidates: [.init(id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", name: "Dark Reader", folder: folder),
+                                  .init(id: "cccccccccccccccccccccccccccccccc", name: "Other", folder: folder)])
+        let chosen = read.excluding([
+            .passwords: [ImportPick.loginKey("https://a.example/login", "me")],
+            .cookies: ["google.com"],
+            .extensions: ["cccccccccccccccccccccccccccccccc"],
+            .autofill: [ImportPick.addressKey(ImportedAutofillAddress(name: "Bo", city: "Elko"))],
+        ])
+        XCTAssertEqual(chosen.logins?.map(\.username), ["you"])
+        XCTAssertEqual(chosen.cookies?.map(\.name), ["c"])
+        XCTAssertEqual(chosen.extensionCandidates?.map(\.name), ["Dark Reader"])
+        XCTAssertEqual(chosen.addresses?.map(\.name), ["Ada"])
+        XCTAssertEqual(read.excluding([:]), read, "no choices = everything")
+    }
+}

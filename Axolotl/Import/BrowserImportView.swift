@@ -21,6 +21,15 @@ final class BrowserImportModel: ObservableObject {
     @Published var error: String?
     @Published var accessChanged = 0
     @Published var onePasswordSelected = false
+    /// What the selected profile holds (read under Customize) and what the user unticked, by `ImportPick` key.
+    /// Both apply to the next run only.
+    @Published var preview: ImportPreview?
+    @Published var scanning = false
+    @Published var excluded: [ImportDataType: Set<String>] = [:]
+    @Published var historyRange = HistoryRange(rawValue: UserDefaults.standard.integer(forKey: BrowserImportModel.historyRangeKey)) ?? .all {
+        didSet { UserDefaults.standard.set(historyRange.rawValue, forKey: Self.historyRangeKey) }
+    }
+    static let historyRangeKey = "browserImport.historyRange"
 
     nonisolated deinit {}
 
@@ -69,8 +78,66 @@ final class BrowserImportModel: ObservableObject {
         error = nil
         report = nil
         requested = []
+        resetChoices()
         profileId = selected?.profiles.first?.id ?? ""
         if let kind { types = ImportDataType.supported(by: kind.engine) }
+    }
+
+    func resetChoices() {
+        preview = nil
+        excluded = [:]
+    }
+
+    /// Reads what the selected profile holds for the pickers; without folder access it
+    /// asks for it only when `askAccess` (a "Choose…" click, not opening Customize).
+    func scan(askAccess: Bool = false) {
+        guard let b = selected, let profile = selectedProfile, preview == nil, !scanning else { return }
+        if !hasAccess(b) {
+            guard askAccess else { return }
+            requestAccess()
+        }
+        let folder: URL
+        if isFixtureMode {
+            folder = b.dataFolder
+        } else {
+            guard let url = BrowserAccess.resolve(b.kind) else { return }
+            folder = url
+        }
+        scanning = true
+        let kind = b.kind, fixture = isFixtureMode
+        Task {
+            let p = await Task.detached(priority: .userInitiated) {
+                BrowserImporter.preview(kind: kind, dataFolder: folder, profile: profile)
+            }.value
+            if !fixture { folder.stopAccessingSecurityScopedResource() }
+            scanning = false
+            if selectedKind == kind, selectedProfile?.id == profile.id { preview = p }
+        }
+    }
+
+    /// The row subtitle under Customize: "86 of 120 passwords", "3 folders · 180 of 240 bookmarks".
+    func pickSummary(_ type: ImportDataType) -> String? {
+        guard let preview else { return scanning && type != .history ? "Counting…" : nil }
+        let off = excluded[type] ?? []
+        switch type {
+        case .history:
+            return nil
+        case .bookmarks:
+            let total = preview.bookmarks.reduce(0) { $0 + $1.linkCount }
+            guard total > 0 else { return "None found" }
+            guard !off.isEmpty else { return "All " + type.countText(total) }
+            let kept = ImportedBookmark.excluding(folders: off, from: preview.bookmarks).reduce(0) { $0 + $1.linkCount }
+            let folders = ImportedBookmark.folderRows(preview.bookmarks).filter {
+                $0.key != ImportedBookmark.barKey && !off.contains($0.key) && !ImportedBookmark.isInside($0.key, off)
+            }.count
+            return "\(folders) folder\(folders == 1 ? "" : "s") · \(kept.formatted()) of \(type.countText(total))"
+        default:
+            let items = (preview.items[type] ?? []).filter { $0.unsupported == nil }
+            guard !items.isEmpty else { return "None found" }
+            let kept = items.filter { !off.contains($0.id) }.count
+            let unit = type == .cookies ? "\(items.count.formatted()) site\(items.count == 1 ? "" : "s")" : type.countText(items.count)
+            return kept == items.count ? "All " + unit : "\(kept.formatted()) of \(unit)"
+        }
     }
 
     func hasAccess(_ b: DetectedBrowser) -> Bool {
@@ -134,13 +201,16 @@ final class BrowserImportModel: ObservableObject {
         let basic = types.intersection([.bookmarks, .history])
         let secureTypes = types.intersection([.passwords, .cookies, .extensions, .autofill])
         let sync = keepInSync
+        let excluded = excluded
+        let historySince = historyRange.cutoff()
         let kind = b.kind
         let profileCount = b.profiles.count
         Task {
             if !basic.isEmpty {
                 let result = await BrowserImporter.run(kind: kind, dataFolder: folder, profile: profile,
                                                        profileCount: profileCount, types: basic,
-                                                       axolotlProfileId: target, keepInSync: sync)
+                                                       axolotlProfileId: target, keepInSync: sync,
+                                                       excludedFolders: excluded[.bookmarks] ?? [], historySince: historySince)
                 report?.add(result, requested: basic)
             }
             if !secureTypes.isEmpty {
@@ -148,7 +218,7 @@ final class BrowserImportModel: ObservableObject {
                 let read = await Task.detached(priority: .userInitiated) {
                     BrowserImporter.readSecure(kind: kind, dataFolder: folder, profile: profile, types: secureTypes)
                 }.value
-                let sec = await BrowserImporter.applySecure(read, into: target)
+                let sec = await BrowserImporter.applySecure(read.excluding(excluded), into: target)
                 report?.add(sec, requested: secureTypes, browserName: kind.displayName)
             }
             if !isFixtureMode { folder.stopAccessingSecurityScopedResource() }
@@ -285,6 +355,7 @@ struct OneClickImportCard: View {
     @ObservedObject var model: BrowserImportModel
     let axolotlProfileId: UUID
     @State private var customizing = false
+    @State private var choosing: ImportDataType?
     @State private var pickingCSV = false
     @State private var passwordStatus: String?
 
@@ -328,7 +399,10 @@ struct OneClickImportCard: View {
             if customizing { options(browser) }
             SettingsContentRow {
                 HStack(spacing: 10) {
-                    Button(customizing ? "Hide Options" : "Customize") { withAnimation(.snappy) { customizing.toggle() } }
+                    Button(customizing ? "Hide Options" : "Customize") {
+                        withAnimation(.snappy) { customizing.toggle() }
+                        if customizing { model.scan() }
+                    }
                         .buttonStyle(.link)
                     Spacer()
                     if model.running { ProgressView().controlSize(.small) }
@@ -341,6 +415,11 @@ struct OneClickImportCard: View {
         }
         .onChange(of: model.selectedKind) { _, _ in model.keepInSync = model.syncEnabled(axolotlProfileId) }
         .onChange(of: model.keepInSync) { _, on in model.setSync(on, axolotlProfileId) }
+        .onChange(of: model.profileId) { _, _ in
+            model.resetChoices()
+            if customizing { model.scan() }
+        }
+        .sheet(item: $choosing) { ImportPickSheet(model: model, type: $0) }
         .onAppear { model.keepInSync = model.syncEnabled(axolotlProfileId) }
     }
 
@@ -419,8 +498,21 @@ struct OneClickImportCard: View {
             SettingsMenuRow("Profile", selection: $model.profileId, options: browser.profiles.map { .init($0.id, $0.name) })
         }
         ForEach(ImportDataType.allCases.filter(ImportDataType.supported(by: browser.kind.engine).contains)) { type in
-            SettingsToggleRow(type.title, isOn: Binding(get: { model.types.contains(type) },
-                                                        set: { on in if on { model.types.insert(type) } else { model.types.remove(type) } }))
+            let isOn = Binding(get: { model.types.contains(type) },
+                               set: { on in if on { model.types.insert(type) } else { model.types.remove(type) } })
+            SettingsRow(type.title, subtitle: isOn.wrappedValue ? model.pickSummary(type) : nil) {
+                HStack(spacing: 12) {
+                    if type == .history {
+                        SettingsDropdown(title: "History range", selection: $model.historyRange,
+                                         options: HistoryRange.allCases.map { .init($0, $0.title) }, minWidth: 120)
+                            .disabled(!isOn.wrappedValue)
+                    } else {
+                        Button("Choose…") { model.scan(askAccess: true); choosing = type }
+                            .disabled(!isOn.wrappedValue || model.running)
+                    }
+                    Toggle(type.title, isOn: isOn).toggleStyle(SettingsSwitchToggleStyle()).labelsHidden()
+                }
+            }
         }
         SettingsToggleRow("Keep in sync", subtitle: "Bring over new bookmarks and history each time Axolotl starts.",
                           isOn: $model.keepInSync)

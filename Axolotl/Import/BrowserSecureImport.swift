@@ -29,7 +29,7 @@ extension BrowserImporter {
         }
     }
 
-    nonisolated struct SecureRead: Sendable {
+    nonisolated struct SecureRead: Equatable, Sendable {
         var cookies: [ImportedCookie]?
         var logins: [ImportedLogin]?
         var addresses: [ImportedAutofillAddress]?
