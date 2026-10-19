@@ -26,7 +26,7 @@ struct SettingsView: View {
         Group {
             if liquidGlass { nativeLayout } else { solidLayout }
         }
-        .frame(minWidth: 800, idealWidth: 860, minHeight: 520, idealHeight: 600)
+        .frame(minWidth: 860, idealWidth: 900, minHeight: 520, idealHeight: 600)
         .onChange(of: query) { _, _ in
             if let selection, !visiblePanes.contains(selection) { self.selection = visiblePanes.first }
         }
@@ -44,7 +44,7 @@ struct SettingsView: View {
                 Label(pane.title, systemImage: pane.icon)
                     .tag(pane)
             }
-            .navigationSplitViewColumnWidth(min: 230, ideal: 250, max: 280)
+            .navigationSplitViewColumnWidth(min: 270, ideal: 290, max: 330)
             .searchable(text: $query, placement: .sidebar, prompt: "Search settings")
         } detail: {
             detail.navigationTitle((selection ?? .general).title)
@@ -100,7 +100,7 @@ struct SettingsView: View {
                 case .passwords: PasswordsImportView()
                 case .privacy: PersonalizationSettingsView()
                 case .extensions: ExtensionsSettingsView()
-                case .developer: DeveloperSettingsView()
+                case .agents: AgentsSettingsView()
                 case .about: AboutSettingsView()
                 }
             }
@@ -139,9 +139,9 @@ private struct SolidSidebarRow: View {
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
-    case general, appearance, tabs, ai, passwords, privacy, extensions, developer, about
+    case general, appearance, tabs, ai, passwords, privacy, extensions, agents, about
 
-    /// Panes this build shows. Developer is in both builds (Connect agents); its Dev mode part is Luna Dev only.
+    /// Panes this build shows. Agents is in both builds (Connect agents); its Dev mode part is Luna Dev only.
     static var available: [SettingsPane] { allCases }
 
     /// Pane names from before the settings rework (menus, scripts, `LUNA_SNAPSHOT_SETTINGS`, debug driver)
@@ -153,7 +153,8 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         "importData": .passwords,
         "lunaMax": .ai,
         "personalization": .privacy,
-        "dev": .developer,
+        "dev": .agents,
+        "developer": .agents,
     ]
 
     /// A pane by its name, old or new.
@@ -181,7 +182,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .passwords: return "Passwords & Import"
         case .privacy: return "Privacy & Data"
         case .extensions: return "Extensions"
-        case .developer: return "Developer"
+        case .agents: return "Agents"
         case .about: return "About Luna"
         }
     }
@@ -195,7 +196,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .passwords: return "key.fill"
         case .privacy: return "hand.raised"
         case .extensions: return "puzzlepiece.extension"
-        case .developer: return "chevron.left.forwardslash.chevron.right"
+        case .agents: return "chevron.left.forwardslash.chevron.right"
         case .about: return "info.circle"
         }
     }
@@ -211,7 +212,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .tabs: return ["tabs.unloadAfterMinutes"]
         case .ai: return ["aiPanel.fontSize", "lunaMax.askOnPage", "lunaMax.linkPreviews", "lunaMax.tidyTitles",
                           "lunaMax.tidyDownloads"]
-        case .passwords, .privacy, .extensions, .developer, .about: return []
+        case .passwords, .privacy, .extensions, .agents, .about: return []
         }
     }
 
@@ -232,10 +233,10 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
                                  "firefox", "safari", "brave", "edge", "arc", "vivaldi", "1password", "csv",
                                  "bookmarks", "history", "sync"]
         case .privacy: return ["privacy", "usage", "data", "record", "personalization", "cookies", "site data",
-                               "history", "clear", "customize", "undo", "changes"]
+                               "history", "clear", "browsing data", "customize"]
         case .extensions: return ["extension", "add-on", "plugin", "chrome web store", "ublock", "adblock"]
-        case .developer: return ["mcp", "connect agents", "port", "token", "claude code", "codex", "harness", "cli",
-                                 "terminal", "dev mode", "sync", "approval"]
+        case .agents: return ["mcp", "connect agents", "port", "token", "claude code", "codex", "harness", "cli",
+                                 "terminal", "dev mode", "sync", "approval", "developer", "recent ai changes", "undo", "changes"]
         case .about: return ["version", "license"]
         }
     }
@@ -266,7 +267,11 @@ private struct GeneralSettingsView: View {
 
             Section {
                 LabeledContent("Welcome") {
-                    Button("Show Welcome Again") { OnboardingState.showAgain() }
+                    Button("Show Welcome Again") {
+                        // The welcome flow shows in a browser window; don't leave Settings stranded behind it.
+                        NSApp.keyWindow?.close()
+                        OnboardingState.showAgain()
+                    }
                 }
             } footer: {
                 Text("Walks you through Luna's layouts, AI and import again.").foregroundStyle(.secondary)
@@ -365,7 +370,7 @@ private struct AppearanceSettingsView: View {
             } header: {
                 Text("Layout template")
             } footer: {
-                Text("A template changes several settings below at once; you can undo it in Privacy & Data → Recent AI changes.")
+                Text("A template changes several settings below at once; you can undo it in Agents → Recent AI changes.")
                     .foregroundStyle(.secondary)
             }
 
@@ -427,6 +432,8 @@ private struct AppearanceSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        // The profile name field would otherwise take initial focus (selected text) when the pane opens.
+        .onAppear { DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) } }
     }
 }
 

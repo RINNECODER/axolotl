@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Settings → Developer in the Luna Dev build: Connect agents, then the coding-agent harnesses Dev mode
+/// Settings → Agents in the Luna Dev build: Connect agents, then the coding-agent harnesses Dev mode
 /// finds on this Mac and how new Dev sessions start.
 struct DevSettingsView: View {
     @State private var settings = DevSettings.shared
@@ -18,6 +18,7 @@ struct DevSettingsView: View {
     var body: some View {
         Form {
             ConnectAgentsSection()
+            RecentAIChangesSection()
             Section {
                 if harnesses.isEmpty {
                     HStack(spacing: 8) {

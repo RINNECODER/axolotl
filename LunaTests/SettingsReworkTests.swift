@@ -11,7 +11,7 @@ final class SettingsPaneLinkTests: XCTestCase {
     func testOldPaneNamesOpenThePaneThatHoldsThoseSettingsNow() {
         let expected: [String: SettingsPane] = [
             "profiles": .general, "search": .general, "import": .passwords, "importData": .passwords,
-            "lunaMax": .ai, "personalization": .privacy, "dev": .developer,
+            "lunaMax": .ai, "personalization": .privacy, "dev": .agents, "developer": .agents,
             // Names that survived keep working as they are.
             "appearance": .appearance, "tabs": .tabs, "ai": .ai, "passwords": .passwords,
             "extensions": .extensions, "about": .about,

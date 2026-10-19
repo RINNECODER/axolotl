@@ -143,7 +143,7 @@ enum CustomizationRegistry {
              "Sidebar layout: a toolbar row (back, forward, reload, address field, buttons) above the page.", default: false,
              help: "Back, forward, reload and the address field above the page."),
         bool("bookmarksBar.visible", ChromePrefs.showBookmarksBar, "Show bookmarks bar",
-             "A row of bookmarks above the page (add them with bookmarks_add).", default: false,
+             "A row of bookmarks above the page (agents add them for you).", default: false,
              help: "Add pages with ⋯ → Bookmark This Page."),
         bool("sidebar.visible", "luna_sidebar_visible", "Show sidebar", "Sidebar layout: sidebar docked open.", default: true),
         bool("chrome.autoHide", ChromePrefs.frameless, "Auto-hide browser UI",

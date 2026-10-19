@@ -121,7 +121,7 @@ struct OnboardingLookStep: View {
         } header: {
             Text("Layout")
         } footer: {
-            Text("Undo it any time in Privacy & Data → Recent AI changes, or fine-tune it in Settings → Appearance.")
+            Text("Undo it any time in Agents → Recent AI changes, or fine-tune it in Settings → Appearance.")
                 .foregroundStyle(.secondary)
         }
         Section {
@@ -129,7 +129,7 @@ struct OnboardingLookStep: View {
         } header: {
             Text("Surfaces")
         }
-        WallpaperSettingsSection()
+        WallpaperSettingsSection(staticPreviews: true)
     }
 }
 
@@ -162,7 +162,7 @@ struct LiquidGlassToggle: View {
 
 struct OnboardingPrivacyStep: View {
     @AppStorage(PersonalizationPrefs.enabledKey) private var personalization = false
-    @State private var iCloudSync = true
+    @State private var iCloudSync = false
     @State private var status: String?
     private let profileId = ProfileManager.shared.lastActiveProfileId
 
@@ -188,7 +188,15 @@ struct OnboardingPrivacyStep: View {
         } header: {
             Text("Passwords")
         }
-        .onAppear { iCloudSync = PasswordVault.shared.isICloudSyncEnabled(profile: profileId) }
+        .onAppear {
+            // Off until turned on: when sync was never chosen and nothing is saved yet, start local-only.
+            // (Existing logins keep their current setting.)
+            let chosen = UserDefaults.standard.object(forKey: PasswordVault.syncKey(profileId.uuidString)) != nil
+            if !chosen, PasswordVault.shared.credentials(profile: profileId).isEmpty {
+                try? PasswordVault.shared.setICloudSync(false, profile: profileId)
+            }
+            iCloudSync = PasswordVault.shared.isICloudSyncEnabled(profile: profileId)
+        }
     }
 
     private func setICloudSync(_ enabled: Bool) {

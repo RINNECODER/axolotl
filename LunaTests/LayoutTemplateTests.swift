@@ -60,7 +60,7 @@ final class LayoutTemplateTests: XCTestCase {
     func testUndoingTheTemplateChangeRestoresEverything() throws {
         seedLunaSetup()
         let change = try setTemplate("chrome")
-        XCTAssertEqual(change.lines, [ChangeLine(title: "Layout template", from: "Custom", to: "Chrome")])
+        XCTAssertEqual(change.lines, [ChangeLine(title: "Layout template", from: "Luna", to: "Chrome")])
         _ = try customizer.undo(change.id)
         assertLunaSetup()
 

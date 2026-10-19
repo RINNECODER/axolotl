@@ -2,15 +2,74 @@ import AppKit
 import Darwin
 import SwiftUI
 
-/// Settings → Developer: Connect agents (both builds), then Dev mode's harness settings (Luna Dev only).
-struct DeveloperSettingsView: View {
+/// Settings → Agents: Connect agents (both builds), Recent AI changes, then Dev mode's harness settings (Luna Dev only).
+struct AgentsSettingsView: View {
     var body: some View {
         if DevMode.isDevBuild && DevMode.isAvailable {
             DevSettingsView()
         } else {
-            Form { ConnectAgentsSection() }
-                .formStyle(.grouped)
+            Form {
+                ConnectAgentsSection()
+                RecentAIChangesSection()
+            }
+            .formStyle(.grouped)
         }
+    }
+}
+
+/// Changes an AI agent made to Luna, newest first, each with Undo.
+struct RecentAIChangesSection: View {
+    @ObservedObject private var log = AIChangeLog.shared
+    @State private var undoError: String?
+
+    var body: some View {
+        Section {
+            if log.entries.isEmpty {
+                Text("Changes your AI agent makes appear here, with Undo.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(log.entries) { entry in
+                    ChangeRow(entry: entry) {
+                        do { _ = try Customizer.shared.undo(entry.id) } catch { undoError = error.localizedDescription }
+                    }
+                }
+            }
+        } header: {
+            Text("Recent AI changes")
+        }
+        .alert("Couldn't undo", isPresented: Binding(get: { undoError != nil }, set: { if !$0 { undoError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(undoError ?? "")
+        }
+    }
+}
+
+private struct ChangeRow: View {
+    let entry: AIChange
+    let onUndo: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(entry.lines.prefix(2), id: \.self) { line in
+                    Text(line.text).strikethrough(entry.undone).lineLimit(1)
+                }
+                if entry.lines.count > 2 {
+                    Text("and \(entry.lines.count - 2) more").foregroundStyle(.secondary)
+                }
+                Text("\(entry.source) · \(entry.date.formatted(date: .abbreviated, time: .shortened))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if entry.undone {
+                Text("Undone").foregroundStyle(.secondary)
+            } else {
+                Button("Undo", action: onUndo)
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

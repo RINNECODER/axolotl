@@ -5,6 +5,8 @@ import WebKit
 import Combine
 
 struct WallpaperSettingsSection: View {
+    /// Onboarding: palette-gradient tiles instead of rendered snapshots, so no web view is created.
+    var staticPreviews = false
     @ObservedObject private var store = WallpaperStore.shared
     @StateObject private var thumbnails = WallpaperThumbnails()
 
@@ -15,14 +17,15 @@ struct WallpaperSettingsSection: View {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                 ForEach(WallpaperPreset.allCases) { preset in
                     WallpaperTile(preset: preset,
-                                  image: thumbnails.images[preset],
+                                  image: staticPreviews ? nil : thumbnails.images[preset],
+                                  gradient: staticPreviews ? gradientColors(for: preset) : nil,
                                   isSelected: store.preset == preset) {
                         store.preset = preset
                     }
                 }
             }
             .padding(.vertical, 4)
-            .background(alignment: .topLeading) { thumbnails.host }
+            .background(alignment: .topLeading) { if !staticPreviews { thumbnails.host } }
 
             Picker(selection: $store.moonStyle) {
                 ForEach(MoonStyle.allCases) { Text($0.title).tag($0) }
@@ -43,8 +46,14 @@ struct WallpaperSettingsSection: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .onAppear { thumbnails.render(store: store) }
-        .onChange(of: store.styles) { _, _ in thumbnails.render(store: store) }
+        .onAppear { if !staticPreviews { thumbnails.render(store: store) } }
+        .onChange(of: store.styles) { _, _ in if !staticPreviews { thumbnails.render(store: store) } }
+    }
+
+    private func gradientColors(for preset: WallpaperPreset) -> [Color] {
+        let id = store.style(for: preset).palette
+        let palette = WallpaperPalette.all.first { $0.id == id } ?? WallpaperPalette.all[0]
+        return [palette.base, palette.mid, palette.high].map { Color(hex: $0) }
     }
 
     @ViewBuilder
@@ -110,6 +119,7 @@ struct WallpaperSettingsSection: View {
 private struct WallpaperTile: View {
     let preset: WallpaperPreset
     let image: NSImage?
+    var gradient: [Color]? = nil
     let isSelected: Bool
     let select: () -> Void
 
@@ -123,6 +133,8 @@ private struct WallpaperTile: View {
                         Image(systemName: "moon.stars")
                             .font(.system(size: 20, weight: .light))
                             .foregroundStyle(.white.opacity(0.7))
+                    } else if let gradient {
+                        LinearGradient(colors: gradient, startPoint: .bottomLeading, endPoint: .topTrailing)
                     } else if let image {
                         Image(nsImage: image)
                             .resizable()

@@ -53,6 +53,7 @@ struct ExtensionsSettingsView: View {
                         Button(role: .destructive) { pendingRemove = record } label: { Image(systemName: "trash") }
                             .buttonStyle(.borderless)
                             .help("Remove")
+                            .accessibilityLabel("Remove extension")
                     }
                 }
                 if !(UserDefaults.standard.stringArray(forKey: ExtensionLibrary.removedBuiltInsKey) ?? []).isEmpty {
