@@ -250,7 +250,7 @@ enum WebSearchService {
         )
         request.timeoutInterval = 6
 
-        guard let (rawData, response) = try? await URLSession.shared.data(for: request),
+        guard let (rawData, response) = try? await URLSession.shared.data(for: request, delegate: RedirectGuard()),
               let httpResp = response as? HTTPURLResponse,
               (200...299).contains(httpResp.statusCode),
               let finalURL = response.url, isSafeRemoteURL(finalURL) else {
@@ -366,28 +366,53 @@ enum WebSearchService {
         return parts.joined(separator: "\n")
     }
 
-    static func isSafeRemoteURL(_ url: URL) -> Bool {
+    nonisolated static func isSafeRemoteURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               let host = url.host?.lowercased(), !host.isEmpty else { return false }
         if host == "localhost" || host.hasSuffix(".localhost") || host.hasSuffix(".local") || host.hasSuffix(".internal") {
             return false
         }
-        // IPv6 checks must apply only to IPv6 literals (they contain ":"),
-        // otherwise domains like facebook.com ("fc…") or fda.gov ("fd…") get blocked.
-        let ipv6 = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if ipv6.contains(":") {
-            if ipv6 == "::1" || ipv6.hasPrefix("fc") || ipv6.hasPrefix("fd") || ipv6.hasPrefix("fe80:") {
-                return false
+        return !isPrivateAddress(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")))
+    }
+
+    /// True for an IP literal in a loopback, private, link-local, CGNAT, multicast or unspecified range.
+    /// Parsed both like the resolver (getaddrinfo numeric) and like BSD `inet_aton` (octal/hex parts),
+    /// so `0x7f.1`, `2130706433`, `0177.0.0.1` and `::ffff:127.0.0.1` are caught. Names are not resolved.
+    nonisolated static func isPrivateAddress(_ host: String) -> Bool {
+        var legacy = in_addr()
+        if inet_aton(host, &legacy) != 0, isPrivateIPv4(withUnsafeBytes(of: &legacy) { Array($0) }) { return true }
+        var hints = addrinfo()
+        hints.ai_flags = AI_NUMERICHOST
+        var info: UnsafeMutablePointer<addrinfo>?
+        guard getaddrinfo(host, nil, &hints, &info) == 0, let first = info?.pointee, let address = first.ai_addr else { return false }
+        defer { freeaddrinfo(info) }
+        switch first.ai_family {
+        case AF_INET:
+            var a = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+            return isPrivateIPv4(withUnsafeBytes(of: &a) { Array($0) })
+        case AF_INET6:
+            var a = address.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { $0.pointee.sin6_addr }
+            let b = withUnsafeBytes(of: &a) { Array($0) }
+            if b[0..<10].allSatisfy({ $0 == 0 }), (b[10] == 0xff && b[11] == 0xff) || (b[10] == 0 && b[11] == 0) {
+                return isPrivateIPv4(Array(b[12..<16])) // IPv4-mapped or -compatible (also covers :: and ::1)
             }
+            return b[0] & 0xfe == 0xfc || (b[0] == 0xfe && b[1] & 0xc0 == 0x80) || b[0] == 0xff
+        default:
+            return true
         }
-        let octets = host.split(separator: ".").compactMap { Int($0) }
-        if octets.count == 4 {
-            let a = octets[0], b = octets[1]
-            if a == 0 || a == 10 || a == 127 || a >= 224 { return false }
-            if a == 169 && b == 254 { return false }
-            if a == 172 && (16...31).contains(b) { return false }
-            if a == 192 && b == 168 { return false }
-        }
-        return true
+    }
+
+    private nonisolated static func isPrivateIPv4(_ v4: [UInt8]) -> Bool {
+        let a = v4[0], b = v4[1]
+        return a == 0 || a == 10 || a == 127 || a >= 224 || (a == 169 && b == 254) || (a == 172 && (16...31).contains(b)) ||
+            (a == 192 && b == 168) || (a == 100 && (64...127).contains(b))
+    }
+}
+
+/// Checks every redirect hop before it is followed, so a public URL cannot bounce the fetch to a private address.
+private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
+    nonisolated func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                                newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(request.url.map(WebSearchService.isSafeRemoteURL) == true ? request : nil)
     }
 }
