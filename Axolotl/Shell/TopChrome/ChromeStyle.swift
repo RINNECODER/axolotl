@@ -62,7 +62,7 @@ enum ChromeMetrics {
     static let tabTop: CGFloat = 6
     static let toolbarHeight: CGFloat = 46
     static let omniboxHeight: CGFloat = 34
-    static let toolbarButton: CGFloat = 34
+    static let toolbarButton: CGFloat = 30
     static let bookmarksBarHeight: CGFloat = 34
     static var height: CGFloat { tabStripHeight + toolbarHeight }
 
@@ -236,12 +236,10 @@ struct ChromeToolbarButton: View {
             ChromeIcon(systemName: systemName, color: tint ?? palette.icon, rotation: rotation)
                 .opacity(isEnabled ? 1 : 0.38)
                 .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
-                .background(Circle().fill(palette.hover.opacity(isHovering && isEnabled ? 1 : 0)))
-                .contentShape(Circle())
+                .chromeButtonHover(isEnabled: isEnabled)
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
-        .onHover { isHovering = $0 }
         .help(help)
         .accessibilityLabel(help)
     }
@@ -264,6 +262,30 @@ extension Image {
     init(icon name: String, pointSize: CGFloat = 15) {
         if name == "axolotl", let mark = NSImage.icon(name, pointSize: pointSize) { self.init(nsImage: mark) }
         else { self.init(systemName: name) }
+    }
+}
+
+/// Brave-style toolbar highlight: a rounded square on hover, stronger while pressed or its menu is open.
+struct ChromeButtonHover: ViewModifier {
+    var isOpen = false
+    var isEnabled = true
+    @Environment(\.colorScheme) private var scheme
+    @State private var isHovering = false
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        content
+            .background(shape.fill(ChromePalette.for(scheme).hover
+                .opacity(!isEnabled ? 0 : isOpen ? 2 : isHovering ? 1.3 : 0)))
+            .contentShape(shape)
+            .onHover { isHovering = $0 }
+            .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+}
+
+extension View {
+    func chromeButtonHover(isOpen: Bool = false, isEnabled: Bool = true) -> some View {
+        modifier(ChromeButtonHover(isOpen: isOpen, isEnabled: isEnabled))
     }
 }
 

@@ -98,6 +98,8 @@ struct TopChromeView: View {
 
     private var trafficLightInset: CGFloat { omitsWindowButtonInset ? 8 : 78 }
     private var activeURL: URL? { store.activeTabId.flatMap { store.tab($0)?.url } }
+    /// The AI button only does something on a loaded website.
+    private var showsAIButton: Bool { ["http", "https"].contains(activeURL?.scheme ?? "") }
 
     /// Height of the chrome for a layout, used to place the content below it.
     static func height(for layout: BrowserLayout, showsTabs: Bool) -> CGFloat {
@@ -207,11 +209,14 @@ struct TopChromeView: View {
                 .padding(.horizontal, 7)
                 }
                 ShieldsButton(web: web, extensions: extensions, tabId: store.activeTabId, url: activeURL)
-                ChromeToolbarButton(systemName: "axolotl", help: "Axolotl AI (⌘E)", action: actions.toggleAI)
+                if showsAIButton {
+                    ChromeToolbarButton(systemName: "axolotl", help: "Axolotl AI (⌘E)", action: actions.toggleAI)
+                }
                 ChromeExtensionsButton(extensions: extensions)
                 DownloadsButton()
                 profileControl
                     .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
+                    .chromeButtonHover()
                 UpdatePill()
                 ChromeMenuButton(actions: actions, extensions: extensions)
             }
@@ -289,7 +294,9 @@ struct TopChromeView: View {
     private var toolbarIcons: some View {
         HStack(spacing: 2) {
             ShieldsButton(web: web, extensions: extensions, tabId: store.activeTabId, url: activeURL)
-            ToolbarIconButton(systemName: "axolotl", help: "Axolotl AI (⌘E)", action: actions.toggleAI)
+            if showsAIButton {
+                ToolbarIconButton(systemName: "axolotl", help: "Axolotl AI (⌘E)", action: actions.toggleAI)
+            }
             DownloadsButton()
             profileControl
             UpdatePill()
@@ -313,8 +320,7 @@ struct MoreMenu: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 26, height: 26)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(AxolotlSurface.hover.opacity(isOpen ? 1 : 0)))
-                .contentShape(Rectangle())
+                .chromeButtonHover(isOpen: isOpen)
         }
         .fixedSize()
         .background(PopupAnchor { extensions.menuAnchor = $0 })
@@ -347,12 +353,10 @@ private struct ChromeStar: View {
                 Image(systemName: saved ? "star.fill" : "star")
                     .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(saved ? palette.star : palette.icon)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(palette.hover.opacity(isHovering ? 1.5 : 0)))
-                    .contentShape(Circle())
+                    .frame(width: 26, height: 26)
+                    .chromeButtonHover()
             }
             .buttonStyle(.plain)
-            .onHover { isHovering = $0 }
             .disabled(url == nil)
             .help(saved ? "Remove Bookmark" : "Bookmark This Tab (⌘D)")
             .accessibilityLabel(saved ? "Remove Bookmark" : "Bookmark This Tab")
@@ -379,8 +383,7 @@ private struct ChromeExtensionsButton: View {
         }) { isOpen in
             ChromeIcon(systemName: "puzzlepiece.extension", color: ChromePalette.for(scheme).icon)
                 .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
-                .background(Circle().fill(ChromePalette.for(scheme).hover.opacity(isOpen ? 1.5 : 0)))
-                .contentShape(Circle())
+                .chromeButtonHover(isOpen: isOpen)
         }
         .fixedSize()
     }
@@ -400,8 +403,7 @@ private struct ChromeMenuButton: View {
         }) { isOpen in
             ChromeIcon(systemName: "ellipsis", color: ChromePalette.for(scheme).icon, rotation: .degrees(90))
                 .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
-                .background(Circle().fill(ChromePalette.for(scheme).hover.opacity(isOpen ? 1.5 : 0)))
-                .contentShape(Circle())
+                .chromeButtonHover(isOpen: isOpen)
         }
         .fixedSize()
         .background(PopupAnchor { extensions.menuAnchor = $0 })

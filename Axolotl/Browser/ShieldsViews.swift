@@ -8,7 +8,6 @@ struct ShieldsButton: View {
     let tabId: UUID?
     let url: URL?
     @State private var isPresented = false
-    @State private var isHovering = false
 
     init(web: WebViewWrapper, extensions: ExtensionHost, tabId: UUID?, url: URL?) {
         self.web = web
@@ -27,16 +26,13 @@ struct ShieldsButton: View {
                 Image(systemName: up ? "shield.lefthalf.filled" : "shield.slash")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(up ? Color.orange : Color.secondary)
-                    .frame(width: 26, height: 26)
+                    .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
                     .overlay(alignment: .topTrailing) {
                         if up && blocked > 0 { ShieldsBadge(count: blocked) }
                     }
-                    .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(.quaternary.opacity(isHovering ? 1 : 0)))
-                    .contentShape(Rectangle())
+                    .chromeButtonHover(isOpen: isPresented)
             }
             .buttonStyle(.plain)
-            .onHover { isHovering = $0 }
             .help("Shields")
             .accessibilityLabel("Shields")
             .accessibilityValue(up ? "Up, \(blocked) blocked" : "Down")

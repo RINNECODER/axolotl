@@ -9,7 +9,6 @@ import UniformTypeIdentifiers
 struct DownloadsButton: View {
     @ObservedObject private var manager = DownloadManager.shared
     @State private var isPresented = false
-    @State private var isHovering = false
     @State private var window: NSWindow?
 
     var body: some View {
@@ -38,15 +37,10 @@ struct DownloadsButton: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 26, height: 26)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(.quaternary.opacity(isHovering ? 1 : 0))
-            )
-            .contentShape(Rectangle())
+            .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
+            .chromeButtonHover(isOpen: isPresented)
         }
         .buttonStyle(.plain)
-        .onHover { isHovering = $0 }
         .help("Downloads")
         .accessibilityLabel("Downloads")
         .accessibilityValue(accessibilityProgress)
