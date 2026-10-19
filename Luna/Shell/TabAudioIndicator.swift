@@ -18,7 +18,7 @@ struct TabAudioState {
     }
 
     init(web: WebViewWrapper, tabId: UUID) {
-        isAudible = web.audibleTabs.contains(tabId)
+        isAudible = web.tabRuntime.state(for: tabId).isAudible
         isMuted = web.isMuted(tabId)
         toggle = { [weak web] in
             guard let web else { return }

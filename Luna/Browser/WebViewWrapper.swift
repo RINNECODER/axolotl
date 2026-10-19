@@ -27,20 +27,24 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     @Published var currentURL: URL?
 
     /// Per-tab page theme: background color and whether it is dark (for contrasting text).
-    @Published fileprivate(set) var pageThemeByTab: [UUID: (color: NSColor, isDark: Bool)] = [:]
+    fileprivate(set) var pageThemeByTab: [UUID: (color: NSColor, isDark: Bool)] = [:]
     /// Theme for the currently active tab; used by chrome (tabs, address bar) to match page.
     @Published var pageThemeForActiveTab: (color: Color, isDark: Bool)?
 
-    /// Per-tab back/forward state (kept live via KVO).
-    @Published private(set) var canGoBackByTab: [UUID: Bool] = [:]
-    @Published private(set) var canGoForwardByTab: [UUID: Bool] = [:]
+    /// Per-tab back/forward state (kept live via KVO). Not published: chrome
+    /// reads the active tab's through `canGoBack/ForwardForActiveTab`.
+    private(set) var canGoBackByTab: [UUID: Bool] = [:]
+    private(set) var canGoForwardByTab: [UUID: Bool] = [:]
+    /// Volatile per-tab state (progress, favicon, audio), one observable object
+    /// per tab so a change re-renders only that tab's views, not the whole shell.
+    let tabRuntime = TabRuntimeStore()
     /// Load progress (0…1) for tabs that are currently loading; absent when idle.
-    @Published private(set) var loadingProgressByTab: [UUID: Double] = [:]
+    var loadingProgressByTab: [UUID: Double] { tabRuntime.loadingProgressByTab }
     @Published var canGoBackForActiveTab: Bool = false
     /// Tabs showing Luna's native error page (failed load or crashed web process).
     @Published private(set) var pageErrorByTab: [UUID: PageError] = [:]
     /// Tabs with audible media (unmuted, playing <audio>/<video>), and tabs the user muted.
-    @Published private(set) var audibleTabs: Set<UUID> = []
+    var audibleTabs: Set<UUID> { tabRuntime.audibleTabs }
     @Published private(set) var mutedTabs: Set<UUID> = []
     private var developerToolsObserver: NSObjectProtocol?
     /// Audible frames per tab, keyed by a token each frame's media script picks.
@@ -65,10 +69,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     private var lastFindQueryByTab: [UUID: String] = [:]
     
     /// Favicon URLs per tab (extracted from page <link rel="icon">)
-    @Published var faviconURLByTab: [UUID: URL?] = [:]
+    var faviconURLByTab: [UUID: URL?] { tabRuntime.faviconURLByTab }
+    func faviconURL(for tabId: UUID) -> URL? { tabRuntime.state(for: tabId).faviconURL }
 
     /// Per-tab primary tint, derived from favicon (preferred) or page theme (fallback).
-    @Published var primaryTintByTab: [UUID: NSColor] = [:]
+    var primaryTintByTab: [UUID: NSColor] = [:]
     
     /// When true, Google AI Studio showed "request is suspicious" — show in-app explanation (Google’s decision, not a Luma bug).
     @Published var googleSuspiciousErrorDetected: Bool = false
@@ -637,7 +642,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
                 self.updateBackForwardForActiveTab()
             }
         }
-        // Progress is coarsened to 10% steps so a load doesn't re-render the shell on every tick.
+        // Progress is coarsened to 10% steps and lives in `tabRuntime`, so a load re-renders only that tab's views.
         let progressObservation = wv.observe(\.estimatedProgress, options: [.new]) { [weak self, tabId] webView, _ in
             DispatchQueue.main.async { self?.updateLoadingProgress(for: tabId, webView: webView) }
         }
@@ -651,10 +656,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     private func updateLoadingProgress(for tabId: UUID, webView: WKWebView) {
         guard webViews[tabId] === webView else { return }
         if webView.isLoading {
-            let stepped = (webView.estimatedProgress * 10).rounded(.down) / 10
-            if loadingProgressByTab[tabId] != stepped { loadingProgressByTab[tabId] = stepped }
-        } else if loadingProgressByTab[tabId] != nil {
-            loadingProgressByTab.removeValue(forKey: tabId)
+            tabRuntime.setLoadingProgress((webView.estimatedProgress * 10).rounded(.down) / 10, for: tabId)
+        } else {
+            tabRuntime.setLoadingProgress(nil, for: tabId)
         }
     }
 
@@ -900,9 +904,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             frames.removeAll()
         }
         audibleFramesByTab[tabId] = frames.isEmpty ? nil : frames
-        if audibleTabs.contains(tabId) == frames.isEmpty {
-            if frames.isEmpty { audibleTabs.remove(tabId) } else { audibleTabs.insert(tabId) }
-        }
+        tabRuntime.setAudible(!frames.isEmpty, for: tabId)
     }
 
     // MARK: - Developer tools
@@ -1019,15 +1021,15 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             guard let self = self else { return }
             DispatchQueue.main.async {
                 if let urlString = result as? String, !urlString.isEmpty, let url = URL(string: urlString) {
-                    self.faviconURLByTab[tabId] = url
+                    self.tabRuntime.setFaviconURL(url, for: tabId)
                     self.fetchPrimaryTintFromFavicon(for: tabId, faviconURL: url)
                 } else if let pageURL = webView.url, let host = pageURL.host {
                     // Fallback to /favicon.ico
                     let url = URL(string: "https://\(host)/favicon.ico")
-                    self.faviconURLByTab[tabId] = url
+                    self.tabRuntime.setFaviconURL(url, for: tabId)
                     if let url { self.fetchPrimaryTintFromFavicon(for: tabId, faviconURL: url) }
                 } else {
-                    self.faviconURLByTab[tabId] = nil
+                    self.tabRuntime.setFaviconURL(nil, for: tabId)
                 }
             }
         }
@@ -1142,13 +1144,13 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         }
         webViews.removeValue(forKey: tabId)
         popupTabIds.remove(tabId)
-        loadingProgressByTab.removeValue(forKey: tabId)
+        tabRuntime.setLoadingProgress(nil, for: tabId)
         pageErrorByTab.removeValue(forKey: tabId)
         audibleFramesByTab.removeValue(forKey: tabId)
-        audibleTabs.remove(tabId)
+        tabRuntime.setAudible(false, for: tabId)
         mutedTabs.remove(tabId)
         if !keepMetadata {
-            faviconURLByTab.removeValue(forKey: tabId)
+            tabRuntime.setFaviconURL(nil, for: tabId)
             primaryTintByTab.removeValue(forKey: tabId)
             pageThemeByTab.removeValue(forKey: tabId)
             zoomByTab.removeValue(forKey: tabId)
@@ -1221,7 +1223,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         print("WKWebView process terminated:", url)
         guard let tabId = tabId(for: webView) else { return }
         pageErrorByTab[tabId] = PageError(kind: .crashed, url: webView.url, code: nil)
-        loadingProgressByTab.removeValue(forKey: tabId)
+        tabRuntime.setLoadingProgress(nil, for: tabId)
         setAudible(false, frame: nil, in: tabId)
     }
 
@@ -1360,7 +1362,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         }
         if tabId == activeTab {
             DispatchQueue.main.async { [weak self] in
-                self?.currentURL = webView.url
+                if self?.currentURL != webView.url { self?.currentURL = webView.url }
             }
         }
         // Update back/forward state so toolbar buttons enable/disable correctly.
@@ -1406,20 +1408,20 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     fileprivate func updatePageThemeForActiveTab() {
         guard let id = activeTab, let theme = pageThemeByTab[id] else {
-            pageThemeForActiveTab = nil
+            if pageThemeForActiveTab != nil { pageThemeForActiveTab = nil }
             return
         }
-        pageThemeForActiveTab = (Color(nsColor: theme.color), theme.isDark)
+        let color = Color(nsColor: theme.color)
+        if let current = pageThemeForActiveTab, current.color == color, current.isDark == theme.isDark { return }
+        pageThemeForActiveTab = (color, theme.isDark)
     }
 
     private func updateBackForwardForActiveTab() {
-        guard let id = activeTab else {
-            canGoBackForActiveTab = false
-            canGoForwardForActiveTab = false
-            return
-        }
-        canGoBackForActiveTab = canGoBackByTab[id] ?? webViews[id]?.canGoBack ?? false
-        canGoForwardForActiveTab = canGoForwardByTab[id] ?? webViews[id]?.canGoForward ?? false
+        // Assign only on change: each @Published write re-renders the whole shell.
+        let back = activeTab.map { canGoBackByTab[$0] ?? webViews[$0]?.canGoBack ?? false } ?? false
+        let forward = activeTab.map { canGoForwardByTab[$0] ?? webViews[$0]?.canGoForward ?? false } ?? false
+        if canGoBackForActiveTab != back { canGoBackForActiveTab = back }
+        if canGoForwardForActiveTab != forward { canGoForwardForActiveTab = forward }
     }
 
     /// Parse JS result (e.g. "255,255,255" or null) into NSColor and luminance-based isDark.

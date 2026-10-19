@@ -75,11 +75,12 @@ struct HorizontalTabStrip: View {
                             Color.clear
                                 .frame(width: tabWidth, height: height)
                                 .overlay {
+                                  TabRuntimeReader(state: web.tabRuntime.state(for: id)) { runtime in
                                     StripTab(
                                         tab: tab,
-                                        faviconURL: web.faviconURLByTab[id] ?? nil,
+                                        faviconURL: runtime.faviconURL,
                                         isActive: ws.activeTabId == id,
-                                        isLoading: web.loadingProgressByTab[id] != nil,
+                                        isLoading: runtime.isLoading,
                                         iconOnly: iconOnly,
                                         showsSeparator: index > 0 && ws.activeTabId != id && ws.activeTabId != ids[index - 1]
                                             && !(split != nil && split?.panes.contains(ids[index - 1]) == true),
@@ -107,6 +108,7 @@ struct HorizontalTabStrip: View {
                                     ))
                                     .modifier(LiftedTab(offset: liftOffset(for: id), isLifted: drag?.id == id,
                                                         isTearing: drag?.id == id && drag?.tearing == true))
+                                  }
                                 }
                                 // The slot is measured, not the tab: the lifted tab's offset and scale
                                 // would feed back into its own frame and the offset would never settle.
@@ -200,7 +202,7 @@ struct HorizontalTabStrip: View {
         // Out of its strip, the tab follows the pointer in a window of its own,
         // so it stays visible over other windows and the desktop.
         if tearing, let tab = store.tab(id) {
-            TabDragPreview.shared.show(tab: tab, faviconURL: web.faviconURLByTab[id] ?? nil, at: d.screenPoint)
+            TabDragPreview.shared.show(tab: tab, faviconURL: web.faviconURL(for: id), at: d.screenPoint)
         } else {
             TabDragPreview.shared.hide()
         }
@@ -586,3 +588,4 @@ private struct LiftedTab: ViewModifier {
             .transaction { if isLifted { $0.animation = nil } }
     }
 }
+

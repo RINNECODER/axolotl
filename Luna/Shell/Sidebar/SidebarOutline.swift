@@ -18,15 +18,13 @@ struct SidebarSnapshot: Equatable {
     static func make(store: WorkspaceStore, web: WebViewWrapper) -> SidebarSnapshot {
         let ws = store.workspace
         let space = ws.activeSpace
-        var favicons: [UUID: URL] = [:]
-        for (id, url) in web.faviconURLByTab { if let url { favicons[id] = url } }
         return SidebarSnapshot(
             space: space,
             tabs: ws.tabs,
             activeTabId: ws.activeTabId,
-            faviconURLs: favicons,
-            loading: Set(web.loadingProgressByTab.keys),
-            audible: web.audibleTabs,
+            faviconURLs: web.tabRuntime.faviconURLByTab,
+            loading: Set(web.tabRuntime.loadingProgressByTab.keys),
+            audible: web.tabRuntime.audibleTabs,
             muted: web.mutedHosts.isEmpty ? [] : Set(ws.tabs.keys.filter { web.isMuted($0) }),
             otherSpaces: ws.spaces.filter { $0.id != space.id }.map { ($0.id, $0.name) }
         )

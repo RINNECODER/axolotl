@@ -22,9 +22,11 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 8) {
             topRow
             FavoritesGrid(store: store, web: web, actions: actions)
-            SidebarOutline(snapshot: .make(store: store, web: web), actions: actions)
-                // Source-list rows carry their own inset; line them up with the URL field.
-                .padding(.horizontal, -8)
+            TabRuntimeRevisionReader(store: web.tabRuntime) {
+                SidebarOutline(snapshot: .make(store: store, web: web), actions: actions)
+            }
+            // Source-list rows carry their own inset; line them up with the URL field.
+            .padding(.horizontal, -8)
             bottomBar
         }
         .padding(.horizontal, 8)
@@ -156,7 +158,9 @@ private struct FavoritesGrid: View {
     private func tile(id: UUID, tab: Tab) -> some View {
         let isActive = store.activeTabId == id
         return Button { actions.activate(id) } label: {
-            TabIcon(tab: tab, faviconURL: web.faviconURLByTab[id] ?? nil, size: 18)
+            TabRuntimeReader(state: web.tabRuntime.state(for: id)) { runtime in
+                TabIcon(tab: tab, faviconURL: runtime.faviconURL, size: 18)
+            }
                 .frame(maxWidth: .infinity, minHeight: 40)
                 .background(
                     RoundedRectangle(cornerRadius: 9, style: .continuous)

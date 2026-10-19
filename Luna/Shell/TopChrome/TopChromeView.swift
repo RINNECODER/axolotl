@@ -185,17 +185,19 @@ struct TopChromeView: View {
                 if showHomeButton {
                     ChromeToolbarButton(systemName: "house", help: "Home", action: actions.goHome)
                 }
+                TabRuntimeReader(state: web.tabRuntime.state(for: store.activeTabId)) { runtime in
                 AddressField(
                     url: activeURL,
                     text: $addressText,
                     focused: addressFocused,
-                    loadingProgress: store.activeTabId.flatMap { web.loadingProgressByTab[$0] },
+                    loadingProgress: runtime.loadingProgress,
                     height: ChromeMetrics.omniboxHeight,
                     chromeStyle: true,
                     trailing: AnyView(ChromeStar(url: activeURL, bookmarks: bookmarks, add: actions.bookmarkPage)),
                     onSubmit: actions.submitAddress
                 )
                 .padding(.horizontal, 7)
+                }
                 ChromeToolbarButton(systemName: "sparkles", help: "Luna AI (⌘E)", action: actions.toggleAI)
                 ChromeExtensionsButton(extensions: extensions)
                 DownloadsButton()
@@ -248,14 +250,16 @@ struct TopChromeView: View {
     }
 
     private var address: some View {
-        AddressField(
-            url: activeURL,
-            text: $addressText,
-            focused: addressFocused,
-            loadingProgress: store.activeTabId.flatMap { web.loadingProgressByTab[$0] },
-            centered: centeredAddressBar,
-            onSubmit: actions.submitAddress
-        )
+        TabRuntimeReader(state: web.tabRuntime.state(for: store.activeTabId)) { runtime in
+            AddressField(
+                url: activeURL,
+                text: $addressText,
+                focused: addressFocused,
+                loadingProgress: runtime.loadingProgress,
+                centered: centeredAddressBar,
+                onSubmit: actions.submitAddress
+            )
+        }
     }
 
     private var tabStrip: some View {
