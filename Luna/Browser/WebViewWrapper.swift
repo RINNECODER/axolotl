@@ -493,9 +493,13 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
                 debounceTimer = setTimeout(function() { sampleTheme(); debounceTimer = null; }, 100);
             }
             try {
+                // html/body (and the theme-color meta) only, not their subtrees: a busy page
+                // mutating deep nodes must not wake this.
                 var mo = new MutationObserver(scheduleSample);
-                mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class', 'content'], subtree: true });
-                if (document.body) mo.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'], subtree: true });
+                mo.observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+                if (document.body) mo.observe(document.body, { attributes: true, attributeFilter: ['style', 'class'] });
+                var meta = document.querySelector('meta[name="theme-color"]');
+                if (meta) mo.observe(meta, { attributes: true, attributeFilter: ['content'] });
             } catch(e) {}
             setTimeout(sampleTheme, 300);
             setTimeout(sampleTheme, 900);
@@ -557,29 +561,42 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         // Web Inspector + "Inspect Element" (Debug, or Settings → Enable Developer Tools).
         Self.applyDeveloperTools(to: config)
-        config.userContentController.add(themeMessageHandler, name: "lumaPageTheme")
-        // Inject only at documentEnd (and didFinish fallback). No atDocumentStart — early injection is detectable as DOM tampering.
-        let themeScript = WKUserScript(source: WebViewWrapper.themeScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-        config.userContentController.addUserScript(themeScript)
-        // Passwords: form detection and filling live in an isolated content world, so page
-        // scripts can neither read saved passwords nor fake a submit.
-        config.userContentController.add(passwordHandler, contentWorld: .defaultClient, name: "lunaPasswords")
-        config.userContentController.addUserScript(WKUserScript(source: WebViewWrapper.passwordScriptSource, injectionTime: .atDocumentEnd,
-                                                                forMainFrameOnly: true, in: .defaultClient))
-        // Link previews run in an isolated content world: page scripts can't see or spoof this channel.
-        config.userContentController.add(linkPreviewHandler, contentWorld: .defaultClient, name: "lunaLinkPreview")
-        config.userContentController.addUserScript(WKUserScript(source: WebViewWrapper.linkPreviewScriptSource, injectionTime: .atDocumentEnd,
-                                                                forMainFrameOnly: true, in: .defaultClient))
-        config.userContentController.add(mediaHandler, contentWorld: .defaultClient, name: "lunaMedia")
-        config.userContentController.addUserScript(WKUserScript(source: WebViewWrapper.mediaScriptSource, injectionTime: .atDocumentEnd,
-                                                                forMainFrameOnly: false, in: .defaultClient))
-        // An exception to the documentEnd rule: GPC must be set before page scripts read it (on by default, Brave).
-        if PrivacyPrefs.isOn(PrivacyPrefs.globalPrivacyControl) { config.userContentController.addUserScript(PrivacyPrefs.gpcScript()) }
+        installUserScripts(in: config.userContentController)
         let wv = LunaWebView(frame: .zero, configuration: config)
         // Use Safari UA for all requests to avoid bot detection on Akamai-protected sites.
         wv.customUserAgent = WebViewWrapper.safariUserAgent
         register(webView: wv, for: tabId)
         return wv
+    }
+
+    /// Page theme sampling (MutationObserver script per tab). Off: no Luna UI is tinted by the page
+    /// since the page-tinted tab strip was removed; turn on for a feature that reads `pageTheme(for:)`.
+    static var samplesPageTheme = false
+
+    /// Every user script and message handler a tab gets. A feature that is off adds neither,
+    /// so it costs nothing per tab; changing its setting applies to tabs opened afterwards.
+    private func installUserScripts(in controller: WKUserContentController) {
+        if Self.samplesPageTheme {
+            controller.add(themeMessageHandler, name: "lumaPageTheme")
+            // Inject only at documentEnd (and didFinish fallback). No atDocumentStart — early injection is detectable as DOM tampering.
+            controller.addUserScript(WKUserScript(source: WebViewWrapper.themeScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        }
+        // Passwords: form detection and filling live in an isolated content world, so page
+        // scripts can neither read saved passwords nor fake a submit. Private windows keep it for filling.
+        controller.add(passwordHandler, contentWorld: .defaultClient, name: "lunaPasswords")
+        controller.addUserScript(WKUserScript(source: WebViewWrapper.passwordScriptSource, injectionTime: .atDocumentEnd,
+                                              forMainFrameOnly: true, in: .defaultClient))
+        if LunaMaxPrefs.isOn(LunaMaxPrefs.linkPreviews) {
+            // Link previews run in an isolated content world: page scripts can't see or spoof this channel.
+            controller.add(linkPreviewHandler, contentWorld: .defaultClient, name: "lunaLinkPreview")
+            controller.addUserScript(WKUserScript(source: WebViewWrapper.linkPreviewScriptSource, injectionTime: .atDocumentEnd,
+                                                  forMainFrameOnly: true, in: .defaultClient))
+        }
+        controller.add(mediaHandler, contentWorld: .defaultClient, name: "lunaMedia")
+        controller.addUserScript(WKUserScript(source: WebViewWrapper.mediaScriptSource, injectionTime: .atDocumentEnd,
+                                              forMainFrameOnly: false, in: .defaultClient))
+        // An exception to the documentEnd rule: GPC must be set before page scripts read it (on by default, Brave).
+        if PrivacyPrefs.isOn(PrivacyPrefs.globalPrivacyControl) { controller.addUserScript(PrivacyPrefs.gpcScript()) }
     }
 
     /// Shared setup for both regular tabs and popup webviews: delegates, bookkeeping, KVO.
@@ -1425,6 +1442,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         applyZoom(to: tabId)
         // The URL observer runs before the new document is parsed; read its <link rel=icon> now.
         fetchFavicon(for: tabId, webView: webView)
+        guard Self.samplesPageTheme else { return }
         // Fallback: sample theme again at load end (documentEnd script may have already run).
         let script = """
         (function(){

@@ -11,9 +11,11 @@ final class WebPaneTests: XCTestCase {
     override func setUpWithError() throws {
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("luna-pane-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        WebViewWrapper.samplesPageTheme = true
     }
 
     override func tearDownWithError() throws {
+        WebViewWrapper.samplesPageTheme = false
         try? FileManager.default.removeItem(at: dir)
     }
 
