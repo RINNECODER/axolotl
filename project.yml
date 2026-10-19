@@ -18,7 +18,7 @@ packages:
   SwiftTerm:
     url: https://github.com/migueldeicaza/SwiftTerm
     exactVersion: "1.10.1"
-  # Auto-update for the sandboxed Axolotl app only (AxolotlDev never links it).
+  # Auto-update for the Axolotl app only (AxolotlDev never links it).
   Sparkle:
     url: https://github.com/sparkle-project/Sparkle
     exactVersion: "2.10.0"
@@ -27,7 +27,8 @@ configFiles:
   Debug: Signing.xcconfig
   Release: Signing.xcconfig
 
-# Shared by the sandboxed Axolotl app and the unsandboxed Axolotl Dev variant.
+# Shared by the Axolotl app and the Axolotl Dev variant. Neither is sandboxed (like Chrome), so
+# the signed-in Codex / Claude Code CLIs can run.
 targetTemplates:
   AxolotlApp:
     type: application
@@ -71,9 +72,7 @@ targetTemplates:
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Axolotl needs microphone access for websites that request it."
         INFOPLIST_KEY_NSLocationUsageDescription: "Axolotl shares your location with websites you allow."
         INFOPLIST_KEY_NSDownloadsFolderUsageDescription: "Axolotl needs access to Downloads to save files."
-        ENABLE_APP_SANDBOX: YES
-        ENABLE_INCOMING_NETWORK_CONNECTIONS: YES # Loopback listener for "Sign in with ChatGPT" (127.0.0.1 only)
-        ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES # TODO: Enable this when we have a way to handle outgoing network connections
+        ENABLE_APP_SANDBOX: NO
         ENABLE_PREVIEWS: YES
         ENABLE_RESOURCE_ACCESS_AUDIO_INPUT: YES # TODO: Enable this when we have a way to handle audio input
         ENABLE_RESOURCE_ACCESS_BLUETOOTH: NO
@@ -81,10 +80,7 @@ targetTemplates:
         ENABLE_RESOURCE_ACCESS_CAMERA: YES # TODO: Enable this when we have a way to handle camera
         ENABLE_RESOURCE_ACCESS_CONTACTS: NO # TODO: Enable this when we have a way to handle contacts
         ENABLE_RESOURCE_ACCESS_LOCATION: YES # Sites ask first (SitePermissions, macOS 27+)
-        ENABLE_RESOURCE_ACCESS_PRINTING: YES
         ENABLE_RESOURCE_ACCESS_USB: NO
-        ENABLE_USER_SELECTED_FILES: readwrite # Save panels, e.g. Save as PDF from the print dialog
-        ENABLE_FILE_ACCESS_DOWNLOADS_FOLDER: readwrite # Save downloads to ~/Downloads
         PROVISIONING_PROFILE_SPECIFIER: ""
         CODE_SIGN_IDENTITY: "Apple Development"
         STRING_CATALOG_GENERATE_SYMBOLS: YES
@@ -122,8 +118,8 @@ targets:
     dependencies:
       - package: Sparkle
 
-  # Unsandboxed build for Dev mode (drives the claude / codex CLIs). Same sources;
-  # separate bundle id so it never shares the sandboxed app's container or settings.
+  # Build with Dev mode (drives the claude / codex CLIs as coding agents). Same sources;
+  # separate bundle id so it never shares the Axolotl app's data or settings.
   AxolotlDev:
     templates: [AxolotlApp]
     settings:
@@ -133,7 +129,6 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.axolotl.browser.dev
         INFOPLIST_KEY_CFBundleDisplayName: Axolotl Dev
         INFOPLIST_KEY_CFBundleName: Axolotl Dev
-        ENABLE_APP_SANDBOX: NO
         # Its own keychain access group: the default one is tied to com.axolotl.browser.
         CODE_SIGN_ENTITLEMENTS: Axolotl/AxolotlDev.entitlements
       configs:

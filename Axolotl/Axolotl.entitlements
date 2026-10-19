@@ -2,21 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>com.apple.security.files.downloads.read-write</key>
-	<true/>
-	<key>com.apple.security.files.bookmarks.app-scope</key>
-	<true/>
-	<!-- LegacyLunaMigration: read Luna's sandbox container once to copy its data. -->
-	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
-	<array>
-		<string>/Library/Containers/com.luna.browser/Data/Library/</string>
-	</array>
-	<!-- Sparkle's installer launcher XPC service (sandboxed auto-update). -->
-	<key>com.apple.security.temporary-exception.mach-lookup.global-name</key>
-	<array>
-		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spks</string>
-		<string>$(PRODUCT_BUNDLE_IDENTIFIER)-spki</string>
-	</array>
+	<!-- Not sandboxed (like Chrome): the signed-in Codex / Claude Code CLIs must run. Camera,
+	     microphone and location come from ENABLE_RESOURCE_ACCESS_* in project.yml. -->
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.axolotl.browser</string>

@@ -84,7 +84,7 @@ struct PanelModelMenu: View {
             entries.append(.button(loadError[provider] ?? "Loading models…", enabled: false) {})
         }
         entries.append(.submenu("Provider", AxolotlMenuEntry.options(
-            AIProvider.available.map { ($0.rawValue, $0.displayName) }, selection: providerRaw) { providerRaw = $0 }))
+            AIProvider.allCases.map { ($0.rawValue, $0.displayName) }, selection: providerRaw) { providerRaw = $0 }))
         entries += [.divider("m1"), .button("Model Settings…", action: onOpenSettings)]
         return entries
     }

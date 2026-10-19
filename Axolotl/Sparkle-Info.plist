@@ -6,8 +6,6 @@
 	<string>https://github.com/RINNECODER/axolotl-releases/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>p9/Rs5O/B+rr8N/uRzF7DxutDDTGPOIxm3RLumfkjUk=</string>
-	<key>SUEnableInstallerLauncherService</key>
-	<true/>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
 	<key>SUAutomaticallyUpdate</key>

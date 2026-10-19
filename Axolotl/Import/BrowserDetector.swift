@@ -5,23 +5,15 @@ import Foundation
 /// folders exist and reads profile *names* (Chromium `Local State`, Firefox
 /// `profiles.ini`); it never opens bookmarks, history or passwords.
 nonisolated struct BrowserDetector {
-    /// The real home folder (in the sandbox `NSHomeDirectory()` is the container).
     var home: URL
     /// Maps a bundle id to its installed .app; injectable for tests.
     var appLocator: (String) -> URL?
     var fileManager: FileManager = .default
 
-    init(home: URL = BrowserDetector.realHomeDirectory,
+    init(home: URL = FileManager.default.homeDirectoryForCurrentUser,
          appLocator: @escaping (String) -> URL? = { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }) {
         self.home = home
         self.appLocator = appLocator
-    }
-
-    static var realHomeDirectory: URL {
-        if let pw = getpwuid(getuid()), let dir = pw.pointee.pw_dir {
-            return URL(fileURLWithPath: String(cString: dir), isDirectory: true)
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
     }
 
     /// The browser to offer first: the system default, else the most recently used, else the first found.

@@ -56,13 +56,7 @@ final class BrowserImportModel: ObservableObject {
     }
 
     func detect() {
-        var found = detector.detect()
-        // Read profile names for browsers Axolotl already has access to.
-        for i in found.indices where found[i].profiles.isEmpty {
-            withAccess(found[i]) { folder in
-                found[i].profiles = detector.profiles(for: found[i].kind, in: folder)
-            }
-        }
+        let found = detector.detect()
         browsers = found
         let defaultID = BrowserDetector.defaultBrowserBundleID
         defaultKind = found.first { b in defaultID.map(b.kind.bundleIdentifiers.contains) == true }?.kind
@@ -142,27 +136,18 @@ final class BrowserImportModel: ObservableObject {
 
     func hasAccess(_ b: DetectedBrowser) -> Bool {
         _ = accessChanged
-        return isFixtureMode || BrowserAccess.hasAccess(b.kind)
+        // Only macOS-protected folders (Safari's, without Full Disk Access) are unreadable.
+        return (try? FileManager.default.contentsOfDirectory(atPath: b.dataFolder.path)) != nil
     }
 
+    /// Rechecks access; when macOS still blocks the folder, opens Full Disk Access settings.
     func requestAccess() {
         guard let b = selected else { return }
-        if BrowserAccess.request(b) {
-            accessChanged += 1
-            error = nil
-            detect()
-        } else {
-            error = "Axolotl needs the “\(b.dataFolder.lastPathComponent)” folder itself. Try again and click Allow Access without opening another folder."
-        }
-    }
-
-    /// Runs `body` with the browser's data folder readable (security scope or fixture).
-    @discardableResult
-    func withAccess<T>(_ b: DetectedBrowser, _ body: (URL) -> T) -> T? {
-        if isFixtureMode { return body(b.dataFolder) }
-        guard let url = BrowserAccess.resolve(b.kind) else { return nil }
-        defer { url.stopAccessingSecurityScopedResource() }
-        return body(url)
+        accessChanged += 1
+        detect()
+        guard !hasAccess(b) else { error = nil; return }
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+        error = "macOS protects \(b.kind.shortName)'s data. Turn on Axolotl in Full Disk Access, then import again."
     }
 
     func targetProfile(_ chosen: UUID) -> UUID {
@@ -185,13 +170,7 @@ final class BrowserImportModel: ObservableObject {
     func runImport(into axolotlProfile: UUID) {
         guard let b = selected, let profile = selectedProfile else { return }
         let target = targetProfile(axolotlProfile)
-        let folder: URL
-        if isFixtureMode {
-            folder = b.dataFolder
-        } else {
-            guard let url = BrowserAccess.resolve(b.kind) else { error = "Allow access first."; return }
-            folder = url
-        }
+        let folder = b.dataFolder
         running = true
         summary = nil
         error = nil
@@ -221,7 +200,6 @@ final class BrowserImportModel: ObservableObject {
                 let sec = await BrowserImporter.applySecure(read.excluding(excluded), into: target)
                 report?.add(sec, requested: secureTypes, browserName: kind.displayName)
             }
-            if !isFixtureMode { folder.stopAccessingSecurityScopedResource() }
             running = false
             summary = report?.text
         }
@@ -384,8 +362,8 @@ struct OneClickImportCard: View {
             SettingsContentRow { header(browser.kind.displayName, app: browser.appURL, detail: detail(browser)) }
             if model.requested.isEmpty {
                 SettingsNoteRow(comesOver(browser) + (access ? "" : browser.kind == .safari
-                    ? "\nmacOS protects Safari's data. If access is refused, export bookmarks from Safari (File → Export → Bookmarks…) and choose that file below."
-                    : "\nmacOS asks once to let Axolotl read \(browser.kind.shortName)'s data. Just click Allow Access."))
+                    ? "\nmacOS protects Safari's data: turn on Axolotl in Full Disk Access, or export bookmarks from Safari (File → Export → Bookmarks…) and choose that file below."
+                    : "\nmacOS blocks Axolotl from reading \(browser.kind.shortName)'s data. Turn on Axolotl in Full Disk Access."))
             } else {
                 ForEach(model.requested) { progressRow($0) }
             }

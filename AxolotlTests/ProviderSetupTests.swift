@@ -58,7 +58,7 @@ final class ProviderSetupTests: XCTestCase {
 
     // MARK: Signed-in CLIs
 
-    func testDetectsOnlySupportedSignedInCLIs() async throws {
+    func testDetectsSupportedCLIsAndTheirSignIn() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("provider-setup-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -75,7 +75,9 @@ final class ProviderSetupTests: XCTestCase {
             }
         }
         XCTAssertEqual(Set(found.map(\.id)), [.codex, .claudeCode, .gemini])
-        XCTAssertEqual(CLIChatClient.signedIn(found), [.codexCLI])
+        let installed = CLIChatClient.installed(found)
+        XCTAssertEqual(installed.map(\.provider), [.codexCLI, .claudeCLI])
+        XCTAssertEqual(installed.map(\.signedIn), [true, false])
     }
 
     func testCLIArgumentsDisableToolsAndKeepThePromptPositional() {

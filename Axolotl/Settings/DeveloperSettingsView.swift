@@ -5,7 +5,7 @@ import SwiftUI
 /// Settings → Agents: Connect agents (both builds), Recent AI changes, then Dev mode's harness settings (Axolotl Dev only).
 struct AgentsSettingsView: View {
     var body: some View {
-        if DevMode.isDevBuild && DevMode.isAvailable {
+        if DevMode.isDevBuild {
             DevSettingsView()
         } else {
             ConnectAgentsSection()

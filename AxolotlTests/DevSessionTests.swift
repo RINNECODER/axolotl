@@ -123,7 +123,6 @@ final class DevSessionTests: XCTestCase {
     // MARK: Project finder
 
     func testFindsProjectsFromSessionStoresRecentsAndGitAndHonorsHidden() async throws {
-        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in AxolotlDevTests")
         let base = try scratchDir("finder")
         let claudeRoot = base.appendingPathComponent("claude"), codexRoot = base.appendingPathComponent("codex")
         let work = base.appendingPathComponent("work")
@@ -416,7 +415,6 @@ final class DevSessionTests: XCTestCase {
     }
 
     func testChatSendRoutesToTerminalWhenItRunsElseHeadless() async throws {
-        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in AxolotlDevTests")
         let base = try scratchDir("route")
         let transcript = base.appendingPathComponent("s.jsonl")
         try write([claudeLine("sess-1", cwd: base.path, user: "earlier prompt"),

@@ -99,18 +99,19 @@ final class LegacyLunaMigrationTests: XCTestCase {
         try write("old-wal", "Application Support/Luna/Extensions/x.sqlite-wal", in: oldLib)
         try write(#"{"u":"luna://settings"}"#, "Application Support/Luna/Profiles/P/workspace.json", in: oldLib)
         try write("site", "WebKit/WebsiteData/Default/X/c", in: oldLib)
-        try write("own", "WebKit/WebsiteData/Default/Y/c", in: newLib)
+        try write("own", "WebKit/com.axolotl.browser/WebsiteData/Default/Y/c", in: newLib)
 
-        var sandboxed = migration()
-        sandboxed.sandboxed = true
-        sandboxed.run()
+        var fromContainer = migration()
+        fromContainer.oldInContainer = true
+        fromContainer.run()
 
         XCTAssertEqual(read("Application Support/Axolotl/Extensions/extensions.json", in: newLib), "axolotl")
         XCTAssertEqual(read("Application Support/Axolotl/Extensions/x.sqlite", in: newLib), "db")
         XCTAssertNil(read("Application Support/Axolotl/Extensions/x.sqlite-wal", in: newLib), "no WAL onto another database")
         XCTAssertEqual(read("Application Support/Axolotl/Profiles/P/workspace.json", in: newLib), #"{"u":"axolotl://settings"}"#)
-        XCTAssertEqual(read("WebKit/WebsiteData/Default/X/c", in: newLib), "site", "sandbox: WebKit has no bundle id folder")
-        XCTAssertEqual(read("WebKit/WebsiteData/Default/Y/c", in: newLib), "own")
+        XCTAssertEqual(read("WebKit/com.axolotl.browser/WebsiteData/Default/X/c", in: newLib), "site",
+                       "Luna's container WebKit has no bundle id folder; Axolotl's unsandboxed one does")
+        XCTAssertEqual(read("WebKit/com.axolotl.browser/WebsiteData/Default/Y/c", in: newLib), "own")
     }
 
     func testRewritesInternalURLsInHistory() throws {

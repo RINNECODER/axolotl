@@ -36,9 +36,6 @@ class CLIAdapterBase {
 
     func resolveExecutable() throws -> URL {
         if let executableOverride { return executableOverride }
-        guard DevMode.isAvailable else {
-            throw AgentCLIError.unavailable("Dev mode needs the unsandboxed Axolotl Dev build.")
-        }
         let name = DevSettings.executable(for: kind)
         if name.contains("/") { return URL(fileURLWithPath: name) }
         guard let path = LoginShellEnvironment.locate(name) else {

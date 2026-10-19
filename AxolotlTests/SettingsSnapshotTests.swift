@@ -11,7 +11,6 @@ final class SettingsSnapshotTests: XCTestCase {
         guard let name = ProcessInfo.processInfo.environment["AXOLOTL_SETTINGS_SHOTS"], !name.isEmpty else {
             throw XCTSkip("Set AXOLOTL_SETTINGS_SHOTS to a folder name to render settings PNGs.")
         }
-        // The sandboxed host can only write inside its container, so shots go to its temp folder.
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(name).path
         print("Settings shots: \(dir)")
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)

@@ -1,4 +1,4 @@
-// Chrome-style auto-update for the sandboxed Axolotl app (Sparkle 2).
+// Chrome-style auto-update for the Axolotl app (Sparkle 2, unsandboxed setup).
 // Axolotl Dev builds from source and never links Sparkle: everything that touches it is behind !AXOLOTL_DEV.
 import SwiftUI
 import Combine

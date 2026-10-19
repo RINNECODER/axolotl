@@ -140,7 +140,6 @@ final class DevHomeTests: XCTestCase {
     /// A fake CLI that throws away anything typed before it has drawn its prompt (as Ink TUIs do),
     /// then echoes lines. A send right after launch must arrive anyway.
     func testSendIsQueuedUntilTheCLIIsReady() async throws {
-        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in AxolotlDevTests")
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("axolotl-devhome-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: base) }
