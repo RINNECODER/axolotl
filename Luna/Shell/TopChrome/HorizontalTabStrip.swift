@@ -17,6 +17,8 @@ struct HorizontalTabStrip: View {
     /// Tab released outside the window (or well away from the strip), with the
     /// screen point: move it to its own window (or the window it was dropped on).
     var onTearOff: ((UUID, CGPoint) -> Void)? = nil
+    /// Tab menu: move the tab (or, with true, its group) to a new window.
+    var onMoveToNewWindow: ((UUID, Bool) -> Void)? = nil
     /// Chrome layout template: Chrome's curved tabs and widths.
     var chromeStyle = false
 
@@ -77,7 +79,8 @@ struct HorizontalTabStrip: View {
                         if chipIds.contains(id), let group = groupOf[id] {
                             TabGroupChip(group: group, height: height,
                                          onToggle: { store.setFolderExpanded(group.id, !group.isExpanded) },
-                                         menu: { TabGroupChip.menu(for: group, store: store, close: onClose) })
+                                         menu: { TabGroupChip.menu(for: group, store: store, close: onClose,
+                                                                    moveToNewWindow: onMoveToNewWindow) })
                         }
                         if let tab = ws.tabs[id], let index = ids.firstIndex(of: id) {
                             let iconOnly = persistent.contains(id)
@@ -108,7 +111,8 @@ struct HorizontalTabStrip: View {
                                         chromeShowsClose: ChromeMetrics.showsClose(pitch: tabWidth, isActive: ws.activeTabId == id),
                                         chromeNarrow: !iconOnly && ChromeMetrics.isNarrow(pitch: tabWidth),
                                         audio: TabAudioState(web: web, tabId: id),
-                                        menuItems: { TabContextMenu.items(for: id, store: store, web: web, close: onClose) }
+                                        menuItems: { TabContextMenu.items(for: id, store: store, web: web, close: onClose,
+                                                                                   moveToNewWindow: onMoveToNewWindow) }
                                     )
                                     .frame(width: tabWidth, height: height)
                                     .overlay(TabPressView(
@@ -755,8 +759,9 @@ struct TabGroupChip: View {
     }
 
     /// Chrome's group menu: rename, color, ungroup, close group.
-    static func menu(for group: Folder, store: WorkspaceStore, close: @escaping (UUID) -> Void) -> [LunaMenuEntry] {
-        [
+    static func menu(for group: Folder, store: WorkspaceStore, close: @escaping (UUID) -> Void,
+                     moveToNewWindow: ((UUID, Bool) -> Void)? = nil) -> [LunaMenuEntry] {
+        var entries: [LunaMenuEntry] = [
             .button("Rename Group…", icon: "pencil") {
                 if let name = TextPrompt.name(title: "Name This Group", initial: group.name) { store.renameFolder(group.id, to: name) }
             },
@@ -769,11 +774,13 @@ struct TabGroupChip: View {
                 store.addToTabGroup(id, group: group.id)
             },
             .button("Ungroup", icon: "square.dashed") { store.ungroupFolder(group.id) },
-            .button("Close Group", icon: "xmark", destructive: true) {
-                let tabs = group.tabIds
-                store.ungroupFolder(group.id)
-                tabs.forEach(close)
-            },
+            .button("Close Group", icon: "xmark", destructive: true) { store.closeTabGroup(group.id, closingWith: close) },
         ]
+        if let moveToNewWindow, let first = group.tabIds.first, group.tabIds.count < store.orderedTabIds.count {
+            entries.insert(.button(TabContextMenu.Command.moveGroupToNewWindow.title, icon: "macwindow.badge.plus") {
+                moveToNewWindow(first, true)
+            }, at: entries.count - 1)
+        }
+        return entries
     }
 }
