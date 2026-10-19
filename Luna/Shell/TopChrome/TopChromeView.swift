@@ -72,7 +72,8 @@ struct TopChromeView: View {
     @ObservedObject var web: WebViewWrapper
     @Binding var addressText: String
     var addressFocused: FocusState<Bool>.Binding
-    let isFullScreen: Bool
+    /// No window buttons share this row (a docked sidebar holds them), so it needs no inset.
+    let omitsWindowButtonInset: Bool
     /// False in frameless mode: tabs live in the edge-revealed list instead.
     let showsTabs: Bool
     let profileControl: AnyView
@@ -90,7 +91,7 @@ struct TopChromeView: View {
     static let rowHeight: CGFloat = 40
     static let tabRowHeight: CGFloat = 36
 
-    private var trafficLightInset: CGFloat { isFullScreen ? 8 : 78 }
+    private var trafficLightInset: CGFloat { omitsWindowButtonInset ? 8 : 78 }
     private var activeURL: URL? { store.activeTabId.flatMap { store.tab($0)?.url } }
 
     /// Height of the chrome for a layout, used to place the content below it.
@@ -156,7 +157,7 @@ struct TopChromeView: View {
         return VStack(spacing: 0) {
             if showsTabs {
                 HStack(spacing: 0) {
-                    Spacer().frame(width: isFullScreen ? 8 : ChromeMetrics.tabSearchLeading)
+                    Spacer().frame(width: omitsWindowButtonInset ? 8 : ChromeMetrics.tabSearchLeading)
                     ChromeTabSearchButton(store: store, onActivate: actions.activate)
                         .padding(.top, ChromeMetrics.tabTop)
                         .frame(maxHeight: .infinity, alignment: .top)

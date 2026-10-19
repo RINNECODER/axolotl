@@ -116,7 +116,7 @@ struct BrowserShellView: View {
                 .animation(.easeInOut(duration: 0.3), value: activeProfile.colorId)
 
             TitlebarConfigurator(tabStripHeight: 0, isFullScreen: $isFullScreen, hostWindow: $hostWindow)
-            TrafficLightPositioner(enabled: chromeTemplate && !isFullScreen)
+            TrafficLightPositioner(enabled: chromeTemplate && !isFullScreen, hiddenInFullScreen: windowButtonsHiddenByLayout)
                 .frame(width: 0, height: 0)
 
             GeometryReader { geometry in
@@ -658,8 +658,10 @@ struct BrowserShellView: View {
     /// The left-edge tab list: a hidden sidebar, or the tab list in frameless top layouts.
     /// Window buttons disappear with the chrome they sit on (frameless, hidden sidebar)
     /// and come back while it's revealed.
-    private var trafficLightsHidden: Bool {
-        guard hideWindowButtons, !isFullScreen else { return false }
+    private var trafficLightsHidden: Bool { !isFullScreen && windowButtonsHiddenByLayout }
+    /// Whether the layout hides the window buttons; in full screen Luna draws its own buttons and follows the same rule.
+    private var windowButtonsHiddenByLayout: Bool {
+        guard hideWindowButtons else { return false }
         guard !windowButtonsPeeking else { return false }
         return (topBarAutoHides && !topBarPeeking) || (usesSidebar && !sidebarShown && !sidebarPeeking && !topBarPeeking)
     }
@@ -717,7 +719,7 @@ struct BrowserShellView: View {
         }, onAddCurrentPage: isCurrentTabStartOrAIChat ? nil : { bookmarkCurrentPage() },
            chromeStyle: chromeTemplate, onApps: { topChromeActions.newTab() })
         // At the window's top edge (no toolbar, no docked sidebar) it clears the window buttons.
-        .padding(.leading, !showsTopChrome && !topBarPeeking && !sidebarShown && !isFullScreen ? 70 : 0)
+        .padding(.leading, !showsTopChrome && !topBarPeeking && !sidebarShown ? 70 : 0)
         .padding(.top, !showsTopChrome && !topBarPeeking ? 4 : 0)
     }
 
@@ -743,7 +745,7 @@ struct BrowserShellView: View {
             addressText: $addressBarText,
             addressFocused: $addressBarFocused,
             // A docked sidebar holds the window buttons, so the toolbar needs no inset for them.
-            isFullScreen: isFullScreen || sidebarShown,
+            omitsWindowButtonInset: sidebarShown,
             showsTabs: showsTabs,
             profileControl: AnyView(profileControl),
             extensions: session.extensions,
@@ -837,7 +839,6 @@ struct BrowserShellView: View {
         SidebarView(
             store: session.workspace,
             web: web,
-            isFullScreen: isFullScreen,
             actions: SidebarActions(
                 activate: { switchToTab($0) },
                 close: { closeTab($0) },

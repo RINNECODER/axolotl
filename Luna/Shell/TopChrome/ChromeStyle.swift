@@ -289,13 +289,19 @@ struct ChromeTabSearchButton: View {
 
 /// Moves the window buttons to Chrome's spot (centered in the 40 pt tab strip) while enabled,
 /// and puts them back when disabled or removed.
+///
+/// In full screen AppKit moves the real buttons into the (hidden) full-screen titlebar, so this
+/// draws Luna's own buttons in the frames the real ones had in the window, so nothing shifts.
 struct TrafficLightPositioner: NSViewRepresentable {
     let enabled: Bool
+    /// The layout hides the window buttons (frameless, hidden sidebar); full screen follows it.
+    var hiddenInFullScreen = false
 
     func makeNSView(context: Context) -> PositionerView { PositionerView() }
 
     func updateNSView(_ view: PositionerView, context: Context) {
         view.enabled = enabled
+        view.hiddenInFullScreen = hiddenInFullScreen
     }
 
     static func dismantleNSView(_ view: PositionerView, coordinator: ()) {
@@ -304,16 +310,23 @@ struct TrafficLightPositioner: NSViewRepresentable {
 
     final class PositionerView: NSView {
         var enabled = false { didSet { if enabled != oldValue { schedule() } } }
+        var hiddenInFullScreen = false { didSet { if hiddenInFullScreen != oldValue { updateFullScreenButtons() } } }
         private var original: (container: NSRect, buttons: [NSRect])?
         private var observers: [NSObjectProtocol] = []
         /// The last window we moved buttons in, so they can be restored after the view has left it.
         private weak var attachedWindow: NSWindow?
+        /// Button frames in the window while windowed, as (x, distance from the window top, w, h).
+        private var windowedFrames: [NSRect]?
+        private var inFullScreen = false
+        private var fullScreenButtons: FullScreenWindowButtons?
 
         /// Restores the buttons right now and stops observing; used when the view is removed.
         func tearDown() {
             enabled = false
             removeObservers()
             apply()
+            fullScreenButtons?.removeFromSuperview()
+            fullScreenButtons = nil
             attachedWindow = nil
         }
 
@@ -329,14 +342,32 @@ struct TrafficLightPositioner: NSViewRepresentable {
                 // Left the window: put the buttons back synchronously, nothing is scheduled.
                 enabled = false
                 apply()
+                fullScreenButtons?.removeFromSuperview()
+                fullScreenButtons = nil
                 return
             }
             attachedWindow = window
-            // Entering full screen: put the system button container back before the transition so macOS owns it.
+            inFullScreen = window.styleMask.contains(.fullScreen)
+            // Entering full screen: note where the buttons sit, then put the system button container
+            // back before the transition so macOS owns it.
             observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willEnterFullScreenNotification, object: window, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.apply(restoring: true) }
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.captureWindowedFrames()
+                    self.apply(restoring: true)
+                    self.inFullScreen = true
+                    self.updateFullScreenButtons()
+                }
             })
-            for name in [NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification, NSWindow.didExitFullScreenNotification,
+            observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.inFullScreen = false
+                    self.updateFullScreenButtons()
+                    self.apply()
+                }
+            })
+            for name in [NSWindow.didResizeNotification, NSWindow.didEndLiveResizeNotification,
                          NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
                 observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                     MainActor.assumeIsolated { self?.apply() }
@@ -349,11 +380,69 @@ struct TrafficLightPositioner: NSViewRepresentable {
 
         private func schedule() { DispatchQueue.main.async { [weak self] in self?.apply() } }
 
+        private func systemButtons(_ window: NSWindow) -> [NSButton] {
+            [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { window.standardWindowButton($0) }
+        }
+
+        /// Records the real buttons' frames, measured from the window's top-left, while they are in the window.
+        private func captureWindowedFrames() {
+            guard let window = window ?? attachedWindow else { return }
+            let buttons = systemButtons(window)
+            guard buttons.count == 3, buttons[0].window === window else { return }
+            let height = window.frame.height
+            windowedFrames = buttons.map { b in
+                let r = b.convert(b.bounds, to: nil)
+                return NSRect(x: r.minX, y: height - r.maxY, width: r.width, height: r.height)
+            }
+        }
+
+        private func updateFullScreenButtons() {
+            guard let window = window ?? attachedWindow, let host = window.contentView else { return }
+            guard inFullScreen, !hiddenInFullScreen else {
+                fullScreenButtons?.isHidden = true
+                return
+            }
+            let frames = windowedFrames ?? fallbackFrames(window)
+            guard let first = frames.first, let last = frames.last else { return }
+            let view: FullScreenWindowButtons
+            if let existing = fullScreenButtons, existing.superview === host {
+                view = existing
+            } else {
+                fullScreenButtons?.removeFromSuperview()
+                view = FullScreenWindowButtons()
+                host.addSubview(view, positioned: .above, relativeTo: nil)
+                fullScreenButtons = view
+            }
+            let top = frames.map(\.minY).min() ?? first.minY
+            let bottom = frames.map(\.maxY).max() ?? first.maxY
+            let size = NSSize(width: last.maxX - first.minX, height: bottom - top)
+            let y = host.isFlipped ? top : host.bounds.height - bottom
+            view.frame = NSRect(origin: NSPoint(x: first.minX, y: y), size: size)
+            view.autoresizingMask = host.isFlipped ? [.maxXMargin, .maxYMargin] : [.maxXMargin, .minYMargin]
+            view.circles = frames.map { NSRect(x: $0.minX - first.minX, y: $0.minY - top, width: $0.width, height: $0.height) }
+            view.isHidden = false
+            view.needsDisplay = true
+        }
+
+        /// Without a windowed measurement (launched in full screen): the system spot, or Chrome's.
+        private func fallbackFrames(_ window: NSWindow) -> [NSRect] {
+            let buttons = systemButtons(window)
+            let size = buttons.first?.frame.size ?? NSSize(width: 14, height: 16)
+            let pitch = buttons.count == 3 ? buttons[1].frame.minX - buttons[0].frame.minX : 20
+            let leading = enabled ? ChromeMetrics.trafficLightLeading : (buttons.first?.frame.minX ?? 7.5)
+            let centerY = enabled ? ChromeMetrics.trafficLightCenterY : 14
+            return (0..<3).map { i in
+                NSRect(x: leading + CGFloat(i) * pitch, y: centerY - size.height / 2, width: size.width, height: size.height)
+            }
+        }
+
         private func apply(restoring: Bool = false) {
             guard let window = window ?? attachedWindow else { return }
+            fullScreenButtons?.needsDisplay = true
             // In full screen the system owns the buttons; never reposition or capture them mid-transition.
             if window.styleMask.contains(.fullScreen) && !restoring { return }
-            let buttons = [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton].compactMap { window.standardWindowButton($0) }
+            defer { if !restoring && !inFullScreen { captureWindowedFrames() } }
+            let buttons = systemButtons(window)
             guard buttons.count == 3, let container = buttons[0].superview?.superview else { return }
             if !enabled || restoring {
                 guard let original else { return }
@@ -373,6 +462,114 @@ struct TrafficLightPositioner: NSViewRepresentable {
             }
         }
     }
+}
+
+/// Close / minimize / zoom drawn by Luna in full screen, where AppKit has moved the real buttons
+/// into the hidden full-screen titlebar. Minimize is disabled, as macOS does in full screen;
+/// zoom leaves full screen. Hover shows the glyphs; an inactive window shows them gray.
+final class FullScreenWindowButtons: NSView {
+    /// The three button frames (each holds a centered circle), in this view's coordinates.
+    var circles: [NSRect] = [] { didSet { needsDisplay = true } }
+    private var hovering = false { didSet { if hovering != oldValue { needsDisplay = true } } }
+    private var pressed: Int?
+    private var pressedInside = false
+
+    override var isFlipped: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func viewDidChangeEffectiveAppearance() { needsDisplay = true }
+
+    private func index(at point: NSPoint) -> Int? {
+        circles.firstIndex { $0.insetBy(dx: -1, dy: -1).contains(point) }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let i = index(at: convert(event.locationInWindow, from: nil))
+        guard let i, i != 1 else { return }
+        pressed = i
+        pressedInside = true
+        needsDisplay = true
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let pressed else { return }
+        let inside = index(at: convert(event.locationInWindow, from: nil)) == pressed
+        if inside != pressedInside { pressedInside = inside; needsDisplay = true }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        guard let i = pressed else { return }
+        let fire = index(at: convert(event.locationInWindow, from: nil)) == i
+        pressed = nil
+        pressedInside = false
+        needsDisplay = true
+        guard fire, let window else { return }
+        if i == 0 { window.performClose(nil) } else if i == 2 { window.toggleFullScreen(nil) }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard circles.count == 3 else { return }
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let active = (window?.isKeyWindow ?? false) || hovering
+        let gray = dark ? NSColor(white: 1, alpha: 0.2) : NSColor(white: 0, alpha: 0.13)
+        let grayBorder = dark ? NSColor(white: 1, alpha: 0.08) : NSColor(white: 0, alpha: 0.07)
+        let colors: [(NSColor, NSColor)] = [
+            (NSColor(srgbRed: 1.0, green: 0.373, blue: 0.341, alpha: 1), NSColor(srgbRed: 0.878, green: 0.267, blue: 0.243, alpha: 1)),
+            (gray, grayBorder),
+            (NSColor(srgbRed: 0.157, green: 0.784, blue: 0.251, alpha: 1), NSColor(srgbRed: 0.102, green: 0.671, blue: 0.161, alpha: 1)),
+        ]
+        for (i, frame) in circles.enumerated() {
+            // The system circle fills the button's width (12–14 pt depending on the macOS version).
+            let d = min(14, max(12, min(frame.width, frame.height)))
+            let rect = NSRect(x: frame.midX - d / 2, y: frame.midY - d / 2, width: d, height: d)
+            let (fill, border) = (active || i == 1) ? colors[i] : (gray, grayBorder)
+            fill.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+            border.setStroke()
+            let ring = NSBezierPath(ovalIn: rect.insetBy(dx: 0.25, dy: 0.25))
+            ring.lineWidth = 0.5
+            ring.stroke()
+            if pressed == i && pressedInside {
+                NSColor(white: 0, alpha: 0.18).setFill()
+                NSBezierPath(ovalIn: rect).fill()
+            }
+            guard hovering, i != 1 else { continue }
+            NSColor(white: 0, alpha: 0.55).set()
+            let c = NSPoint(x: rect.midX, y: rect.midY)
+            if i == 0 {
+                let a: CGFloat = 2.6
+                let x = NSBezierPath()
+                x.move(to: NSPoint(x: c.x - a, y: c.y - a)); x.line(to: NSPoint(x: c.x + a, y: c.y + a))
+                x.move(to: NSPoint(x: c.x + a, y: c.y - a)); x.line(to: NSPoint(x: c.x - a, y: c.y + a))
+                x.lineWidth = 1.1
+                x.lineCapStyle = .round
+                x.stroke()
+            } else {
+                // Exit full screen: two triangles pointing at the center.
+                let g: CGFloat = 0.6, s: CGFloat = 3.6
+                for sign in [CGFloat(-1), 1] {
+                    let corner = NSPoint(x: c.x + sign * g, y: c.y + sign * g)
+                    let t = NSBezierPath()
+                    t.move(to: corner)
+                    t.line(to: NSPoint(x: corner.x + sign * s, y: corner.y))
+                    t.line(to: NSPoint(x: corner.x, y: corner.y + sign * s))
+                    t.close()
+                    t.fill()
+                }
+            }
+        }
+    }
+
+    override func isAccessibilityElement() -> Bool { false }
 }
 
 /// Chrome's site-information ("tune") icon: two lines, each with a knob.

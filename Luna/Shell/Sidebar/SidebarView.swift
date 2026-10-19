@@ -7,7 +7,6 @@ import UniformTypeIdentifiers
 struct SidebarView: View {
     @ObservedObject var store: WorkspaceStore
     @ObservedObject var web: WebViewWrapper
-    let isFullScreen: Bool
     let actions: SidebarActions
     let onToggleSidebar: () -> Void
     let extensions: ExtensionHost
@@ -39,8 +38,8 @@ struct SidebarView: View {
 
     private var topRow: some View {
         HStack(spacing: 2) {
-            // Leave room for the traffic lights.
-            Spacer().frame(width: isFullScreen ? 0 : 70)
+            // Leave room for the traffic lights (drawn by Luna in full screen, same spot).
+            Spacer().frame(width: 70)
             ToolbarIconButton(systemName: "sidebar.left", help: "Hide Sidebar (⌘S)", action: onToggleSidebar)
             Spacer(minLength: 0)
             // With the toolbar on, navigation lives there instead.
