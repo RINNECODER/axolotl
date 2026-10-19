@@ -380,13 +380,6 @@ struct ChatMenuLabel: View {
     }
 }
 
-extension View {
-    /// Plain pull-down menu around a `ChatMenuLabel`.
-    func chatMenuStyle() -> some View {
-        self.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
-    }
-}
-
 /// Step / tool status: pulsing dot while running, then a symbol.
 struct ChatStatusIcon: View {
     enum State { case running, done, failed, warning, stopped, pending }

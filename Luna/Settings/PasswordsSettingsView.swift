@@ -23,11 +23,9 @@ struct PasswordsSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker("Profile", selection: $profileId) {
-                    ForEach(profileManager.profiles) { p in
-                        Label { Text(p.name) } icon: { Image(nsImage: ProfileAvatar.image(for: p, size: 16)) }.tag(p.id)
-                    }
-                }
+                LunaPicker("Profile", selection: $profileId, options: profileManager.profiles.map {
+                    .init($0.id, $0.name, image: ProfileAvatar.image(for: $0, size: 16))
+                })
                 Text("Luna offers to save logins when you sign in and to fill them next time. They're stored in your Mac's Keychain, separately for each profile.")
                     .font(.callout)
                     .foregroundStyle(.secondary)

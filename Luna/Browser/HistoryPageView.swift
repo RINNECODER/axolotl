@@ -74,19 +74,23 @@ struct HistoryPageView: View {
                         .textFieldStyle(.plain)
                         .foregroundColor(textPrimary)
                         .frame(maxWidth: 200)
-                    Menu {
-                        Button("Clear Today") { clearTimeframe = .today; showClearConfirmation = true }
-                        Button("Clear This Week") { clearTimeframe = .thisWeek; showClearConfirmation = true }
-                        Button("Clear Last 30 Days") { clearTimeframe = .last30Days; showClearConfirmation = true }
-                        Divider()
-                        Button("Clear All History", role: .destructive) { clearTimeframe = .allTime; showClearConfirmation = true }
-                    } label: {
+                    LunaMenuButton(alignment: .trailing, minWidth: 200, help: "Clear history", items: {
+                        [
+                            .button("Clear Today") { clearTimeframe = .today; showClearConfirmation = true },
+                            .button("Clear This Week") { clearTimeframe = .thisWeek; showClearConfirmation = true },
+                            .button("Clear Last 30 Days") { clearTimeframe = .last30Days; showClearConfirmation = true },
+                            .divider("h1"),
+                            .button("Clear All History", destructive: true) {
+                                clearTimeframe = .allTime; showClearConfirmation = true
+                            },
+                        ]
+                    }) { _ in
                         Image(systemName: "trash")
                             .font(.system(size: 12))
                             .foregroundColor(textSecondary)
+                            .frame(width: 22, height: 22)
+                            .contentShape(Rectangle())
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
                 }
             }
             .padding(.horizontal, 20)

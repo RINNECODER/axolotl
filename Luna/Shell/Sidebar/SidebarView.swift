@@ -76,17 +76,20 @@ struct SidebarView: View {
                     }
                     .buttonStyle(.plain)
                     .help(space.name)
-                    .contextMenu {
-                        Button("Rename Space…") {
-                            if let name = TextPrompt.name(title: "Rename Space", initial: space.name) {
-                                store.updateSpace(space.id) { $0.name = name }
-                            }
-                        }
+                    .lunaContextMenu {
+                        var entries: [LunaMenuEntry] = [
+                            .button("Rename Space…") {
+                                if let name = TextPrompt.name(title: "Rename Space", initial: space.name) {
+                                    store.updateSpace(space.id) { $0.name = name }
+                                }
+                            },
+                        ]
                         if store.workspace.spaces.count > 1 {
-                            Button("Delete Space", role: .destructive) {
+                            entries.append(.button("Delete Space", destructive: true) {
                                 store.deleteSpace(space.id).forEach { web.removeWebView(for: $0) }
-                            }
+                            })
                         }
+                        return entries
                     }
                 }
             }
@@ -163,9 +166,11 @@ private struct FavoritesGrid: View {
         }
         .buttonStyle(.plain)
         .help(displayTitle(for: tab))
-        .contextMenu {
-            Button("Remove from Favorites") { store.unpin(id) }
-            Button("Reset Tab") { actions.close(id) }
+        .lunaContextMenu {
+            [
+                .button("Remove from Favorites") { store.unpin(id) },
+                .button("Reset Tab") { actions.close(id) },
+            ]
         }
     }
 }
@@ -210,24 +215,23 @@ private struct FavoriteDrop: DropDelegate {
 /// Sidebar's ⋯ menu: extensions and settings.
 private struct SidebarMoreMenu: View {
     let extensions: ExtensionHost
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        Menu {
-            ExtensionsMenuItems(host: extensions)
-            Divider()
-            SettingsLink { Text("Settings…") }
-        } label: {
+        LunaMenuButton(alignment: .trailing, minWidth: 220, help: "More", items: {
+            let settings = LunaSettingsOpener(openSettings: openSettings)
+            return ExtensionMenuEntries.build(host: extensions, settings: settings, icon: "puzzlepiece.extension")
+                + [.divider("s"), .button("Settings", icon: "gearshape", shortcut: "⌘,") { settings() }]
+        }) { isOpen in
             Image(systemName: "ellipsis")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(LunaSurface.hover.opacity(isOpen ? 1 : 0)))
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
         .fixedSize()
         .background(PopupAnchor { extensions.menuAnchor = $0 })
-        .help("More")
     }
 }
 

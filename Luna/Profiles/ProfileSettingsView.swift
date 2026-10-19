@@ -63,15 +63,10 @@ private struct ProfileRow: View {
                 .onAppear { name = profile.name }
                 .onChange(of: profile.name) { _, new in name = new }
             ProfileIconPicker(profile: profile)
-            Picker("Color", selection: Binding(
+            LunaPicker("Color", selection: Binding(
                 get: { profile.colorId },
                 set: { profileManager.recolor(profileId: profile.id, colorId: $0) }
-            )) {
-                ForEach(ProfileColor.presets) { color in
-                    Label { Text(color.id.capitalized) } icon: { Image(nsImage: ProfileAvatar.swatch(color)) }
-                        .tag(color.id)
-                }
-            }
+            ), options: ProfileColor.presets.map { .init($0.id, $0.id.capitalized, image: ProfileAvatar.swatch($0)) })
             .labelsHidden()
             .fixedSize()
             Button(role: .destructive, action: onDelete) {

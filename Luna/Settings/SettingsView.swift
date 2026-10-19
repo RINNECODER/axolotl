@@ -149,11 +149,9 @@ private struct AppearanceSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker("Theme", selection: $appearance) {
-                    Text("System").tag("system")
-                    Text("Light").tag("light")
-                    Text("Dark").tag("dark")
-                }
+                LunaPicker("Theme", selection: $appearance, options: [
+                    .init("system", "System"), .init("light", "Light"), .init("dark", "Dark"),
+                ])
                 Toggle("Liquid Glass", isOn: $liquidGlass)
             } footer: {
                 Text("Off draws Luna's own solid surfaces and menus instead of translucent glass.")
@@ -170,9 +168,8 @@ private struct AppearanceSettingsView: View {
             }
 
             Section {
-                Picker("Browser layout", selection: layout) {
-                    ForEach(BrowserLayout.allCases) { Text($0.title).tag($0) }
-                }
+                LunaPicker("Browser layout", selection: layout,
+                           options: BrowserLayout.allCases.map { .init($0, $0.title) })
                 Text(layout.wrappedValue.summary)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -259,16 +256,12 @@ private struct TabsSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker(selection: $hibernateMinutes) {
-                    Text("Never").tag(0)
-                    Text("After 15 minutes").tag(15)
-                    Text("After 30 minutes").tag(30)
-                    Text("After 1 hour").tag(60)
-                    Text("After 2 hours").tag(120)
-                } label: {
-                    Text("Unload inactive tabs")
-                    Text("Frees memory. Tabs playing media or using the camera or microphone stay loaded.")
-                }
+                LunaPicker("Unload inactive tabs",
+                           subtitle: "Frees memory. Tabs playing media or using the camera or microphone stay loaded.",
+                           selection: $hibernateMinutes, options: [
+                               .init(0, "Never"), .init(15, "After 15 minutes"), .init(30, "After 30 minutes"),
+                               .init(60, "After 1 hour"), .init(120, "After 2 hours"),
+                           ])
             }
         }
         .formStyle(.grouped)
@@ -327,9 +320,8 @@ private struct SearchSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker("Search engine", selection: $engine) {
-                    ForEach(SearchEngine.allCases) { Text($0.title).tag($0.rawValue) }
-                }
+                LunaPicker("Search engine", selection: $engine,
+                           options: SearchEngine.allCases.map { .init($0.rawValue, $0.title) })
                 Toggle(isOn: $searchSuggestionsEnabled) {
                     Text("Search suggestions")
                     Text("Sends what you type in the address bar to the search engine to suggest queries.")

@@ -16,6 +16,53 @@ struct TopChromeActions {
     var showHistory: () -> Void
     var askOnPage: () -> Void = {}
     var bookmarkPage: () -> Void = {}
+    var newWindow: () -> Void = {}
+    /// Current tab's zoom (1.0 = 100%); nil when the tab has no web page.
+    var zoomLevel: () -> CGFloat? = { nil }
+    var zoomIn: () -> Void = {}
+    var zoomOut: () -> Void = {}
+    var printPage: () -> Void = {}
+    var findInPage: () -> Void = {}
+    var toggleFullScreen: () -> Void = {}
+}
+
+/// The app menu (⋯ / ⋮) as Luna menu rows, following Chrome's order where
+/// Luna has the same command.
+enum AppMenuEntries {
+    @MainActor
+    static func build(actions: TopChromeActions, extensions: ExtensionHost, settings: LunaSettingsOpener) -> [LunaMenuEntry] {
+        let zoom = actions.zoomLevel()
+        let showBar = UserDefaults.standard.bool(forKey: ChromePrefs.showBookmarksBar)
+        var entries: [LunaMenuEntry] = [
+            .button("New tab", icon: "plus.square.on.square", shortcut: "⌘T", action: actions.newTab),
+            .button("New window", icon: "macwindow.badge.plus", action: actions.newWindow),
+            .divider("s1"),
+            .button("Ask on Page", icon: "sparkles", action: actions.askOnPage),
+            .divider("s2"),
+            .button("History", icon: "clock.arrow.circlepath", shortcut: "⌘Y", action: actions.showHistory),
+            .button("Downloads", icon: "arrow.down.to.line", action: actions.showDownloads),
+            .submenu("Bookmarks and lists", icon: "star", [
+                .button("Bookmark this tab…", icon: "star", shortcut: "⌘D", action: actions.bookmarkPage),
+                .button(showBar ? "Hide bookmarks bar" : "Show bookmarks bar", icon: "menubar.rectangle") {
+                    UserDefaults.standard.set(!showBar, forKey: ChromePrefs.showBookmarksBar)
+                },
+            ]),
+        ]
+        entries += ExtensionMenuEntries.build(host: extensions, settings: settings, icon: "puzzlepiece.extension")
+        entries.append(.divider("s3"))
+        entries.append(.zoom(LunaMenuZoom(
+            level: zoom.map { "\(Int(($0 * 100).rounded()))%" } ?? "100%",
+            zoomOut: actions.zoomOut, zoomIn: actions.zoomIn, fullScreen: actions.toggleFullScreen)))
+        entries += [
+            .divider("s4"),
+            .button("Print…", icon: "printer", shortcut: "⌘P", enabled: zoom != nil, action: actions.printPage),
+            .button("Find…", icon: "doc.text.magnifyingglass", shortcut: "⌘F", enabled: zoom != nil,
+                    action: actions.findInPage),
+            .divider("s5"),
+            .button("Settings", icon: "gearshape", shortcut: "⌘,") { settings() },
+        ]
+        return entries
+    }
 }
 
 /// Window chrome for the Compact, Dynamic and Classic layouts.
@@ -238,30 +285,22 @@ struct TopChromeView: View {
 struct MoreMenu: View {
     let actions: TopChromeActions
     let extensions: ExtensionHost
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        Menu {
-            Button("New Tab", action: actions.newTab)
-            Button("Ask on Page", action: actions.askOnPage)
-            Button("Bookmark This Page", action: actions.bookmarkPage)
-            Divider()
-            Button("History", action: actions.showHistory)
-            Button("Downloads", action: actions.showDownloads)
-            Divider()
-            ExtensionsMenuItems(host: extensions)
-            SettingsLink { Text("Settings…") }
-        } label: {
+        LunaMenuButton(alignment: .trailing, minWidth: 280, help: "More", debugID: "top.more", items: {
+            AppMenuEntries.build(actions: actions, extensions: extensions,
+                                 settings: LunaSettingsOpener(openSettings: openSettings))
+        }) { isOpen in
             Image(systemName: "ellipsis")
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.secondary)
                 .frame(width: 26, height: 26)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(LunaSurface.hover.opacity(isOpen ? 1 : 0)))
                 .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
         .fixedSize()
         .background(PopupAnchor { extensions.menuAnchor = $0 })
-        .help("More")
     }
 }
 
@@ -307,6 +346,7 @@ private struct ChromeStar: View {
 private struct ChromeExtensionsButton: View {
     @ObservedObject var extensions: ExtensionHost
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         // Like Chrome, the puzzle piece shows once an extension is installed.
@@ -315,18 +355,17 @@ private struct ChromeExtensionsButton: View {
     }
 
     private var menu: some View {
-        Menu {
-            ExtensionsMenuItems(host: extensions)
-        } label: {
+        LunaMenuButton(alignment: .trailing, help: "Extensions", items: {
+            let entries = ExtensionMenuEntries.build(host: extensions, settings: LunaSettingsOpener(openSettings: openSettings))
+            if case .item(let item) = entries.first, let children = item.children { return children }
+            return entries
+        }) { isOpen in
             ChromeIcon(systemName: "puzzlepiece.extension", color: ChromePalette.for(scheme).icon)
                 .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
+                .background(Circle().fill(ChromePalette.for(scheme).hover.opacity(isOpen ? 1.5 : 0)))
                 .contentShape(Circle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
-        .help("Extensions")
     }
 }
 
@@ -336,25 +375,18 @@ private struct ChromeMenuButton: View {
     let extensions: ExtensionHost
     @Environment(\.colorScheme) private var scheme
 
+    @Environment(\.openSettings) private var openSettings
+
     var body: some View {
-        Menu {
-            Button("New Tab", action: actions.newTab)
-            Button("Ask on Page", action: actions.askOnPage)
-            Button("Bookmark This Page", action: actions.bookmarkPage)
-            Divider()
-            Button("History", action: actions.showHistory)
-            Button("Downloads", action: actions.showDownloads)
-            Divider()
-            ExtensionsMenuItems(host: extensions)
-            SettingsLink { Text("Settings…") }
-        } label: {
+        LunaMenuButton(alignment: .trailing, minWidth: 320, debugID: "chrome.app", items: {
+            AppMenuEntries.build(actions: actions, extensions: extensions,
+                                 settings: LunaSettingsOpener(openSettings: openSettings))
+        }) { isOpen in
             ChromeIcon(systemName: "ellipsis", color: ChromePalette.for(scheme).icon, rotation: .degrees(90))
                 .frame(width: ChromeMetrics.toolbarButton, height: ChromeMetrics.toolbarButton)
+                .background(Circle().fill(ChromePalette.for(scheme).hover.opacity(isOpen ? 1.5 : 0)))
                 .contentShape(Circle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
         .background(PopupAnchor { extensions.menuAnchor = $0 })
         .help("Customize and control Luna")

@@ -168,6 +168,7 @@ struct BrowserShellView: View {
             }
         }
         .ignoresSafeArea(.container, edges: .top)
+        .environment(\.lunaMenuFlavor, chromeTemplate ? .chrome : .luna)
         .overlayPreferenceValue(AddressFieldAnchorKey.self) { anchor in
             suggestionsOverlay(anchor: anchor)
         }
@@ -630,7 +631,14 @@ struct BrowserShellView: View {
             showDownloads: { Usage.record(.downloads); DownloadManager.shared.presentHub() },
             showHistory: { navigateToHistory() },
             askOnPage: { openAskOnPage() },
-            bookmarkPage: { bookmarkCurrentPage() }
+            bookmarkPage: { bookmarkCurrentPage() },
+            newWindow: { BrowserWindows.open(profileId: sessionStore.activeProfileId) },
+            zoomLevel: { isCurrentTabStartOrAIChat ? nil : web.zoomLevel(tabManager.currentTab) },
+            zoomIn: { web.zoomIn(tabManager.currentTab) },
+            zoomOut: { web.zoomOut(tabManager.currentTab) },
+            printPage: { if let id = tabManager.currentTab { web.printPage(in: id) } },
+            findInPage: { if !isCurrentTabStartOrAIChat { showBrowserFindBar = true } },
+            toggleFullScreen: { NSApp.keyWindow?.toggleFullScreen(nil) }
         )
     }
 

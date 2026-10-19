@@ -19,13 +19,15 @@ struct PasswordFillCard: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             } else {
-                Menu("Sign in with a saved login") {
-                    ForEach(offer.credentials) { cred in
-                        Button(cred.username.isEmpty ? "(no username)" : cred.username) { onFill(cred) }
+                LunaMenuButton(minWidth: 200, items: {
+                    offer.credentials.map { cred in
+                        .button(cred.username.isEmpty ? "(no username)" : cred.username, icon: "key",
+                                id: "cred.\(cred.id)") { onFill(cred) }
                     }
+                }) { isOpen in
+                    LunaPopUpLabel(title: "Sign in with a saved login", isOpen: isOpen)
                 }
                 .fixedSize()
-                .controlSize(.small)
             }
             PanelIconButton(systemName: "xmark", help: "Not now", action: onDismiss)
         }

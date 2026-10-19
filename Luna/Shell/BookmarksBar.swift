@@ -80,10 +80,12 @@ private struct BookmarkChip: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .help(bookmark.url.absoluteString)
-        .contextMenu {
-            Button("Open in New Tab") { onOpen(bookmark.url, true) }
-            Divider()
-            Button("Remove Bookmark", role: .destructive, action: onRemove)
+        .lunaContextMenu {
+            [
+                .button("Open in New Tab", icon: "plus.square.on.square") { onOpen(bookmark.url, true) },
+                .divider("b1"),
+                .button("Remove Bookmark", icon: "trash", destructive: true, action: onRemove),
+            ]
         }
         .accessibilityLabel(bookmark.title)
     }
@@ -123,10 +125,12 @@ private struct ChromeBookmarksBar: View {
                                     .fixedSize()
                             }
                         }
-                        .contextMenu {
-                            Button("Open in New Tab") { onOpen(bookmark.url, true) }
-                            Divider()
-                            Button("Delete", role: .destructive) { store.remove(bookmark.id) }
+                        .lunaContextMenu {
+                            [
+                                .button("Open in new tab", icon: "plus.square.on.square") { onOpen(bookmark.url, true) },
+                                .divider("b1"),
+                                .button("Delete", icon: "trash") { store.remove(bookmark.id) },
+                            ]
                         }
                         .accessibilityLabel(bookmark.title)
                     }
@@ -134,12 +138,14 @@ private struct ChromeBookmarksBar: View {
             }
             Spacer(minLength: 8)
             Rectangle().fill(palette.bookmarkSeparator).frame(width: 1, height: 16).padding(.trailing, 6)
-            Menu {
-                if store.bookmarks.isEmpty { Text("No bookmarks") }
-                ForEach(store.bookmarks) { bookmark in
-                    Button(bookmark.title) { onOpen(bookmark.url, false) }
+            LunaMenuButton(alignment: .trailing, minWidth: 240, debugID: "bookmarks.all", items: {
+                if store.bookmarks.isEmpty { return [.button("No bookmarks", enabled: false) {}] }
+                return store.bookmarks.map { bookmark in
+                    .button(bookmark.title, image: LunaMenuEntry.favicon(bookmark.url), id: "bm.\(bookmark.id)") {
+                        onOpen(bookmark.url, false)
+                    }
                 }
-            } label: {
+            }) { isOpen in
                 HStack(spacing: 8) {
                     Image(systemName: "folder")
                         .font(.system(size: 13.5))
@@ -150,11 +156,9 @@ private struct ChromeBookmarksBar: View {
                 }
                 .padding(.horizontal, 6)
                 .frame(height: 28)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(palette.hover.opacity(isOpen ? 1 : 0)))
                 .contentShape(Rectangle())
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
             .fixedSize()
         }
         .padding(.leading, 4)

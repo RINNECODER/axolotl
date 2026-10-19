@@ -592,16 +592,14 @@ struct CommandSurfaceView: View {
             Text("Get an API key from")
                 .font(.system(size: 11))
                 .foregroundColor(ChatTokens.textTertiary)
-            Menu {
-                Picker("Service", selection: $grabServiceID) {
-                    ForEach(KeyService.registry, id: \.id) { Text($0.name).tag($0.id) }
+            LunaMenuButton(minWidth: 180, items: {
+                LunaMenuEntry.options(KeyService.registry.map { ($0.id, $0.name) }, selection: grabServiceID) {
+                    grabServiceID = $0
                 }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            } label: {
+            }) { _ in
                 ChatMenuLabel(text: grabService.name)
             }
-            .chatMenuStyle()
+            .fixedSize()
             .help("Service")
             .accessibilityLabel("Service: \(grabService.name)")
             Spacer(minLength: 0)

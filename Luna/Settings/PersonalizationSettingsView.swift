@@ -17,11 +17,8 @@ struct PersonalizationSettingsView: View {
                     Text("Keep a usage record")
                     Text("Counts the Luna features and shortcuts you use each day, on this Mac only. Your AI agent can read it, with your history, to set Luna up the way you use it.")
                 }
-                Picker("Keep data for", selection: $retention) {
-                    Text("30 days").tag(30)
-                    Text("90 days").tag(90)
-                    Text("1 year").tag(365)
-                }
+                LunaPicker("Keep data for", selection: $retention,
+                           options: [.init(30, "30 days"), .init(90, "90 days"), .init(365, "1 year")])
                 .disabled(!enabled)
                 LabeledContent("Recorded") {
                     HStack(spacing: 8) {
@@ -111,12 +108,9 @@ private struct UsageDataSheet: View {
             HStack {
                 Text("Usage record").font(.headline)
                 Spacer()
-                Picker("Period", selection: $days) {
-                    Text("7 days").tag(7)
-                    Text("30 days").tag(30)
-                    Text("90 days").tag(90)
-                    Text("1 year").tag(365)
-                }
+                LunaPicker("Period", selection: $days, options: [
+                    .init(7, "7 days"), .init(30, "30 days"), .init(90, "90 days"), .init(365, "1 year"),
+                ])
                 .labelsHidden()
                 .fixedSize()
             }

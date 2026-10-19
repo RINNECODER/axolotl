@@ -12,9 +12,8 @@ struct ModelsSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker("Provider", selection: provider) {
-                    ForEach(AIProvider.allCases) { Text($0.displayName).tag($0) }
-                }
+                LunaPicker("Provider", selection: provider,
+                           options: AIProvider.allCases.map { .init($0, $0.displayName) })
                 Text(provider.wrappedValue.detail)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -353,10 +352,9 @@ private struct ModelPicker: View {
 
     var body: some View {
         HStack {
-            Picker("Model", selection: $selection) {
-                if selection.isEmpty { Text("Choose a model").tag("") }
-                ForEach(options, id: \.id) { Text($0.name).tag($0.id) }
-            }
+            LunaPicker("Model", selection: $selection,
+                       options: (selection.isEmpty ? [.init("", "Choose a model")] : [])
+                           + options.map { .init($0.id, $0.name) })
             Button {
                 Task { await refresh() }
             } label: {
