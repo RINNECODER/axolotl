@@ -1016,7 +1016,7 @@ struct CommandSurfaceView: View {
                 card.message = error.localizedDescription
             }
         case .openSettings:
-            SettingsRouter.shared.requestedPane = .personalization
+            SettingsRouter.shared.requestedPane = .privacy
             openSettings()
             return
         }

@@ -128,7 +128,9 @@ enum DebugSnapshot {
         }
         if env["LUNA_SNAPSHOT_SETTINGS"] != nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay - 1.5)) {
-                let pane = env["LUNA_SNAPSHOT_SETTINGS"].flatMap(SettingsPane.init(rawValue:)) ?? .appearance
+                let raw = env["LUNA_SNAPSHOT_SETTINGS"] ?? ""
+                if let tab = SettingsPane.passwordsTab(for: raw) { SettingsRouter.shared.passwordsTab = tab }
+                let pane = SettingsPane.resolve(raw) ?? .appearance
                 let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(initialPane: pane)))
                 let height = env["LUNA_SNAPSHOT_SETTINGS_HEIGHT"].flatMap(Double.init) ?? 600
                 window.setContentSize(NSSize(width: 820, height: height))

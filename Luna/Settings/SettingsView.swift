@@ -10,16 +10,14 @@ struct SettingsView: View {
     @State private var selection: SettingsPane?
     @State private var query = ""
 
-    init(initialPane: SettingsPane = .appearance) {
+    init(initialPane: SettingsPane = .general) {
         _selection = State(initialValue: initialPane)
     }
 
     private var visiblePanes: [SettingsPane] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
         guard !q.isEmpty else { return SettingsPane.available }
-        return SettingsPane.available.filter { pane in
-            pane.title.lowercased().contains(q) || pane.keywords.contains { $0.contains(q) }
-        }
+        return SettingsPane.available.filter { $0.matches(q) }
     }
 
     @AppStorage(LiquidGlass.defaultsKey) private var liquidGlass = LiquidGlass.defaultValue
@@ -49,7 +47,7 @@ struct SettingsView: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 240)
             .searchable(text: $query, placement: .sidebar, prompt: "Search settings")
         } detail: {
-            detail.navigationTitle((selection ?? .appearance).title)
+            detail.navigationTitle((selection ?? .general).title)
         }
     }
 
@@ -68,7 +66,7 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(spacing: 2) {
                         ForEach(visiblePanes) { pane in
-                            SolidSidebarRow(pane: pane, isSelected: (selection ?? .appearance) == pane) { selection = pane }
+                            SolidSidebarRow(pane: pane, isSelected: (selection ?? .general) == pane) { selection = pane }
                         }
                     }
                 }
@@ -81,7 +79,7 @@ struct SettingsView: View {
             .background(LunaSurface.sidebar)
             Rectangle().fill(LunaSurface.stroke).frame(width: 1)
             VStack(alignment: .leading, spacing: 0) {
-                Text((selection ?? .appearance).title)
+                Text((selection ?? .general).title)
                     .font(.system(size: 15, weight: .semibold))
                     .padding(.horizontal, 20)
                     .frame(height: 38, alignment: .center)
@@ -94,18 +92,15 @@ struct SettingsView: View {
 
     private var detail: some View {
             Group {
-                switch selection ?? .appearance {
-                case .profiles: ProfileSettingsView()
+                switch selection ?? .general {
+                case .general: GeneralSettingsView()
                 case .appearance: AppearanceSettingsView()
                 case .tabs: TabsSettingsView()
                 case .ai: ModelsSettingsView()
-                case .dev: DevSettingsView()
-                case .lunaMax: LunaMaxSettingsView()
-                case .personalization: PersonalizationSettingsView()
-                case .passwords: PasswordsSettingsView()
-                case .importData: BrowserImportView()
+                case .passwords: PasswordsImportView()
+                case .privacy: PersonalizationSettingsView()
                 case .extensions: ExtensionsSettingsView()
-                case .search: SearchSettingsView()
+                case .developer: DeveloperSettingsView()
                 case .about: AboutSettingsView()
                 }
             }
@@ -144,66 +139,204 @@ private struct SolidSidebarRow: View {
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
-    case profiles, appearance, tabs, passwords, importData = "import", extensions, ai, dev, lunaMax, personalization, search, about
+    case general, appearance, tabs, ai, passwords, privacy, extensions, developer, about
 
-    /// Panes this build shows: Dev only in the unsandboxed Luna Dev build.
-    static var available: [SettingsPane] {
-        allCases.filter { $0 != .dev || (DevMode.isDevBuild && DevMode.isAvailable) }
+    /// Panes this build shows. Developer is in both builds (Connect agents); its Dev mode part is Luna Dev only.
+    static var available: [SettingsPane] { allCases }
+
+    /// Pane names from before the settings rework (menus, scripts, `LUNA_SNAPSHOT_SETTINGS`, debug driver)
+    /// → the pane that holds those settings now.
+    static let legacyNames: [String: SettingsPane] = [
+        "profiles": .general,
+        "search": .general,
+        "import": .passwords,
+        "importData": .passwords,
+        "lunaMax": .ai,
+        "personalization": .privacy,
+        "dev": .developer,
+    ]
+
+    /// A pane by its name, old or new.
+    static func resolve(_ name: String) -> SettingsPane? {
+        SettingsPane(rawValue: name) ?? legacyNames[name]
+    }
+
+    /// The Passwords & Import tab an old pane name meant, if any.
+    static func passwordsTab(for name: String) -> PasswordsPaneTab? {
+        switch name {
+        case "import", "importData": return .importData
+        case SettingsPane.passwords.rawValue: return .passwords
+        default: return nil
+        }
     }
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .profiles: return "Profiles"
+        case .general: return "General"
         case .appearance: return "Appearance"
-        case .tabs: return "Tabs"
-        case .ai: return "AI & Models"
-        case .dev: return "Dev"
-        case .lunaMax: return "Luna Max"
-        case .personalization: return "Personalization"
-        case .passwords: return "Passwords"
-        case .importData: return "Import"
+        case .tabs: return "Tabs & Sidebar"
+        case .ai: return "AI"
+        case .passwords: return "Passwords & Import"
+        case .privacy: return "Privacy & Data"
         case .extensions: return "Extensions"
-        case .search: return "Search"
+        case .developer: return "Developer"
         case .about: return "About Luna"
         }
     }
 
     var icon: String {
         switch self {
-        case .profiles: return "person.crop.circle"
+        case .general: return "gearshape"
         case .appearance: return "paintbrush"
         case .tabs: return "square.on.square"
         case .ai: return "sparkles"
-        case .dev: return "chevron.left.forwardslash.chevron.right"
-        case .lunaMax: return "wand.and.stars"
-        case .personalization: return "slider.horizontal.3"
         case .passwords: return "key.fill"
-        case .importData: return "square.and.arrow.down"
+        case .privacy: return "hand.raised"
         case .extensions: return "puzzlepiece.extension"
-        case .search: return "magnifyingglass"
+        case .developer: return "chevron.left.forwardslash.chevron.right"
         case .about: return "info.circle"
+        }
+    }
+
+    /// Registry settings shown in this pane; their labels are searchable too.
+    var registryKeys: [String] {
+        switch self {
+        case .general: return ["search.engine", "search.suggestions"]
+        case .appearance: return ["layout.template", "appearance.theme", "appearance.liquidGlass", "tabs.layout",
+                                  "toolbar.visible", "bookmarksBar.visible", "chrome.autoHide", "chrome.alwaysShowTopBar",
+                                  "chrome.roundedFrame", "chrome.homeButton", "chrome.hideWindowButtons", "addressBar.centered",
+                                  "addressBar.minimalURL", "addressBar.loadingProgress", "startPage.showShortcuts"]
+        case .tabs: return ["tabs.unloadAfterMinutes"]
+        case .ai: return ["aiPanel.fontSize", "lunaMax.askOnPage", "lunaMax.linkPreviews", "lunaMax.tidyTitles",
+                          "lunaMax.tidyDownloads"]
+        case .passwords, .privacy, .extensions, .developer, .about: return []
         }
     }
 
     /// Words that find this pane from the search field.
     var keywords: [String] {
         switch self {
-        case .profiles: return ["profile", "account", "color", "window"]
-        case .appearance: return ["theme", "dark", "light", "layout", "sidebar", "compact", "dynamic", "classic",
-                                  "address", "url", "frameless", "frame", "home", "font", "text size", "toolbar", "bookmarks",
-                                  "wallpaper", "background", "shader", "moon"]
-        case .tabs: return ["memory", "unload", "sleep", "hibernate", "inactive"]
-        case .dev: return ["claude code", "codex", "harness", "cli", "terminal", "agent", "sync", "approval"]
-        case .ai: return ["model", "gemini", "ollama", "openai", "chatgpt", "anthropic", "claude", "api key"]
+        case .general: return ["default browser", "profile", "account", "window", "search engine", "suggestions",
+                               "welcome", "onboarding", "startup"]
+        case .appearance: return ["theme", "dark", "light", "layout", "template", "chrome", "custom", "customize", "sidebar",
+                                  "compact", "dynamic", "classic", "address", "url", "frameless", "frame", "auto-hide",
+                                  "home", "toolbar", "bookmarks", "wallpaper", "background", "shader", "moon", "glass",
+                                  "start page", "shortcuts"]
+        case .tabs: return ["tabs", "memory", "unload", "sleep", "hibernate", "inactive"]
+        case .ai: return ["model", "gemini", "ollama", "openai", "chatgpt", "anthropic", "claude", "api key", "luna max",
+                          "ask on page", "preview", "tidy", "rename", "downloads", "arc max", "folders", "jev",
+                          "computer use", "agent", "grab", "text size"]
+        case .passwords: return ["password", "login", "keychain", "autofill", "icloud", "touch id", "import", "chrome",
+                                 "firefox", "safari", "brave", "edge", "arc", "vivaldi", "1password", "csv",
+                                 "bookmarks", "history", "sync"]
+        case .privacy: return ["privacy", "usage", "data", "record", "personalization", "cookies", "site data",
+                               "history", "clear", "customize", "undo", "changes"]
         case .extensions: return ["extension", "add-on", "plugin", "chrome web store", "ublock", "adblock"]
-        case .passwords: return ["password", "login", "keychain", "autofill", "import", "touch id"]
-        case .importData: return ["import", "chrome", "firefox", "safari", "brave", "edge", "arc", "vivaldi", "bookmarks", "history", "sync"]
-        case .lunaMax: return ["ask on page", "preview", "tidy", "rename", "downloads", "arc max", "folders"]
-        case .personalization: return ["usage", "data", "privacy", "record", "agent", "customize", "undo", "changes"]
-        case .search: return ["suggestions", "search engine", "privacy"]
+        case .developer: return ["mcp", "connect agents", "port", "token", "claude code", "codex", "harness", "cli",
+                                 "terminal", "dev mode", "sync", "approval"]
         case .about: return ["version", "license"]
+        }
+    }
+
+    /// True when `query` (lowercased) names this pane, one of its keywords or one of its settings.
+    func matches(_ query: String) -> Bool {
+        title.lowercased().contains(query)
+            || keywords.contains { $0.contains(query) }
+            || registryKeys.contains { CustomizationRegistry.setting($0)?.title.lowercased().contains(query) ?? false }
+    }
+}
+
+// MARK: - General
+
+private struct GeneralSettingsView: View {
+    var body: some View {
+        Form {
+            DefaultBrowserSection()
+
+            Section {
+                RegistryPicker("search.engine")
+                RegistryToggle("search.suggestions")
+            } header: {
+                Text("Search")
+            }
+
+            ProfileSettingsSections()
+
+            Section {
+                LabeledContent("Welcome") {
+                    Button("Show Welcome Again") { OnboardingState.showAgain() }
+                }
+            } footer: {
+                Text("Walks you through Luna's layouts, AI and import again.").foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+private struct DefaultBrowserSection: View {
+    private let setting = DefaultBrowser.shared
+    @State private var isDefault = false
+    @State private var error: String?
+
+    var body: some View {
+        Section {
+            LabeledContent {
+                if !isDefault {
+                    Button("Make Luna Default") {
+                        Task {
+                            do { try await setting.makeDefault(); error = nil } catch { self.error = error.localizedDescription }
+                            isDefault = setting.isDefault
+                        }
+                    }
+                }
+            } label: {
+                Text("Default browser")
+                Text(isDefault ? "Luna opens your links." : "Another browser opens your links.")
+            }
+            if let error { Text(error).font(.callout).foregroundStyle(.red) }
+        }
+        .onAppear { isDefault = setting.isDefault }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            isDefault = setting.isDefault
+        }
+    }
+}
+
+// MARK: - Passwords & Import
+
+enum PasswordsPaneTab: String, CaseIterable, Identifiable {
+    case passwords, importData
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .passwords: return "Passwords"
+        case .importData: return "Import"
+        }
+    }
+}
+
+/// Settings → Passwords & Import: the vault and iCloud sync, and importing from other browsers.
+private struct PasswordsImportView: View {
+    @ObservedObject private var router = SettingsRouter.shared
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $router.passwordsTab) {
+                ForEach(PasswordsPaneTab.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .padding(.top, 12)
+            switch router.passwordsTab {
+            case .passwords: PasswordsSettingsView()
+            case .importData: BrowserImportView()
+            }
         }
     }
 }
@@ -211,101 +344,78 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
 // MARK: - Appearance
 
 private struct AppearanceSettingsView: View {
-    @AppStorage("luma_appearance") private var appearance: String = "system"
     @AppStorage(BrowserLayout.defaultsKey) private var layoutRaw: String = BrowserLayout.sidebar.rawValue
-    @AppStorage(ChromePrefs.centeredAddressBar) private var centeredAddressBar = false
-    @AppStorage(ChromePrefs.minimalURL) private var minimalURL = true
-    @AppStorage(ChromePrefs.addressBarProgress) private var addressBarProgress = true
-    @AppStorage(ChromePrefs.frameless) private var frameless = false
-    @AppStorage(ChromePrefs.alwaysShowTopBar) private var alwaysShowTopBar = false
-    @AppStorage(ChromePrefs.roundedFrame) private var roundedFrame = true
-    @AppStorage(ChromePrefs.showHomeButton) private var showHomeButton = false
-    @AppStorage(ChromePrefs.hideWindowButtons) private var hideWindowButtons = true
+    @AppStorage(LayoutTemplate.defaultsKey) private var templateRaw: String = LayoutTemplate.luna.rawValue
+    @AppStorage(ChromePrefs.frameless) private var autoHide = false
     @AppStorage(ChromePrefs.showToolbar) private var showToolbar = false
-    @AppStorage(ChromePrefs.showBookmarksBar) private var showBookmarksBar = false
-    @AppStorage("luma_ai_panel_font_size") private var aiPanelFontSize: Int = 13
-    @AppStorage(StartPagePrefs.showShortcuts) private var showShortcuts = true
-    @AppStorage(LiquidGlass.defaultsKey) private var liquidGlass = LiquidGlass.defaultValue
     @ObservedObject private var shortcutStore = ShortcutStore.shared
     @State private var confirmRemoveShortcuts = false
 
     private var layout: Binding<BrowserLayout> {
-        Binding(get: { BrowserLayout(stored: layoutRaw) }, set: { layoutRaw = $0.rawValue })
+        Binding(get: { BrowserLayout(stored: layoutRaw) },
+                set: { RegistrySettings.willChange("tabs.layout"); layoutRaw = $0.rawValue })
     }
+
+    private var onTemplate: Bool { (LayoutTemplate(rawValue: templateRaw) ?? .luna) != .luna }
 
     var body: some View {
         Form {
-            Section {
-                LunaPicker("Theme", selection: $appearance, options: [
-                    .init("system", "System"), .init("light", "Light"), .init("dark", "Dark"),
-                ])
-                Toggle("Liquid Glass", isOn: $liquidGlass)
-            } footer: {
-                Text("Off draws Luna's own solid surfaces and menus instead of translucent glass.")
-            }
-
             Section {
                 LayoutTemplatePicker()
             } header: {
                 Text("Layout template")
             } footer: {
-                Text("A template changes several settings at once. It shows in Recent AI changes, where you can undo it; switching back to Luna restores your settings exactly.")
-                    .font(.caption)
+                Text("A template changes several settings below at once; you can undo it in Privacy & Data → Recent AI changes.")
                     .foregroundStyle(.secondary)
             }
 
             Section {
-                LunaPicker("Browser layout", selection: layout,
-                           options: BrowserLayout.allCases.map { .init($0, $0.title) })
-                Text(layout.wrappedValue.summary)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                if layout.wrappedValue == .dynamic || layout.wrappedValue == .classic {
-                    Toggle("Centered address bar", isOn: $centeredAddressBar)
-                }
-                Toggle("Minimal URL in the address bar", isOn: $minimalURL)
-                Toggle("Show loading progress in the address bar", isOn: $addressBarProgress)
-            }
-
-            Section {
+                LunaPicker(RegistrySettings.setting("tabs.layout").title, subtitle: layout.wrappedValue.summary,
+                           selection: layout, options: BrowserLayout.allCases.map { .init($0, $0.title) })
                 if layout.wrappedValue == .sidebar {
-                    Toggle(isOn: $frameless) {
-                        Text("Auto-hide sidebar")
-                        Text("Hover the left edge of the window to show it.")
-                    }
-                } else {
-                    Toggle(isOn: $frameless) {
-                        Text("Frameless mode")
-                        Text("Hide the browser UI until you hover the window edge.")
-                    }
-                    Toggle("Always show the top bar", isOn: $alwaysShowTopBar)
-                        .disabled(!frameless)
-                }
-                Toggle(isOn: $hideWindowButtons) {
-                    Text("Hide window buttons with the bar")
-                    Text("The close, minimize and full-screen buttons disappear while the bar or sidebar is hidden.")
-                }
-                Toggle("Show a rounded frame around web contents", isOn: $roundedFrame)
-                if layout.wrappedValue == .sidebar {
-                    Toggle(isOn: $showToolbar) {
-                        Text("Show toolbar")
-                        Text("Back, forward, reload and the address field above the page.")
-                    }
+                    RegistryToggle("toolbar.visible")
                 }
                 if layout.wrappedValue != .sidebar || showToolbar {
-                    Toggle("Show home button", isOn: $showHomeButton)
+                    RegistryToggle("chrome.homeButton")
                 }
-                Toggle(isOn: $showBookmarksBar) {
-                    Text("Show bookmarks bar")
-                    Text("Add pages with ⋯ → Bookmark This Page.")
+                RegistryToggle("bookmarksBar.visible")
+                if layout.wrappedValue == .dynamic || layout.wrappedValue == .classic {
+                    RegistryToggle("addressBar.centered")
                 }
+                RegistryToggle("addressBar.minimalURL")
+                RegistryToggle("addressBar.loadingProgress")
+            } header: {
+                Text("Customize")
             }
 
             Section {
-                Toggle(isOn: $showShortcuts) {
-                    Text("Show shortcuts")
-                    Text("Your site tiles under the search bar on the start page.")
+                RegistryToggle("chrome.roundedFrame")
+                RegistryToggle("chrome.autoHide")
+                if autoHide && layout.wrappedValue != .sidebar {
+                    RegistryToggle("chrome.alwaysShowTopBar")
                 }
+                // The sidebar layout can hide the sidebar by hand too, so this applies there even without auto-hide.
+                if autoHide || layout.wrappedValue == .sidebar {
+                    RegistryToggle("chrome.hideWindowButtons")
+                }
+            } footer: {
+                Text(onTemplate
+                     ? "Changing anything under Customize switches the template to Custom and keeps your changes."
+                     : "These are your Custom layout. Choose a template above to try another look.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Section {
+                RegistryPicker("appearance.theme")
+                RegistryToggle("appearance.liquidGlass")
+            } header: {
+                Text("Theme")
+            }
+
+            WallpaperSettingsSection()
+
+            Section {
+                RegistryToggle("startPage.showShortcuts")
                 Button("Remove All Shortcuts…") { confirmRemoveShortcuts = true }
                     .disabled(shortcutStore.shortcuts.isEmpty)
             } header: {
@@ -315,106 +425,23 @@ private struct AppearanceSettingsView: View {
                                 isPresented: $confirmRemoveShortcuts) {
                 Button("Remove All", role: .destructive) { shortcutStore.removeAll() }
             }
-
-            WallpaperSettingsSection()
-
-            Section("AI panel") {
-                LabeledContent("Text size") {
-                    HStack {
-                        Slider(value: Binding(get: { Double(aiPanelFontSize) },
-                                              set: { aiPanelFontSize = Int($0.rounded()) }),
-                               in: 10...24, step: 1)
-                            .frame(width: 200)
-                        Text("\(aiPanelFontSize) pt")
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .frame(width: 44, alignment: .trailing)
-                    }
-                }
-            }
         }
         .formStyle(.grouped)
     }
 }
 
-// MARK: - Tabs
+// MARK: - Tabs & Sidebar
 
 private struct TabsSettingsView: View {
-    @AppStorage(TabHibernator.timeoutDefaultsKey) private var hibernateMinutes: Int = TabHibernator.defaultTimeoutMinutes
-
     var body: some View {
         Form {
             Section {
-                LunaPicker("Unload inactive tabs",
-                           subtitle: "Frees memory. Tabs playing media or using the camera or microphone stay loaded.",
-                           selection: $hibernateMinutes, options: [
-                               .init(0, "Never"), .init(15, "After 15 minutes"), .init(30, "After 30 minutes"),
-                               .init(60, "After 1 hour"), .init(120, "After 2 hours"),
-                           ])
-            }
-        }
-        .formStyle(.grouped)
-    }
-}
-
-// MARK: - Luna Max
-
-private struct LunaMaxSettingsView: View {
-    @AppStorage(LunaMaxPrefs.askOnPage) private var askOnPage = true
-    @AppStorage(LunaMaxPrefs.linkPreviews) private var linkPreviews = true
-    @AppStorage(LunaMaxPrefs.tidyTitles) private var tidyTitles = false
-    @AppStorage(LunaMaxPrefs.tidyDownloads) private var tidyDownloads = false
-
-    var body: some View {
-        Form {
-            Section {
-                Toggle(isOn: $askOnPage) {
-                    Text("Ask on Page")
-                    Text("Hold ⌘F, or press ⌘⇧F, to ask a question about the page you're on.")
-                }
-                Toggle(isOn: $linkPreviews) {
-                    Text("Link previews")
-                    Text("Hover over a link and press Shift to see a short summary of the page it opens.")
-                }
+                RegistryIntPicker("tabs.unloadAfterMinutes")
             } header: {
-                Text("When you ask")
-            }
-
-            Section {
-                Toggle(isOn: $tidyTitles) {
-                    Text("Tidy titles for pinned tabs")
-                    Text("Gives tabs a short name when you pin them or add them to Favorites.")
-                }
-                Toggle(isOn: $tidyDownloads) {
-                    Text("Tidy downloads")
-                    Text("Renames downloaded files so they're easier to find. You can undo it in Downloads.")
-                }
-            } header: {
-                Text("Automatic")
+                Text("Tabs")
             } footer: {
-                Text("Automatic features send tab titles or file names to your AI provider. Tidy Today is always available from the ✦ button on the Today divider in the sidebar.")
+                Text("Sidebar visibility, auto-hide and the tab layout are in Appearance → Customize.")
                     .foregroundStyle(.secondary)
-            }
-        }
-        .formStyle(.grouped)
-    }
-}
-
-// MARK: - Search
-
-private struct SearchSettingsView: View {
-    @AppStorage("luma_search_suggestions_enabled") private var searchSuggestionsEnabled: Bool = false
-    @AppStorage(SearchEngine.defaultsKey) private var engine = SearchEngine.google.rawValue
-
-    var body: some View {
-        Form {
-            Section {
-                LunaPicker("Search engine", selection: $engine,
-                           options: SearchEngine.allCases.map { .init($0.rawValue, $0.title) })
-                Toggle(isOn: $searchSuggestionsEnabled) {
-                    Text("Search suggestions")
-                    Text("Sends what you type in the address bar to the search engine to suggest queries.")
-                }
             }
         }
         .formStyle(.grouped)

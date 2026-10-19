@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Settings → Passwords: unlock with Touch ID, browse/copy/delete logins,
+/// Settings → Passwords & Import → Passwords: unlock with Touch ID, browse/copy/delete logins,
 /// and import Apple Passwords' CSV export.
 struct PasswordsSettingsView: View {
     @ObservedObject private var profileManager = ProfileManager.shared
@@ -114,7 +114,6 @@ struct PasswordsSettingsView: View {
                     Text("2. Choose File → Export All Passwords to File…, and save the CSV.")
                     Text("3. Click Import from Apple Passwords… above and pick that file.")
                     Text("4. Move the CSV to the Trash and empty it; it isn't encrypted.")
-                    Text("Chrome's password export (CSV) works the same way.")
                 }
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -122,7 +121,9 @@ struct PasswordsSettingsView: View {
                     Text(status).font(.callout)
                 }
             } header: {
-                Text("Import")
+                Text("Apple Passwords")
+            } footer: {
+                Text("For Chrome, Firefox and 1Password, use the Import tab.").foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

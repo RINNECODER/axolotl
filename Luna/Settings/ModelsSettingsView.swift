@@ -1,7 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Settings → AI & Models: choose a provider, sign in or add a key, pick a model.
+/// Settings → AI: choose a provider, sign in or add a key, pick a model; the AI panel, Luna Max
+/// features, computer use and grabbed keys.
 struct ModelsSettingsView: View {
     @AppStorage(AIProvider.defaultsKey) private var providerRaw: String = AIProvider.gemini.rawValue
 
@@ -27,9 +28,10 @@ struct ModelsSettingsView: View {
             case .ollama: OllamaSection()
             }
 
+            AIPanelSection()
+            LunaMaxSections()
             ComputerUseSection()
             GrabbedKeysSection()
-            ConnectAgentsSection()
         }
         .formStyle(.grouped)
     }
@@ -139,12 +141,122 @@ private struct OllamaSection: View {
 
     var body: some View {
         Section("Ollama") {
-            TextField("Server", text: $baseURL, prompt: Text("http://127.0.0.1:11434"))
-                .autocorrectionDisabled()
+            OllamaServerPicker(baseURL: $baseURL)
             ModelPicker(selection: $model) {
                 try await ModelCatalog.load(.ollama)
             }
             .id(baseURL)
+        }
+    }
+}
+
+/// Server pop-up: Ollama instances found on this Mac, the current server, and Custom… for any URL.
+private struct OllamaServerPicker: View {
+    @Binding var baseURL: String
+    @State private var detected: [String] = []
+    @State private var searched = false
+    @State private var editingCustom = false
+    @State private var draft = ""
+    private static let customTag = "luna.ollama.custom"
+
+    var body: some View {
+        let servers = detected + (detected.contains(baseURL) || baseURL.isEmpty ? [] : [baseURL])
+        LunaPicker("Server", subtitle: searched && detected.isEmpty ? "No running Ollama found on this Mac. Start Ollama, or choose Custom…" : nil,
+                   selection: Binding(get: { editingCustom ? Self.customTag : baseURL },
+                                      set: { value in
+                                          if value == Self.customTag { draft = baseURL; editingCustom = true }
+                                          else { editingCustom = false; baseURL = value }
+                                      }),
+                   options: servers.map { .init($0, label($0)) } + [.init(Self.customTag, "Custom…")])
+            .task {
+                detected = await OllamaDiscovery.running()
+                searched = true
+            }
+        if editingCustom {
+            HStack {
+                TextField("Server URL", text: $draft, prompt: Text(OllamaDiscovery.defaultURL))
+                    .autocorrectionDisabled()
+                    .onSubmit(applyCustom)
+                Button("Use", action: applyCustom).disabled(URL(string: draft)?.host == nil)
+            }
+        }
+    }
+
+    private func label(_ url: String) -> String {
+        let short = url.replacingOccurrences(of: "http://", with: "")
+        return detected.contains(url) ? "\(short) (running)" : short
+    }
+
+    private func applyCustom() {
+        let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard URL(string: trimmed)?.host != nil else { return }
+        baseURL = trimmed
+        editingCustom = false
+    }
+}
+
+/// Finds Ollama servers on this Mac by asking the usual local ports for `/api/version`.
+enum OllamaDiscovery {
+    static let defaultURL = "http://127.0.0.1:11434"
+    static let candidates = [11434, 11435, 11436].map { "http://127.0.0.1:\($0)" }
+
+    static func running(_ candidates: [String] = candidates) async -> [String] {
+        await withTaskGroup(of: (Int, String?).self) { group in
+            for (i, base) in candidates.enumerated() {
+                group.addTask {
+                    guard let url = URL(string: base + "/api/version") else { return (i, nil) }
+                    var request = URLRequest(url: url)
+                    request.timeoutInterval = 1
+                    let ok = (try? await URLSession.shared.data(for: request)).map { ($0.1 as? HTTPURLResponse)?.statusCode == 200 } ?? false
+                    return (i, ok ? base : nil)
+                }
+            }
+            var found: [(Int, String)] = []
+            for await (i, base) in group { if let base { found.append((i, base)) } }
+            return found.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+    }
+}
+
+// MARK: - AI panel and Luna Max
+
+private struct AIPanelSection: View {
+    @AppStorage("luma_ai_panel_font_size") private var fontSize: Int = 13
+
+    var body: some View {
+        Section("AI panel") {
+            LabeledContent(RegistrySettings.setting("aiPanel.fontSize").title) {
+                HStack {
+                    Slider(value: Binding(get: { Double(fontSize) }, set: { fontSize = Int($0.rounded()) }),
+                           in: 10...24, step: 1)
+                        .frame(width: 200)
+                    Text("\(fontSize) pt")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, alignment: .trailing)
+                }
+            }
+        }
+    }
+}
+
+/// Luna Max: AI features in the browser itself.
+private struct LunaMaxSections: View {
+    var body: some View {
+        Section {
+            RegistryToggle("lunaMax.askOnPage")
+            RegistryToggle("lunaMax.linkPreviews")
+        } header: {
+            Text("Luna Max")
+        }
+        Section {
+            RegistryToggle("lunaMax.tidyTitles")
+            RegistryToggle("lunaMax.tidyDownloads")
+        } header: {
+            Text("Luna Max: automatic")
+        } footer: {
+            Text("Automatic features send tab titles or file names to your AI provider. Tidy Today is always in the ✦ button on the sidebar's Today divider.")
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -211,82 +323,6 @@ private struct GrabbedKeysSection: View {
     }
 
     private func reload() { items = SecretVault.shared.items() }
-}
-
-/// "Connect agents": Luna's loopback MCP server for Claude Code, Codex and other MCP clients.
-private struct ConnectAgentsSection: View {
-    @AppStorage(LunaMCPBridge.enabledKey) private var enabled = false
-    @AppStorage(LunaMCPBridge.trustedKey) private var trusted = false
-    @AppStorage(LunaMCPBridge.portKey) private var port = LunaMCPBridge.defaultPort
-    @ObservedObject private var bridge = LunaMCPBridge.shared
-    @State private var portText = ""
-    @State private var copied: String?
-    @State private var confirmRegenerate = false
-
-    var body: some View {
-        Section("Connect agents") {
-            Toggle("Let agents drive Luna (MCP server)", isOn: $enabled)
-                .onChange(of: enabled) { _, _ in bridge.applySettings() }
-            LabeledContent("Port") {
-                TextField("Port", text: $portText, prompt: Text(String(LunaMCPBridge.defaultPort)))
-                    .frame(width: 80)
-                    .multilineTextAlignment(.trailing)
-                    .onSubmit(applyPort)
-            }
-            LabeledContent("Status") { Text(statusText).foregroundStyle(statusIsError ? .red : .secondary) }
-            Toggle("Don't ask before agents act (trusted)", isOn: $trusted)
-            HStack {
-                Button("Copy Claude Code command") { copy(bridge.claudeCommand, "Claude Code command") }
-                Button("Copy Codex config") { copy(bridge.codexConfig, "Codex config") }
-                Button("Copy token export") { copy(bridge.codexTokenExport, "token export") }
-            }
-            HStack {
-                Button("Regenerate token", role: .destructive) { confirmRegenerate = true }
-                if let copied { Text("Copied \(copied).").font(.callout).foregroundStyle(.secondary) }
-            }
-            Text("Outside agents get the same tools as /agent: tabs, navigate, snapshot, click, type, select, scroll, read, run_task and grab_api_key. Luna listens on 127.0.0.1 only and asks before an agent navigates, types, clicks or runs a task, once per agent session. For Codex, paste the config into ~/.codex/config.toml and set LUNA_MCP_TOKEN with the token export.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-        }
-        .onAppear { portText = String(port) }
-        .confirmationDialog("Regenerate the token?", isPresented: $confirmRegenerate) {
-            Button("Regenerate", role: .destructive) {
-                bridge.regenerateToken()
-                copied = nil
-            }
-        } message: {
-            Text("Connected agents stop working until you give them the new token.")
-        }
-    }
-
-    private var statusText: String {
-        switch bridge.status {
-        case .off: return "Off"
-        case .starting: return "Starting…"
-        case .running(let p): return "Listening on http://127.0.0.1:\(p)/mcp"
-        case .failed(let message): return message
-        }
-    }
-
-    private var statusIsError: Bool {
-        if case .failed = bridge.status { return true }
-        return false
-    }
-
-    private func applyPort() {
-        guard let value = Int(portText.trimmingCharacters(in: .whitespaces)), (1024...65535).contains(value) else {
-            portText = String(port)
-            return
-        }
-        port = value
-        if enabled { bridge.applySettings() }
-    }
-
-    private func copy(_ text: String, _ what: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        copied = what
-    }
 }
 
 // MARK: - Shared rows

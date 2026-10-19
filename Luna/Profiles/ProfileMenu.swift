@@ -60,16 +60,27 @@ enum ProfileIcons {
 final class SettingsRouter: ObservableObject {
     static let shared = SettingsRouter()
     @Published var requestedPane: SettingsPane?
+    /// The tab Settings → Passwords & Import shows.
+    @Published var passwordsTab: PasswordsPaneTab = .passwords
     nonisolated deinit {}
+
+    /// Opens a pane by name, including old pane names ("import", "lunaMax", …). Returns false for unknown names.
+    @discardableResult
+    func request(_ raw: String) -> Bool {
+        guard let pane = SettingsPane.resolve(raw) else { return false }
+        if let tab = SettingsPane.passwordsTab(for: raw) { passwordsTab = tab }
+        requestedPane = pane
+        return true
+    }
 }
 
-/// Opens Settings on the Profiles pane.
+/// Opens Settings on the General pane, where profiles live.
 struct ManageProfilesButton: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         Button("Manage Profiles…") {
-            SettingsRouter.shared.requestedPane = .profiles
+            SettingsRouter.shared.requestedPane = .general
             openSettings()
         }
     }
@@ -145,7 +156,7 @@ extension ProfileMenu {
             .button("New Profile…", icon: "person.badge.plus") {
                 if let profile = ProfileActions.createProfile(manager: manager) { onSwitch(profile) }
             },
-            .button("Manage Profiles…", icon: "person.2") { settings(.profiles) },
+            .button("Manage Profiles…", icon: "person.2") { settings(.general) },
         ]
         return entries
     }

@@ -48,7 +48,7 @@ enum DebugUIDriver {
             }
         case "pin": LunaMenuController.debugPinned = arg == "1"
         case "settings":
-            SettingsRouter.shared.requestedPane = SettingsPane(rawValue: arg)
+            SettingsRouter.shared.request(arg)
             NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         case "glass": UserDefaults.standard.set(arg == "1", forKey: LiquidGlass.defaultsKey)
         case "appearance": UserDefaults.standard.set(arg, forKey: "luma_appearance")

@@ -1,12 +1,12 @@
 import SwiftUI
 
-/// Settings → Profiles: rename, recolor, add and delete profiles.
-struct ProfileSettingsView: View {
+/// Settings → General → Profiles: rename, recolor, add and delete profiles. Sections for a Settings form.
+struct ProfileSettingsSections: View {
     @ObservedObject private var profileManager = ProfileManager.shared
     @State private var pendingDelete: BrowserProfile?
 
     var body: some View {
-        Form {
+        Group {
             Section {
                 ForEach(profileManager.profiles) { profile in
                     ProfileRow(
@@ -15,6 +15,8 @@ struct ProfileSettingsView: View {
                         onDelete: { pendingDelete = profile }
                     )
                 }
+            } header: {
+                Text("Profiles")
             } footer: {
                 Text("Each profile keeps its own cookies, logins, history, tabs and AI chats, like a separate browser.")
                     .foregroundStyle(.secondary)
@@ -26,7 +28,6 @@ struct ProfileSettingsView: View {
                 }
             }
         }
-        .formStyle(.grouped)
         .confirmationDialog(
             "Delete “\(pendingDelete?.name ?? "")”?",
             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),

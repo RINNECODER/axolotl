@@ -1,6 +1,7 @@
 import SwiftUI
+import WebKit
 
-/// Settings → Personalization: the opt-in usage record, and the AI changes made with it.
+/// Settings → Privacy & Data: the opt-in usage record, browsing data, and the AI changes made with it.
 struct PersonalizationSettingsView: View {
     @AppStorage(PersonalizationPrefs.enabledKey) private var enabled = false
     @AppStorage(PersonalizationPrefs.retentionKey) private var retention = PersonalizationPrefs.defaultRetention
@@ -9,6 +10,10 @@ struct PersonalizationSettingsView: View {
     @State private var showData = false
     @State private var confirmDelete = false
     @State private var undoError: String?
+    @State private var confirmClearSiteData = false
+    @State private var siteDataStatus: String?
+    @State private var dataProfileId = ProfileManager.shared.lastActiveProfileId
+    @ObservedObject private var profileManager = ProfileManager.shared
 
     var body: some View {
         Form {
@@ -29,9 +34,27 @@ struct PersonalizationSettingsView: View {
                             .disabled(usage.isEmpty)
                     }
                 }
+            } header: {
+                Text("Personalization")
             } footer: {
                 Text("Off by default, and nothing is recorded while it's off. Agents change Luna only through its typed settings and tab tools — never code — and you approve each change.")
                     .foregroundStyle(.secondary)
+            }
+
+            Section {
+                if profileManager.profiles.count > 1 {
+                    LunaPicker("Profile", selection: $dataProfileId,
+                               options: profileManager.profiles.map { .init($0.id, $0.name) })
+                }
+                LabeledContent("Cookies and site data") {
+                    Button("Clear…", role: .destructive) { confirmClearSiteData = true }
+                }
+                LabeledContent("History") {
+                    Text("Clear it from History (⌘Y) in a browser window.").foregroundStyle(.secondary)
+                }
+                if let siteDataStatus { Text(siteDataStatus).font(.callout).foregroundStyle(.secondary) }
+            } header: {
+                Text("Browsing data")
             }
 
             Section {
@@ -52,6 +75,12 @@ struct PersonalizationSettingsView: View {
         .formStyle(.grouped)
         .onChange(of: retention) { _, _ in usage.prune() }
         .sheet(isPresented: $showData) { UsageDataSheet(usage: usage) }
+        .confirmationDialog("Clear cookies and site data for \(profileManager.profile(for: dataProfileId).name)?",
+                            isPresented: $confirmClearSiteData) {
+            Button("Clear", role: .destructive, action: clearSiteData)
+        } message: {
+            Text("Signs you out of websites in this profile. Saved passwords and history are kept.")
+        }
         .confirmationDialog("Delete the usage record?", isPresented: $confirmDelete) {
             Button("Delete All", role: .destructive) { usage.deleteAll() }
         } message: {
@@ -61,6 +90,13 @@ struct PersonalizationSettingsView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(undoError ?? "")
+        }
+    }
+
+    private func clearSiteData() {
+        let store = ProfileManager.shared.dataStore(for: dataProfileId)
+        store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {
+            siteDataStatus = "Cookies and site data cleared."
         }
     }
 }
