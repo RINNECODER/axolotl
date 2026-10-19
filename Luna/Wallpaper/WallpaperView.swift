@@ -59,7 +59,7 @@ private struct WallpaperWebViewRepresentable: NSViewRepresentable {
 }
 
 /// Talks to `window.lunaWallpaper`, queuing calls until the page has loaded.
-final class WallpaperBridge: NSObject, WKScriptMessageHandler {
+final class WallpaperBridge: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     weak var webView: WKWebView?
     private var loaded = false
     private var config: WallpaperRenderConfig?
@@ -67,6 +67,36 @@ final class WallpaperBridge: NSObject, WKScriptMessageHandler {
     private var sentConfig: WallpaperRenderConfig?
     private var sentActive: Bool?
     var onState: ((String) -> Void)?
+    private var crashCount = 0
+    static let maxReloads = 3
+
+    /// Only the initial `luna-wallpaper` page load is allowed; everything else is cancelled.
+    static func allowsNavigation(to url: URL?, isMainFrame: Bool?) -> Bool {
+        guard isMainFrame ?? false else { return false }
+        return url.map { WallpaperSchemeHandler.fileURL(for: $0) != nil } ?? false
+    }
+
+    /// Seconds to wait before reload attempt `n` (1-based); nil once we give up.
+    static func reloadDelay(attempt n: Int) -> TimeInterval? {
+        n >= 1 && n <= maxReloads ? 0.5 * pow(2, Double(n - 1)) : nil
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        decisionHandler(Self.allowsNavigation(to: action.request.url, isMainFrame: action.targetFrame?.isMainFrame) ? .allow : .cancel)
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        crashCount += 1
+        loaded = false
+        guard let delay = Self.reloadDelay(attempt: crashCount), let url = webView.url else {
+            onState?("fallback")
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak webView] in
+            webView?.load(URLRequest(url: url))
+        }
+    }
 
     func update(config: WallpaperRenderConfig?, mode: WallpaperActivity.Mode) {
         var config = config
@@ -147,8 +177,11 @@ enum WallpaperWeb {
         webView.allowsMagnification = false
         webView.allowsBackForwardNavigationGestures = false
         webView.setAccessibilityElement(false)
-        prepareRules { list in
-            if let list { config.userContentController.add(list) }
+        webView.navigationDelegate = bridge
+        prepareRules { [weak webView, weak bridge] list in
+            // Never load without the no-network rules; show the static fallback instead.
+            guard let list, let webView else { bridge?.onState?("fallback"); return }
+            config.userContentController.add(list)
             webView.load(URLRequest(url: page.url))
         }
         return webView
@@ -176,11 +209,13 @@ private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
 final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
     static let folder: URL? = Bundle.main.resourceURL?.appendingPathComponent("WallpaperWeb", isDirectory: true)
 
+    /// The only files the pages may load.
+    static let allowedFiles: Set<String> = ["index.html", "moon.html", "wallpaper.js", "moon.js", "shaders.js"]
+
     static func fileURL(for url: URL) -> URL? {
         guard url.scheme == WallpaperWeb.scheme, url.host == "app", let folder else { return nil }
-        let name = url.lastPathComponent
-        guard !name.isEmpty, !name.hasPrefix("."), url.pathComponents.count == 2 else { return nil }
-        return folder.appendingPathComponent(name)
+        guard url.pathComponents.count == 2, allowedFiles.contains(url.pathComponents[1]) else { return nil }
+        return folder.appendingPathComponent(url.pathComponents[1])
     }
 
     private static func mimeType(_ ext: String) -> String {

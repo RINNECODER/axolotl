@@ -80,4 +80,30 @@ final class WallpaperTests: XCTestCase {
         activity.isOnScreen = false
         XCTAssertEqual(activity.mode, .paused)
     }
+
+    func testSchemeHandlerServesOnlyAllowlistedFiles() {
+        func url(_ s: String) -> URL { URL(string: s)! }
+        XCTAssertNotNil(WallpaperSchemeHandler.fileURL(for: url("luna-wallpaper://app/index.html")))
+        XCTAssertNotNil(WallpaperSchemeHandler.fileURL(for: url("luna-wallpaper://app/shaders.js")))
+        XCTAssertNil(WallpaperSchemeHandler.fileURL(for: url("luna-wallpaper://app/..%2FInfo.plist")))
+        XCTAssertNil(WallpaperSchemeHandler.fileURL(for: url("luna-wallpaper://app/%2Fetc%2Fpasswd")))
+        XCTAssertNil(WallpaperSchemeHandler.fileURL(for: url("luna-wallpaper://app/LICENSE-shaders.txt")))
+        XCTAssertNil(WallpaperSchemeHandler.fileURL(for: url("luna-wallpaper://other/index.html")))
+        XCTAssertNil(WallpaperSchemeHandler.fileURL(for: url("https://app/index.html")))
+    }
+
+    func testNavigationPolicyAllowsOnlyBundledSchemePagesInMainFrame() {
+        let page = URL(string: "luna-wallpaper://app/moon.html")
+        XCTAssertTrue(WallpaperBridge.allowsNavigation(to: page, isMainFrame: true))
+        XCTAssertFalse(WallpaperBridge.allowsNavigation(to: page, isMainFrame: nil), "new windows have no target frame")
+        XCTAssertFalse(WallpaperBridge.allowsNavigation(to: URL(string: "https://example.com"), isMainFrame: true))
+        XCTAssertFalse(WallpaperBridge.allowsNavigation(to: URL(string: "luna-wallpaper://app/secret.txt"), isMainFrame: true))
+        XCTAssertFalse(WallpaperBridge.allowsNavigation(to: nil, isMainFrame: true))
+    }
+
+    func testReloadBackoffGrowsThenGivesUp() {
+        XCTAssertEqual(WallpaperBridge.reloadDelay(attempt: 1), 0.5)
+        XCTAssertEqual(WallpaperBridge.reloadDelay(attempt: 2), 1)
+        XCTAssertNil(WallpaperBridge.reloadDelay(attempt: WallpaperBridge.maxReloads + 1))
+    }
 }
