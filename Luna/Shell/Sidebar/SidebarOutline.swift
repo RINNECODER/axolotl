@@ -575,6 +575,14 @@ final class SidebarOutlineView: NSOutlineView {
         if !onDisclosure { onRowClick?(row) }
     }
 
+    /// Right-click: the rows' NSMenu (filled by the coordinator) is shown as a Luna menu.
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let menu = super.menu(for: event) else { return nil }
+        let entries = LunaMenuEntry.from(menu)
+        if !entries.isEmpty { presentLunaContextMenu({ entries }, for: event, in: self) }
+        return nil
+    }
+
     // No focus ring / key-view highlight: the sidebar isn't a text target.
     override var acceptsFirstResponder: Bool { false }
 }

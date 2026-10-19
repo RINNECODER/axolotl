@@ -1,45 +1,39 @@
-// Extensions in the ⋯ menu, and the Manage Extensions shortcut.
+// Extensions in the ⋯ menu, and the Manage Extensions shortcut (Luna menu rows).
 import SwiftUI
 import WebKit
 
-/// Opens Settings on the Extensions pane.
-struct ManageExtensionsButton: View {
-    @Environment(\.openSettings) private var openSettings
+/// Opens Settings on a pane (Luna menus run outside SwiftUI's environment, so
+/// they take this from the view that builds them).
+struct LunaSettingsOpener {
+    let openSettings: OpenSettingsAction
 
-    var body: some View {
-        Button("Manage Extensions…") {
-            SettingsRouter.shared.requestedPane = .extensions
-            openSettings()
-        }
+    func callAsFunction(_ pane: SettingsPane? = nil) {
+        if let pane { SettingsRouter.shared.requestedPane = pane }
+        openSettings()
     }
 }
 
-/// Extensions as menu items: each runs its action (popups open from the ⋯
-/// button), then "Manage Extensions…".
-struct ExtensionsMenuItems: View {
-    @ObservedObject var host: ExtensionHost
-
-    var body: some View {
-        let _ = host.actionRevision
+enum ExtensionMenuEntries {
+    /// "Extensions ›" with each extension's action, then "Manage Extensions…";
+    /// just "Manage Extensions…" when none are installed.
+    @MainActor
+    static func build(host: ExtensionHost, settings: LunaSettingsOpener, icon: String? = nil) -> [LunaMenuEntry] {
+        let manage = LunaMenuEntry.button("Manage Extensions…", icon: host.loaded.isEmpty ? icon : nil) {
+            settings(.extensions)
+        }
         let loaded = host.loaded
-        if loaded.isEmpty {
-            ManageExtensionsButton()
-        } else {
-            Menu("Extensions") {
-                ForEach(loaded, id: \.record.id) { item in
-                    Button { host.performAction(item.context) } label: {
-                        let action = item.context.action(for: host.activeTabAdapter)
-                        if let icon = action?.icon(for: CGSize(width: 16, height: 16)) ?? item.context.webExtension.icon(for: CGSize(width: 16, height: 16)) {
-                            Label { Text(item.record.name) } icon: { Image(nsImage: icon) }
-                        } else {
-                            Text(item.record.name)
-                        }
-                    }
-                }
-                Divider()
-                ManageExtensionsButton()
+        guard !loaded.isEmpty else { return [manage] }
+        var children: [LunaMenuEntry] = loaded.map { item in
+            let action = item.context.action(for: host.activeTabAdapter)
+            let image = action?.icon(for: CGSize(width: 16, height: 16))
+                ?? item.context.webExtension.icon(for: CGSize(width: 16, height: 16))
+            return .button(item.record.name, image: image, id: "ext.\(item.record.id)") {
+                host.performAction(item.context)
             }
         }
+        children.append(.divider("ext.sep"))
+        children.append(manage)
+        return [.submenu("Extensions", icon: icon, children)]
     }
 }
 

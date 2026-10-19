@@ -48,31 +48,7 @@ struct PanelModelMenu: View {
     private var provider: AIProvider { AIProvider(rawValue: providerRaw) ?? .gemini }
 
     var body: some View {
-        Menu {
-            Section(provider.displayName) {
-                if let list = models[provider], !list.isEmpty {
-                    ForEach(list, id: \.id) { m in
-                        Toggle(m.name, isOn: Binding(
-                            get: { m.id == currentModel },
-                            set: { if $0 { select(m.id) } }
-                        ))
-                    }
-                } else if let error = loadError[provider] {
-                    Text(error)
-                } else {
-                    Text("Loading models…")
-                }
-            }
-            Menu("Provider") {
-                Picker("Provider", selection: $providerRaw) {
-                    ForEach(AIProvider.allCases) { Text($0.displayName).tag($0.rawValue) }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            }
-            Divider()
-            Button("Model Settings…", action: onOpenSettings)
-        } label: {
+        LunaMenuButton(minWidth: 220, debugID: "ai.model", items: { menuEntries }) { _ in
             // The header's model line, as before, now opening the model list.
             HStack(spacing: 3) {
                 Text(headerLabel).lineLimit(1).truncationMode(.middle)
@@ -82,13 +58,28 @@ struct PanelModelMenu: View {
             .foregroundStyle(.secondary)
             .contentShape(Rectangle())
         }
-        .chatMenuStyle()
+        .fixedSize()
         .help("Choose the model")
         .accessibilityLabel("Model: \(label)")
         .task(id: providerRaw) {
             currentModel = LLMService.shared.modelName
             await load(provider)
         }
+    }
+
+    private var menuEntries: [LunaMenuEntry] {
+        var entries: [LunaMenuEntry] = [.header(provider.displayName)]
+        if let list = models[provider], !list.isEmpty {
+            entries += list.map { m in
+                .button(m.name, id: "model.\(m.id)", checked: m.id == currentModel) { select(m.id) }
+            }
+        } else {
+            entries.append(.button(loadError[provider] ?? "Loading models…", enabled: false) {})
+        }
+        entries.append(.submenu("Provider", LunaMenuEntry.options(
+            AIProvider.allCases.map { ($0.rawValue, $0.displayName) }, selection: providerRaw) { providerRaw = $0 }))
+        entries += [.divider("m1"), .button("Model Settings…", action: onOpenSettings)]
+        return entries
     }
 
     private var label: String {

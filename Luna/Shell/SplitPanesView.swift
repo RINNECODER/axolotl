@@ -112,7 +112,7 @@ private struct SplitPane<Content: View>: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
                             .frame(width: 26, height: 22)
-                            .background(Capsule(style: .continuous).fill(.regularMaterial))
+                            .background(LunaMaterialFill(shape: Capsule(style: .continuous)))
                             .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)

@@ -32,10 +32,7 @@ enum LunaType {
 /// Dark under-window material with a near-opaque wash (the start page backdrop).
 struct ChatSurfaceBackground: View {
     var body: some View {
-        ZStack {
-            VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow, state: .active)
-            startPageGlassTint.opacity(startPageGlassTintOpacity)
-        }
+        StartPageBackdrop()
     }
 }
 
@@ -380,13 +377,6 @@ struct ChatMenuLabel: View {
         .padding(.vertical, 4)
         .background(Capsule().fill(Color.white.opacity(0.06)))
         .contentShape(Capsule())
-    }
-}
-
-extension View {
-    /// Plain pull-down menu around a `ChatMenuLabel`.
-    func chatMenuStyle() -> some View {
-        self.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden).fixedSize()
     }
 }
 

@@ -144,8 +144,7 @@ struct SmartSearchView: View {
     /// like Notes/Music/Xcode. Depth comes from the material, not from color.
     private var background: some View {
         ZStack {
-            VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow, state: .active)
-            startPageGlassTint.opacity(startPageGlassTintOpacity)
+            StartPageBackdrop()
             if wallpaper.preset != .none {
                 WallpaperView(config: wallpaper.renderConfig(still: false))
                 wallpaperScrim
@@ -291,8 +290,8 @@ struct SmartSearchView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.ultraThinMaterial)
+            LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 10, style: .continuous),
+                             material: .ultraThinMaterial, solid: Color(lunaHex: 0x232326), strokesWhenSolid: false)
         )
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -468,7 +467,7 @@ struct SmartSearchView: View {
 
             HStack(alignment: .bottom, spacing: 0) {
                 ChatAddContextButton(isActive: addContextFromChat) { addContextFromChat.toggle() }
-                .popover(isPresented: $addContextFromChat, arrowEdge: .top) { addContextPopover(dismiss: { addContextFromChat = false }) }
+                .lunaPopover(isPresented: $addContextFromChat, arrowEdge: .top) { addContextPopover(dismiss: { addContextFromChat = false }) }
                 .padding(.bottom, 3)
 
                 SmartGrowingInput(
@@ -573,7 +572,7 @@ struct SmartSearchView: View {
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .popover(isPresented: $addContextFromCard, arrowEdge: .bottom) { addContextPopover(dismiss: { addContextFromCard = false }) }
+                .lunaPopover(isPresented: $addContextFromCard, arrowEdge: .bottom) { addContextPopover(dismiss: { addContextFromCard = false }) }
 
                 Spacer()
 

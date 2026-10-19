@@ -55,20 +55,12 @@ struct DevSettingsView: View {
                         }
                     }
                 }
-                Picker("Density", selection: $settings.density) {
-                    ForEach(DevDensity.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                Picker("Text size", selection: $settings.fontScale) {
-                    ForEach(DevFontScale.allCases, id: \.self) { scale in
-                        Text(scale == .small ? "S" : scale == .medium ? "M" : "L").tag(scale)
-                    }
-                }
-                .pickerStyle(.segmented)
-                Picker("Timeline style", selection: $settings.timelineStyle) {
-                    ForEach(DevTimelineStyle.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
-                }
-                .pickerStyle(.segmented)
+                LunaSegmentedPicker("Density", selection: $settings.density,
+                                    options: DevDensity.allCases.map { .init($0, $0.rawValue.capitalized) })
+                LunaSegmentedPicker("Text size", selection: $settings.fontScale,
+                                    options: DevFontScale.allCases.map { .init($0, $0 == .small ? "S" : $0 == .medium ? "M" : "L") })
+                LunaSegmentedPicker("Timeline style", selection: $settings.timelineStyle,
+                                    options: DevTimelineStyle.allCases.map { .init($0, $0.rawValue.capitalized) })
                 Toggle(isOn: $settings.showToolDetails) {
                     Text("Show tool details")
                     Text("Show tool inputs and outputs in work rows.")
@@ -155,18 +147,13 @@ struct DevSettingsView: View {
                         }
                     }
                 }
-                Picker("Approval", selection: $settings.defaultSetup.approvalBehavior) {
-                    ForEach(DevApprovalBehavior.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                }
-                .pickerStyle(.segmented)
+                LunaSegmentedPicker("Approval", selection: $settings.defaultSetup.approvalBehavior,
+                                    options: DevApprovalBehavior.allCases.map { .init($0, $0.displayName) })
                 LabeledContent("Project") {
                     HStack(spacing: 8) {
-                        Picker("Project", selection: specificProjectBinding) {
-                            Text("Last used").tag(false)
-                            Text("Specific folder").tag(true)
-                        }
+                        LunaSegmentedPicker("Project", selection: specificProjectBinding,
+                                            options: [.init(false, "Last used"), .init(true, "Specific folder")])
                         .labelsHidden()
-                        .pickerStyle(.segmented)
                         .fixedSize()
                         if case .specific(let path) = settings.defaultSetup.project {
                             Button((path as NSString).abbreviatingWithTildeInPath) {
@@ -196,15 +183,8 @@ struct DevSettingsView: View {
             }
 
             Section {
-                Picker(selection: $settings.approvalBehavior) {
-                    ForEach(DevApprovalBehavior.allCases, id: \.self) { behavior in
-                        Text(behavior.displayName).tag(behavior)
-                    }
-                } label: {
-                    Text("Approvals")
-                    Text(approvalCaption)
-                }
-                .pickerStyle(.segmented)
+                LunaSegmentedPicker("Approvals", subtitle: approvalCaption, selection: $settings.approvalBehavior,
+                                    options: DevApprovalBehavior.allCases.map { .init($0, $0.displayName) })
                 if settings.approvalBehavior == .fullAuto {
                     Label {
                         Text("Full auto runs every command and edit without asking: Claude Code uses bypassPermissions and Codex runs with no sandbox (danger-full-access). Only use it in projects you can afford to lose.")

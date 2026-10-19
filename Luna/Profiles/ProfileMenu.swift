@@ -97,28 +97,54 @@ struct ProfileMenu: View {
     let onSwitch: (BrowserProfile) -> Void
     let onOpenInNewWindow: (BrowserProfile) -> Void
 
+    @Environment(\.openSettings) private var openSettings
+
     private var active: BrowserProfile { profileManager.profile(for: activeProfileId) }
 
     var body: some View {
-        Menu {
-            ProfileMenuItems(
-                profileManager: profileManager,
-                activeProfileId: activeProfileId,
-                onSwitch: onSwitch,
-                onOpenInNewWindow: onOpenInNewWindow
-            )
-        } label: {
+        LunaMenuButton(alignment: .trailing, minWidth: 240, debugID: "profile", items: { entries }) { _ in
             Image(nsImage: ProfileAvatar.image(for: active, size: 20))
+                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
         .fixedSize()
         .help("Profile: \(active.name)")
         .accessibilityLabel("Profile \(active.name)")
     }
 }
 
-/// Menu items shared by the avatar menu and the menu bar's Profiles menu.
+extension ProfileMenu {
+    /// The avatar menu: profiles (checked = this window's), open one in a new window,
+    /// then new / manage.
+    @MainActor
+    var entries: [LunaMenuEntry] {
+        let manager = profileManager
+        var entries: [LunaMenuEntry] = [.header("Profiles")]
+        for profile in manager.profiles {
+            entries.append(.item(LunaMenuItem(id: "profile.\(profile.id)", title: profile.name,
+                                              icon: .image(ProfileAvatar.image(for: profile, size: 16)),
+                                              isChecked: profile.id == activeProfileId,
+                                              action: { onSwitch(profile) })))
+        }
+        if manager.profiles.count > 1 {
+            entries.append(.submenu("Open in New Window", icon: "macwindow.badge.plus", manager.profiles.map { profile in
+                .button(profile.name, image: ProfileAvatar.image(for: profile, size: 16), id: "window.\(profile.id)") {
+                    onOpenInNewWindow(profile)
+                }
+            }))
+        }
+        let settings = LunaSettingsOpener(openSettings: openSettings)
+        entries += [
+            .divider("p1"),
+            .button("New Profile…", icon: "person.badge.plus") {
+                if let profile = ProfileActions.createProfile(manager: manager) { onSwitch(profile) }
+            },
+            .button("Manage Profiles…", icon: "person.2") { settings(.profiles) },
+        ]
+        return entries
+    }
+}
+
+/// Menu items for the menu bar's Profiles menu (the system menu bar stays native).
 struct ProfileMenuItems: View {
     @ObservedObject var profileManager: ProfileManager
     let activeProfileId: UUID?

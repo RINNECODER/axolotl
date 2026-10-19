@@ -34,7 +34,8 @@ final class LayoutTemplateTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: BrowserLayout.defaultsKey), "sidebar", file: file, line: line)
         XCTAssertEqual(defaults.object(forKey: ChromePrefs.roundedFrame) as? Bool, true, file: file, line: line)
         XCTAssertEqual(defaults.object(forKey: ChromePrefs.minimalURL) as? Bool, false, file: file, line: line)
-        for key in [ChromePrefs.showBookmarksBar, ChromePrefs.showHomeButton, ChromePrefs.showToolbar, "luna_sidebar_visible"] {
+        for key in [ChromePrefs.showBookmarksBar, ChromePrefs.showHomeButton, ChromePrefs.showToolbar, "luna_sidebar_visible",
+                    LiquidGlass.defaultsKey] {
             XCTAssertNil(defaults.object(forKey: key), "\(key) was never set and must be unset again", file: file, line: line)
         }
         XCTAssertNil(defaults.object(forKey: LayoutTemplate.defaultsKey), file: file, line: line)
@@ -47,6 +48,7 @@ final class LayoutTemplateTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: BrowserLayout.defaultsKey), "classic")
         XCTAssertEqual(defaults.object(forKey: ChromePrefs.showBookmarksBar) as? Bool, true)
         XCTAssertEqual(defaults.object(forKey: ChromePrefs.roundedFrame) as? Bool, false)
+        XCTAssertEqual(defaults.object(forKey: LiquidGlass.defaultsKey) as? Bool, false, "Chrome draws solid surfaces")
         XCTAssertEqual(customizer.currentValue("layout.template"), "chrome")
 
         // Changes made while on Chrome don't leak into the restored Luna setup.
@@ -70,6 +72,16 @@ final class LayoutTemplateTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: BrowserLayout.defaultsKey), "classic")
         _ = try setTemplate("luna")
         assertLunaSetup()
+    }
+
+    func testLiquidGlassIsAToggleableSettingThatDefaultsOn() throws {
+        XCTAssertEqual(customizer.currentValue("appearance.liquidGlass"), .bool(true))
+        _ = try customizer.apply(CustomizationPlan(settings: [SettingChange(key: "appearance.liquidGlass", value: .bool(false))]),
+                                 context: nil, source: "test")
+        XCTAssertEqual(defaults.object(forKey: LiquidGlass.defaultsKey) as? Bool, false)
+        XCTAssertThrowsError(try customizer.apply(
+            CustomizationPlan(settings: [SettingChange(key: "appearance.liquidGlass", value: .string("off"))]),
+            context: nil, source: "test"))
     }
 
     func testRegistryValidatesLayoutTemplate() {

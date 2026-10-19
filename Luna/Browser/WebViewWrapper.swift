@@ -800,6 +800,12 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         setZoom(max(current - zoomStep, zoomMin), for: id)
     }
 
+    /// The tab's zoom (1.0 = 100%).
+    func zoomLevel(_ tabId: UUID?) -> CGFloat {
+        guard let id = tabId ?? activeTab else { return 1 }
+        return zoomByTab[id] ?? 1.0
+    }
+
     func zoomReset(_ tabId: UUID?) {
         guard let id = tabId ?? activeTab else { return }
         setZoom(1.0, for: id)

@@ -22,7 +22,25 @@ struct SettingsView: View {
         }
     }
 
+    @AppStorage(LiquidGlass.defaultsKey) private var liquidGlass = LiquidGlass.defaultValue
+
     var body: some View {
+        Group {
+            if liquidGlass { nativeLayout } else { solidLayout }
+        }
+        .frame(minWidth: 760, idealWidth: 820, minHeight: 520, idealHeight: 600)
+        .onChange(of: query) { _, _ in
+            if let selection, !visiblePanes.contains(selection) { self.selection = visiblePanes.first }
+        }
+        .onReceive(SettingsRouter.shared.$requestedPane.compactMap { $0 }) { pane in
+            query = ""
+            selection = pane
+            SettingsRouter.shared.requestedPane = nil
+        }
+    }
+
+    /// System Settings style split view (Liquid Glass sidebar on macOS 26).
+    private var nativeLayout: some View {
         NavigationSplitView {
             List(visiblePanes, selection: $selection) { pane in
                 Label(pane.title, systemImage: pane.icon)
@@ -30,10 +48,51 @@ struct SettingsView: View {
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 240)
             .searchable(text: $query, placement: .sidebar, prompt: "Search settings")
-            .onChange(of: query) { _, _ in
-                if let selection, !visiblePanes.contains(selection) { self.selection = visiblePanes.first }
-            }
         } detail: {
+            detail.navigationTitle((selection ?? .appearance).title)
+        }
+    }
+
+    /// Liquid Glass off: the same sidebar and panes on Luna's solid surfaces.
+    private var solidLayout: some View {
+        HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass").font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    TextField("Search settings", text: $query).textFieldStyle(.plain).font(.system(size: 12.5))
+                }
+                .padding(.horizontal, 8)
+                .frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(LunaSurface.raised))
+                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(LunaSurface.stroke))
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(visiblePanes) { pane in
+                            SolidSidebarRow(pane: pane, isSelected: (selection ?? .appearance) == pane) { selection = pane }
+                        }
+                    }
+                }
+                .scrollIndicators(.never)
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 38)
+            .frame(width: 210)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(LunaSurface.sidebar)
+            Rectangle().fill(LunaSurface.stroke).frame(width: 1)
+            VStack(alignment: .leading, spacing: 0) {
+                Text((selection ?? .appearance).title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .padding(.horizontal, 20)
+                    .frame(height: 38, alignment: .center)
+                detail
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }
+        .ignoresSafeArea(.container, edges: .top)
+    }
+
+    private var detail: some View {
             Group {
                 switch selection ?? .appearance {
                 case .profiles: ProfileSettingsView()
@@ -49,14 +108,37 @@ struct SettingsView: View {
                 case .about: AboutSettingsView()
                 }
             }
-            .navigationTitle((selection ?? .appearance).title)
+    }
+}
+
+/// A settings sidebar row on the solid layout.
+private struct SolidSidebarRow: View {
+    let pane: SettingsPane
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: pane.icon)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(isSelected ? Color.white : Color.accentColor)
+                    .frame(width: 18)
+                Text(pane.title)
+                    .font(.system(size: 13))
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(isSelected ? Color.accentColor : (hovering ? LunaSurface.hover : .clear)))
+            .contentShape(Rectangle())
         }
-        .frame(minWidth: 760, idealWidth: 820, minHeight: 520, idealHeight: 600)
-        .onReceive(SettingsRouter.shared.$requestedPane.compactMap { $0 }) { pane in
-            query = ""
-            selection = pane
-            SettingsRouter.shared.requestedPane = nil
-        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -139,6 +221,7 @@ private struct AppearanceSettingsView: View {
     @AppStorage(ChromePrefs.showBookmarksBar) private var showBookmarksBar = false
     @AppStorage("luma_ai_panel_font_size") private var aiPanelFontSize: Int = 13
     @AppStorage(StartPagePrefs.showShortcuts) private var showShortcuts = true
+    @AppStorage(LiquidGlass.defaultsKey) private var liquidGlass = LiquidGlass.defaultValue
     @ObservedObject private var shortcutStore = ShortcutStore.shared
     @State private var confirmRemoveShortcuts = false
 
@@ -149,11 +232,12 @@ private struct AppearanceSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker("Theme", selection: $appearance) {
-                    Text("System").tag("system")
-                    Text("Light").tag("light")
-                    Text("Dark").tag("dark")
-                }
+                LunaPicker("Theme", selection: $appearance, options: [
+                    .init("system", "System"), .init("light", "Light"), .init("dark", "Dark"),
+                ])
+                Toggle("Liquid Glass", isOn: $liquidGlass)
+            } footer: {
+                Text("Off draws Luna's own solid surfaces and menus instead of translucent glass.")
             }
 
             Section {
@@ -167,9 +251,8 @@ private struct AppearanceSettingsView: View {
             }
 
             Section {
-                Picker("Browser layout", selection: layout) {
-                    ForEach(BrowserLayout.allCases) { Text($0.title).tag($0) }
-                }
+                LunaPicker("Browser layout", selection: layout,
+                           options: BrowserLayout.allCases.map { .init($0, $0.title) })
                 Text(layout.wrappedValue.summary)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -258,16 +341,12 @@ private struct TabsSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker(selection: $hibernateMinutes) {
-                    Text("Never").tag(0)
-                    Text("After 15 minutes").tag(15)
-                    Text("After 30 minutes").tag(30)
-                    Text("After 1 hour").tag(60)
-                    Text("After 2 hours").tag(120)
-                } label: {
-                    Text("Unload inactive tabs")
-                    Text("Frees memory. Tabs playing media or using the camera or microphone stay loaded.")
-                }
+                LunaPicker("Unload inactive tabs",
+                           subtitle: "Frees memory. Tabs playing media or using the camera or microphone stay loaded.",
+                           selection: $hibernateMinutes, options: [
+                               .init(0, "Never"), .init(15, "After 15 minutes"), .init(30, "After 30 minutes"),
+                               .init(60, "After 1 hour"), .init(120, "After 2 hours"),
+                           ])
             }
         }
         .formStyle(.grouped)
@@ -326,9 +405,8 @@ private struct SearchSettingsView: View {
     var body: some View {
         Form {
             Section {
-                Picker("Search engine", selection: $engine) {
-                    ForEach(SearchEngine.allCases) { Text($0.title).tag($0.rawValue) }
-                }
+                LunaPicker("Search engine", selection: $engine,
+                           options: SearchEngine.allCases.map { .init($0.rawValue, $0.title) })
                 Toggle(isOn: $searchSuggestionsEnabled) {
                     Text("Search suggestions")
                     Text("Sends what you type in the address bar to the search engine to suggest queries.")

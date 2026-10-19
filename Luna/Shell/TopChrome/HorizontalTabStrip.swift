@@ -384,7 +384,7 @@ final class TabDragPreview {
             }
             .padding(.horizontal, 10)
             .frame(width: TabDragPreview.size.width, height: TabDragPreview.size.height)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 8, style: .continuous)))
         }
     }
 }
@@ -438,14 +438,18 @@ private struct StripTab: View {
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
             .help(displayTitle(for: tab))
-            .contextMenu {
+            .lunaContextMenu {
+                var entries: [LunaMenuEntry] = []
                 if let onSplitWithCurrent {
-                    Button("Open in Split View with Current Tab", action: onSplitWithCurrent)
+                    entries.append(.button("Open in Split View with Current Tab", icon: "rectangle.split.2x1",
+                                           action: onSplitWithCurrent))
                 }
                 if let onRemoveFromSplit {
-                    Button("Remove from Split View", action: onRemoveFromSplit)
+                    entries.append(.button("Remove from Split View", icon: "rectangle", action: onRemoveFromSplit))
                 }
-                Button("Close Tab", action: onClose)
+                if !entries.isEmpty { entries.append(.divider("t1")) }
+                entries.append(.button("Close Tab", icon: "xmark", shortcut: "⌘W", action: onClose))
+                return entries
             }
     }
 
@@ -562,8 +566,7 @@ private struct LiftedTab: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.regularMaterial)
+                LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .padding(.vertical, 2)
                     .opacity(isLifted ? 1 : 0)
             )

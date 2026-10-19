@@ -19,13 +19,15 @@ struct PasswordFillCard: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
             } else {
-                Menu("Sign in with a saved login") {
-                    ForEach(offer.credentials) { cred in
-                        Button(cred.username.isEmpty ? "(no username)" : cred.username) { onFill(cred) }
+                LunaMenuButton(minWidth: 200, items: {
+                    offer.credentials.map { cred in
+                        .button(cred.username.isEmpty ? "(no username)" : cred.username, icon: "key",
+                                id: "cred.\(cred.id)") { onFill(cred) }
                     }
+                }) { isOpen in
+                    LunaPopUpLabel(title: "Sign in with a saved login", isOpen: isOpen)
                 }
                 .fixedSize()
-                .controlSize(.small)
             }
             PanelIconButton(systemName: "xmark", help: "Not now", action: onDismiss)
         }
@@ -83,7 +85,7 @@ private struct PasswordCardStyle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(10)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.regularMaterial))
+            .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 14, style: .continuous)))
             .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
             .shadow(color: .black.opacity(0.2), radius: 14, y: 5)
     }

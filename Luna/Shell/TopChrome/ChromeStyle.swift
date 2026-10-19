@@ -258,23 +258,24 @@ struct ChromeTabSearchButton: View {
 
     var body: some View {
         let palette = ChromePalette.for(scheme)
-        Menu {
-            ForEach(store.orderedTabIds, id: \.self) { id in
-                if let tab = store.tab(id) {
-                    Button(displayTitle(for: tab)) { onActivate(id) }
-                }
+        LunaMenuButton(minWidth: 280, debugID: "chrome.tabs", items: {
+            var entries: [LunaMenuEntry] = [.header("Open tabs")]
+            for id in store.orderedTabIds {
+                guard let tab = store.tab(id) else { continue }
+                entries.append(.item(LunaMenuItem(id: "tab.\(id)", title: displayTitle(for: tab),
+                                                  icon: LunaMenuEntry.favicon(tab.url).map { .image($0) },
+                                                  isChecked: false, action: { onActivate(id) })))
             }
-        } label: {
+            return entries
+        }) { isOpen in
             Image(systemName: "chevron.down")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(palette.title)
                 .frame(width: ChromeMetrics.tabSearchSize, height: ChromeMetrics.tabSearchSize)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(palette.tabSearch))
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isOpen ? palette.tabHover : palette.tabSearch))
                 .contentShape(Rectangle())
         }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
         .fixedSize()
         .help("Search Tabs")
     }
