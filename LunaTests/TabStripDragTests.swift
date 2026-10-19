@@ -133,8 +133,12 @@ final class TabStripDragTests: XCTestCase {
         let host = NSHostingView(rootView: otherStrip)
         host.sizingOptions = []
         other.contentView = host
+        // Drops go to the front-most window under the pointer, and the test host's
+        // own browser window sits over this spot, so get it out of the way.
+        let hostWindows = NSApp.windows.filter { $0.isVisible && $0 !== window }
+        hostWindows.forEach { $0.orderOut(nil) }
         other.orderFront(nil)
-        defer { other.close() }
+        defer { other.close(); hostWindows.forEach { $0.orderFront(nil) } }
         let profile = UUID()
         TabDropTargets.shared.register(.init(window: window, profileId: { profile }, adopt: { _, _ in }))
         TabDropTargets.shared.register(.init(window: other, profileId: { profile }, adopt: { _, _ in }))
