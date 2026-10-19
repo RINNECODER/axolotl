@@ -155,12 +155,12 @@ Axolotl updates itself with [Sparkle](https://sparkle-project.org), like Chrome:
 ./scripts/release.sh 1.0.3
 ```
 
-It bumps the version in `project.yml`, archives the **Axolotl** scheme, exports it with Developer ID, notarizes and staples it, signs the update with the Sparkle EdDSA key and publishes `Axolotl-<version>.zip` and `appcast.xml` as release `v<version>`. Commit the version bump afterwards.
+It bumps the version in `project.yml`, archives the **Axolotl** scheme, exports it with Developer ID, notarizes and staples it when a notary profile exists (otherwise it ships Developer ID-signed only), signs the update with the Sparkle EdDSA key and publishes `Axolotl-<version>.zip` and `appcast.xml` as release `v<version>`. Commit the version bump afterwards.
 
 One-time setup on the release Mac:
 
 1. A **Developer ID Application** certificate: Xcode › Settings › Accounts › your team › Manage Certificates › + › Developer ID Application.
-2. A notary profile: `xcrun notarytool store-credentials axolotl-notary --apple-id <Apple ID> --team-id <Team ID>` with an app-specific password from [account.apple.com](https://account.apple.com).
+2. Optional, a notary profile: `xcrun notarytool store-credentials axolotl-notary --apple-id <Apple ID> --team-id <Team ID>` with an app-specific password from [account.apple.com](https://account.apple.com).
 3. The Sparkle EdDSA private key in the login Keychain (account `axolotl`). Its public key is `SUPublicEDKey` in `Axolotl/Sparkle-Info.plist`. Back it up with Sparkle's `generate_keys --account axolotl -x <file>`; if it's lost, installed copies can't update.
 
 ## Keyboard shortcuts

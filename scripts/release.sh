@@ -21,10 +21,11 @@ command -v xcodegen >/dev/null || die "xcodegen not found (brew install xcodegen
 command -v gh >/dev/null && gh auth status >/dev/null 2>&1 || die "gh is not installed or not signed in (gh auth login)"
 TEAM="$(sed -n 's/^[[:space:]]*DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*\([A-Z0-9]*\).*/\1/p' Signing.xcconfig 2>/dev/null | head -1)"
 [[ -n "$TEAM" ]] || die "set DEVELOPMENT_TEAM in Signing.xcconfig (see README › Build from source)"
-xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1 || die "no notary profile '$NOTARY_PROFILE'.
-One-time setup: create an app-specific password at https://account.apple.com (Sign-In and Security), then run
-  xcrun notarytool store-credentials $NOTARY_PROFILE --apple-id <your Apple ID> --team-id $TEAM
-and paste the app-specific password when asked."
+# Notarization is optional: without the profile the release is Developer ID-signed only
+# (first download needs right-click → Open; Sparkle updates install without prompts).
+NOTARIZE=0
+if xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then NOTARIZE=1
+else echo "note: no notary profile '$NOTARY_PROFILE' — skipping notarization (see README › Releasing to enable)"; fi
 gh release view "v$VERSION" -R "$RELEASES_REPO" >/dev/null 2>&1 && die "v$VERSION is already released on $RELEASES_REPO"
 
 rm -rf "$WORK" && mkdir -p "$WORK/releases"
@@ -65,11 +66,13 @@ APP="$WORK/export/Axolotl.app"
 
 # --- Notarize + staple -------------------------------------------------------
 ZIP="$WORK/releases/Axolotl-$VERSION.zip"
-ditto -c -k --keepParent "$APP" "$WORK/notarize.zip"
-echo "==> Notarizing (takes a few minutes)"
-xcrun notarytool submit "$WORK/notarize.zip" --keychain-profile "$NOTARY_PROFILE" --wait | tee "$WORK/notary.log"
-grep -q "status: Accepted" "$WORK/notary.log" || die "notarization was not accepted (see: xcrun notarytool log <id> --keychain-profile $NOTARY_PROFILE)"
-xcrun stapler staple "$APP"
+[[ $NOTARIZE == 1 ]] && ditto -c -k --keepParent "$APP" "$WORK/notarize.zip"
+if [[ $NOTARIZE == 1 ]]; then
+  echo "==> Notarizing (takes a few minutes)"
+  xcrun notarytool submit "$WORK/notarize.zip" --keychain-profile "$NOTARY_PROFILE" --wait | tee "$WORK/notary.log"
+  grep -q "status: Accepted" "$WORK/notary.log" || die "notarization was not accepted (see: xcrun notarytool log <id> --keychain-profile $NOTARY_PROFILE)"
+  xcrun stapler staple "$APP"
+fi
 ditto -c -k --keepParent "$APP" "$ZIP"
 
 # --- Appcast (EdDSA-signed with the Keychain key) + publish -----------------
