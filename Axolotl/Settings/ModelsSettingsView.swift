@@ -13,42 +13,132 @@ struct ModelsSettingsView: View {
     }
 }
 
-/// Provider picker plus that provider's sign-in or key and model (Settings → AI, welcome flow).
+/// Provider setup (Settings → AI, welcome flow): subscriptions first (ChatGPT sign-in, signed-in
+/// CLIs), then "Use an API key instead" with OpenRouter recommended, then the chosen provider's model.
 struct AIProviderSections: View {
-    @AppStorage(AIProvider.defaultsKey) private var providerRaw: String = AIProvider.gemini.rawValue
+    @AppStorage(AIProvider.defaultsKey) private var providerRaw: String = AIProvider.current.rawValue
+    @State private var signedInCLIs: [AIProvider] = []
+    @State private var scanned = false
+    @State private var showAPI = AIProvider.current.isAPIKey && UserDefaults.standard.string(forKey: AIProvider.defaultsKey) != nil
 
-    private var provider: Binding<AIProvider> {
-        Binding(get: { AIProvider(rawValue: providerRaw) ?? .gemini }, set: { providerRaw = $0.rawValue })
-    }
+    private var provider: AIProvider { AIProvider(rawValue: providerRaw) ?? .current }
 
     var body: some View {
         Group {
-            SettingsCard("Provider") {
-                SettingsMenuRow("Provider", subtitle: provider.wrappedValue.detail, selection: provider,
-                                options: AIProvider.allCases.map { .init($0, $0.displayName) })
+            SettingsCard("Use a subscription", footer: subscriptionFooter) {
+                ChatGPTRow(provider: provider, use: { providerRaw = AIProvider.chatgpt.rawValue })
+                ForEach(signedInCLIs) { cli in
+                    SettingsRow(cli.displayName, subtitle: "Signed in on this Mac", icon: "terminal") {
+                        UseButton(inUse: provider == cli) { providerRaw = cli.rawValue }
+                    }
+                }
             }
 
-            switch provider.wrappedValue {
+            switch provider {
             case .chatgpt: ChatGPTSection()
-            case .anthropic: AnthropicSection()
-            case .openai: OpenAISection()
-            case .gemini: GeminiSection()
-            case .ollama: OllamaSection()
+            case .codexCLI, .claudeCLI: CLIModelSection(provider: provider)
+            default: EmptyView()
             }
+
+            SettingsCard {
+                SettingsLinkRow(showAPI ? "Hide API keys" : "Use an API key instead",
+                                subtitle: "OpenRouter, Anthropic, OpenAI, Gemini or a local Ollama", icon: "key") {
+                    showAPI.toggle()
+                }
+            }
+            if showAPI {
+                SettingsCard("API provider") {
+                    ForEach(AIProvider.apiProviders) { p in
+                        SettingsRow(p == .openrouter ? "OpenRouter (recommended)" : p.displayName, subtitle: p.detail) {
+                            UseButton(inUse: provider == p) { providerRaw = p.rawValue }
+                        }
+                    }
+                }
+                switch provider {
+                case .openrouter: OpenRouterSection()
+                case .anthropic: AnthropicSection()
+                case .openai: OpenAISection()
+                case .gemini: GeminiSection()
+                case .ollama: OllamaSection()
+                default: EmptyView()
+                }
+            }
+        }
+        .task {
+            guard DevMode.isAvailable else { return }
+            signedInCLIs = CLIChatClient.signedIn(await HarnessCatalog.shared.discover())
+            scanned = true
+        }
+    }
+
+    private var subscriptionFooter: String? {
+        if !DevMode.isAvailable { return "Codex and Claude Code CLIs already signed in on this Mac can be used in Axolotl Dev." }
+        guard scanned else { return nil }
+        return signedInCLIs.isEmpty ? "No signed-in Codex or Claude Code CLI found on this Mac." : "Signed-in CLIs use their own plan; Axolotl never reads their credentials."
+    }
+}
+
+/// "In use" when selected, else a Use button.
+private struct UseButton: View {
+    let inUse: Bool
+    let action: () -> Void
+
+    var body: some View {
+        if inUse {
+            Label("In use", systemImage: "checkmark.circle.fill")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+        } else {
+            Button("Use", action: action).buttonStyle(.settings)
         }
     }
 }
 
 // MARK: - ChatGPT
 
+/// The ChatGPT entry in "Use a subscription": sign in, or use the signed-in account.
+private struct ChatGPTRow: View {
+    let provider: AIProvider
+    let use: () -> Void
+    @ObservedObject private var auth = ChatGPTAuth.shared
+    @State private var error: String?
+
+    var body: some View {
+        if let creds = auth.credentials {
+            SettingsRow("ChatGPT", subtitle: creds.email.isEmpty ? (creds.name ?? "Signed in") : creds.email, icon: "bubble.left.and.text.bubble.right") {
+                UseButton(inUse: provider == .chatgpt, action: use)
+            }
+        } else if auth.isSigningIn {
+            SettingsRow("Finish signing in in your browser…", icon: "bubble.left.and.text.bubble.right") {
+                ProgressView().controlSize(.small)
+                Button("Cancel") { auth.cancelSignIn() }
+            }
+        } else {
+            SettingsRow("ChatGPT", subtitle: "Use your Plus or Pro plan.", icon: "bubble.left.and.text.bubble.right") {
+                Button("Sign in with ChatGPT") {
+                    error = nil
+                    Task {
+                        do { try await auth.signIn(); use() } catch { self.error = error.localizedDescription }
+                    }
+                }
+                .buttonStyle(.settingsProminent)
+            }
+        }
+        if let error {
+            SettingsNoteRow(error, isError: true)
+        }
+    }
+}
+
+/// The signed-in ChatGPT account and its model, shown while ChatGPT is in use.
 private struct ChatGPTSection: View {
     @ObservedObject private var auth = ChatGPTAuth.shared
     @AppStorage(ModelPrefs.chatgptModel) private var model = ""
     @State private var error: String?
 
     var body: some View {
-        SettingsCard("ChatGPT account", footer: "Requires ChatGPT Plus or Pro. Requests count against your plan, up to a weekly limit you set in ChatGPT. Axolotl never sees your password or your ChatGPT conversations.") {
-            if let creds = auth.credentials {
+        if let creds = auth.credentials {
+            SettingsCard("ChatGPT", footer: "Requires ChatGPT Plus or Pro. Requests count against your plan, up to a weekly limit you set in ChatGPT. Axolotl never sees your password or your ChatGPT conversations.") {
                 SettingsRow("Signed in as", subtitle: creds.email.isEmpty ? (creds.name ?? "ChatGPT user") : creds.email,
                             icon: "person.crop.circle") {
                     Button("Sign Out", role: .destructive) {
@@ -58,37 +148,57 @@ private struct ChatGPTSection: View {
                         }
                     }
                 }
-            } else if auth.isSigningIn {
-                SettingsRow("Finish signing in in your browser…") {
-                    ProgressView().controlSize(.small)
-                    Button("Cancel") { auth.cancelSignIn() }
-                }
-            } else {
-                SettingsRow("ChatGPT", subtitle: "Use your ChatGPT plan in Axolotl.") {
-                    Button("Sign in with ChatGPT") {
-                        error = nil
-                        Task {
-                            do { try await auth.signIn() } catch { self.error = error.localizedDescription }
-                        }
-                    }
-                    .buttonStyle(.settingsProminent)
-                }
-            }
-            if let error {
-                SettingsNoteRow(error, isError: true)
-            }
-        }
-        if auth.isSignedIn {
-            SettingsCard("Model") {
                 ModelPicker(selection: $model) {
                     try await ModelCatalog.load(.chatgpt)
+                }
+                if let error {
+                    SettingsNoteRow(error, isError: true)
                 }
             }
         }
     }
 }
 
+// MARK: - Signed-in CLIs
+
+private struct CLIModelSection: View {
+    let provider: AIProvider
+    @AppStorage private var model: String
+
+    init(provider: AIProvider) {
+        self.provider = provider
+        _model = AppStorage(wrappedValue: "", ModelCatalog.modelKey(for: provider) ?? "")
+    }
+
+    var body: some View {
+        SettingsCard(provider.displayName, footer: "Each reply runs the CLI once with its tools off, on its own plan.") {
+            ModelPicker(selection: $model) {
+                try await ModelCatalog.load(provider)
+            }
+        }
+        .id(provider)
+    }
+}
+
 // MARK: - API-key providers
+
+private struct OpenRouterSection: View {
+    @AppStorage(ModelPrefs.openrouterModel) private var model = ""
+
+    var body: some View {
+        SettingsCard("OpenRouter API key", footer: "One key for models from every major lab, billed to your OpenRouter credits. The same key also runs computer use on TypeSafe's Jev router.") {
+            APIKeyField(account: .openRouterKey, placeholder: "sk-or-…")
+            SettingsLinkRow("Get an API key from OpenRouter", external: true) {
+                NSWorkspace.shared.open(KeyService.registry.first { $0.id == "openrouter" }!.url)
+            }
+        }
+        SettingsCard("Model") {
+            ModelPicker(selection: $model) {
+                try await ModelCatalog.load(.openrouter)
+            }
+        }
+    }
+}
 
 private struct AnthropicSection: View {
     @AppStorage(ModelPrefs.anthropicModel) private var model = ModelPrefs.defaultAnthropicModel
@@ -261,13 +371,13 @@ private struct AxolotlMaxSections: View {
 
 // MARK: - Computer use
 
-/// Agent mode (`/agent <goal>` in the AI panel). Uses Jev when a TypeSafe key is saved,
+/// Agent mode (`/agent <goal>` in the AI panel). Uses Jev when a TypeSafe key is saved, else Jev router via OpenRouter,
 /// otherwise the provider above picks each step.
 private struct ComputerUseSection: View {
     @AppStorage(JevClient.modelDefaultsKey) private var model = JevClient.defaultModel
 
     var body: some View {
-        SettingsCard("Computer use (Jev)", footer: "Choose Agent in the AI panel composer (or type /agent and a goal) to let Axolotl operate the current tab. With a TypeSafe key, Jev picks each step; without one, your chat model does and also writes any typed values.") {
+        SettingsCard("Computer use (Jev)", footer: "Choose Agent in the AI panel composer (or type /agent and a goal) to let Axolotl operate the current tab. With a TypeSafe key, Jev picks each step; without one, an OpenRouter key runs TypeSafe’s Jev router; with neither, your chat model does. Typed values come from your chat model.") {
             APIKeyField(account: .typesafeKey, placeholder: "TypeSafe API key")
             ModelPicker(selection: $model) {
                 guard let key = KeychainManager.shared.string(for: .typesafeKey), !key.isEmpty else {

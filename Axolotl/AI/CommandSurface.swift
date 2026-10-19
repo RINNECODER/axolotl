@@ -26,7 +26,7 @@ struct CommandSurfaceView: View {
     var splitPeers: [UUID] = []
 
     @AppStorage("axolotl_ai_panel_font_size") private var aiPanelFontSizeRaw: Int = 13
-    @AppStorage("axolotl_ai_provider") private var aiProviderRaw: String = AIProvider.gemini.rawValue
+    @AppStorage("axolotl_ai_provider") private var aiProviderRaw: String = AIProvider.current.rawValue
     @AppStorage("axolotl_ollama_base_url") private var ollamaBaseURL: String = "http://127.0.0.1:11434"
     @AppStorage("axolotl_ollama_model") private var ollamaModel: String = ""
     @AppStorage(DevPrefs.panelModeKey) private var panelModeRaw: String = AIPanelMode.general.rawValue
@@ -74,7 +74,7 @@ struct CommandSurfaceView: View {
     private var chatFontSize: CGFloat { CGFloat(aiPanelFontSizeRaw) }
 
     private var aiProvider: AIProvider {
-        AIProvider(rawValue: aiProviderRaw) ?? .gemini
+        AIProvider(rawValue: aiProviderRaw) ?? .current
     }
 
     var body: some View {

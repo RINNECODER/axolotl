@@ -27,6 +27,7 @@ final class KeychainManager {
         case openAIKey = "openai-api-key"
         case anthropicKey = "anthropic-api-key"
         case chatGPTCredentials = "chatgpt-credentials"
+        case openRouterKey = "openrouter-api-key"
         case typesafeKey = "typesafe-api-key"
         case axolotlMCPToken = "axolotl-mcp-token"
     }

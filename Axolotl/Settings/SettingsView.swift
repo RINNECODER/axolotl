@@ -472,7 +472,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
                                   "contrast", "blur", "tint",
                                   "start page", "shortcuts"]
         case .tabs: return ["tabs", "memory", "unload", "sleep", "hibernate", "inactive"]
-        case .ai: return ["model", "gemini", "ollama", "openai", "chatgpt", "anthropic", "claude", "api key", "axolotl max",
+        case .ai: return ["model", "gemini", "ollama", "openai", "chatgpt", "anthropic", "claude", "api key", "openrouter", "subscription", "codex", "axolotl max",
                           "ask on page", "preview", "tidy", "rename", "downloads", "arc max", "folders", "jev",
                           "computer use", "agent", "grab", "text size"]
         case .passwords: return ["password", "login", "keychain", "autofill", "icloud", "touch id", "import", "chrome",

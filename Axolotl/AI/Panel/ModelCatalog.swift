@@ -10,6 +10,9 @@ enum ModelCatalog {
         switch provider {
         case .chatgpt: return ModelPrefs.chatgptModel
         case .anthropic: return ModelPrefs.anthropicModel
+        case .openrouter: return ModelPrefs.openrouterModel
+        case .codexCLI: return ModelPrefs.codexCLIModel
+        case .claudeCLI: return ModelPrefs.claudeCLIModel
         case .openai: return ModelPrefs.openaiModel
         case .gemini: return nil
         case .ollama: return ModelPrefs.ollamaModel
@@ -22,6 +25,10 @@ enum ModelCatalog {
             return try await OpenAIResponsesClient(credential: .chatGPT).listModels().map { ($0.id, $0.displayName) }
         case .anthropic:
             return try await AnthropicClient().listModels().map { ($0.id, $0.displayName) }
+        case .openrouter:
+            return try await OpenRouterClient().listModels()
+        case .codexCLI, .claudeCLI:
+            return try await HarnessModelCatalog.shared.models(for: provider.harness!).map { ($0.id, $0.displayName) }
         case .openai:
             return try await OpenAIResponsesClient(credential: .apiKey).listModels().map { ($0.id, $0.displayName) }
         case .gemini:
@@ -39,13 +46,13 @@ enum ModelCatalog {
 
 /// The composer's model menu: the provider and its models, picked from lists.
 struct PanelModelMenu: View {
-    @AppStorage(AIProvider.defaultsKey) private var providerRaw: String = AIProvider.gemini.rawValue
+    @AppStorage(AIProvider.defaultsKey) private var providerRaw: String = AIProvider.current.rawValue
     @State private var models: [AIProvider: [ModelCatalog.Model]] = [:]
     @State private var loadError: [AIProvider: String] = [:]
     @State private var currentModel = LLMService.shared.modelName
     var onOpenSettings: () -> Void
 
-    private var provider: AIProvider { AIProvider(rawValue: providerRaw) ?? .gemini }
+    private var provider: AIProvider { AIProvider(rawValue: providerRaw) ?? .current }
 
     var body: some View {
         AxolotlMenuButton(minWidth: 220, debugID: "ai.model", items: { menuEntries }) { _ in
@@ -77,7 +84,7 @@ struct PanelModelMenu: View {
             entries.append(.button(loadError[provider] ?? "Loading models…", enabled: false) {})
         }
         entries.append(.submenu("Provider", AxolotlMenuEntry.options(
-            AIProvider.allCases.map { ($0.rawValue, $0.displayName) }, selection: providerRaw) { providerRaw = $0 }))
+            AIProvider.available.map { ($0.rawValue, $0.displayName) }, selection: providerRaw) { providerRaw = $0 }))
         entries += [.divider("m1"), .button("Model Settings…", action: onOpenSettings)]
         return entries
     }

@@ -18,6 +18,9 @@ final class LLMService {
         case .chatgpt: return ModelPrefs.string(ModelPrefs.chatgptModel)
         case .openai: return ModelPrefs.string(ModelPrefs.openaiModel)
         case .anthropic: return ModelPrefs.string(ModelPrefs.anthropicModel, default: ModelPrefs.defaultAnthropicModel)
+        case .openrouter: return ModelPrefs.string(ModelPrefs.openrouterModel)
+        case .codexCLI: return ModelPrefs.string(ModelPrefs.codexCLIModel)
+        case .claudeCLI: return ModelPrefs.string(ModelPrefs.claudeCLIModel)
         case .gemini: return "gemini-2.5-flash"
         case .ollama: return ModelPrefs.string(ModelPrefs.ollamaModel)
         }
@@ -42,7 +45,7 @@ final class LLMService {
                 prompt: request.prompt, context: request.context,
                 recentMessages: request.recentMessages, conversationSummary: request.conversationSummary,
                 onToken: onToken, onCompletion: onCompletion)
-        case .chatgpt, .openai, .anthropic:
+        case .chatgpt, .openai, .anthropic, .openrouter, .codexCLI, .claudeCLI:
             let provider = self.provider
             let model = modelName
             return Task {
@@ -52,6 +55,10 @@ final class LLMService {
                         try await OpenAIResponsesClient(credential: .chatGPT).stream(model: model, request: request, onToken: onToken)
                     case .openai:
                         try await OpenAIResponsesClient(credential: .apiKey).stream(model: model, request: request, onToken: onToken)
+                    case .openrouter:
+                        try await OpenRouterClient().stream(model: model, request: request, onToken: onToken)
+                    case .codexCLI, .claudeCLI:
+                        try await CLIChatClient(harness: provider.harness!).stream(model: model, request: request, onToken: onToken)
                     default:
                         try await AnthropicClient().stream(model: model, request: request, onToken: onToken)
                     }

@@ -27,7 +27,7 @@ struct SmartSearchView: View {
     var urlSuggestions: ((String) async -> [AddressSuggestion])? = nil
     var onOpenURLSuggestion: ((AddressSuggestion) -> Void)? = nil
 
-    @AppStorage("axolotl_ai_provider")    private var aiProviderRaw: String = AIProvider.gemini.rawValue
+    @AppStorage("axolotl_ai_provider")    private var aiProviderRaw: String = AIProvider.current.rawValue
     @AppStorage("axolotl_ollama_base_url") private var ollamaBaseURL: String = "http://127.0.0.1:11434"
     @AppStorage("axolotl_ollama_model")    private var ollamaModel: String = ""
     @AppStorage("axolotl_ai_panel_font_size") private var fontSizeRaw: Int = 13
@@ -82,7 +82,7 @@ struct SmartSearchView: View {
     @State private var addContextFromCard: Bool = false
     @State private var addContextFromChat: Bool = false
 
-    private var aiProvider: AIProvider { AIProvider(rawValue: aiProviderRaw) ?? .gemini }
+    private var aiProvider: AIProvider { AIProvider(rawValue: aiProviderRaw) ?? .current }
     private var fontSize: CGFloat { CGFloat(fontSizeRaw) }
 
     var body: some View {

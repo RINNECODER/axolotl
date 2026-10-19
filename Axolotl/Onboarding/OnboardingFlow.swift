@@ -22,7 +22,7 @@ enum OnboardingStep: String, CaseIterable, Identifiable {
         switch self {
         case .welcome: return "A calm, fast browser with AI built in. Let's set up a few things — skip anything you like."
         case .importData: return "Import bookmarks and history in one click. Passwords come in from a CSV or 1Password export."
-        case .ai: return "Sign in with ChatGPT, add an API key, or use a local Ollama model."
+        case .ai: return "Use a subscription you already have, or an API key. OpenRouter covers every model with one key."
         case .look: return "Pick a layout, glass or solid surfaces, and a start page wallpaper."
         case .privacy: return "Everything here is off unless you turn it on."
         case .developer: return "Coding-agent CLIs Axolotl found on this Mac, and the MCP bridge that lets agents drive Axolotl."
