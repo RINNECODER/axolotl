@@ -60,7 +60,7 @@ final class LayoutTemplateTests: XCTestCase {
     func testUndoingTheTemplateChangeRestoresEverything() throws {
         seedLunaSetup()
         let change = try setTemplate("chrome")
-        XCTAssertEqual(change.lines, [ChangeLine(title: "Layout template", from: "Luna", to: "Chrome")])
+        XCTAssertEqual(change.lines, [ChangeLine(title: "Layout template", from: "Custom", to: "Chrome")])
         _ = try customizer.undo(change.id)
         assertLunaSetup()
 
@@ -123,5 +123,27 @@ final class LayoutTemplateTests: XCTestCase {
         view.removeFromSuperview()
         TrafficLightPositioner.dismantleNSView(view, coordinator: ())
         XCTAssertEqual(close.frame.origin, before)
+    }
+
+    func testCustomizingUnderATemplateSwitchesToCustomAndKeepsTheChange() throws {
+        seedLunaSetup()
+        _ = try setTemplate("chrome")
+        let env = CustomizationEnvironment(defaults: defaults, shortcuts: ShortcutStore(defaults: defaults))
+
+        RegistrySettings.willChange("bookmarksBar.visible", env: env)
+        defaults.set(false, forKey: ChromePrefs.showBookmarksBar)
+
+        XCTAssertEqual(LayoutTemplate.current(defaults), .luna)
+        XCTAssertNil(defaults.object(forKey: LayoutTemplate.savedKey))
+        // Chrome's other settings stay: the window looks the same apart from the change.
+        XCTAssertEqual(defaults.object(forKey: ChromePrefs.showToolbar) as? Bool, true)
+        XCTAssertEqual(defaults.object(forKey: ChromePrefs.showBookmarksBar) as? Bool, false)
+    }
+
+    func testSettingsOutsideTheTemplateLeaveItAlone() throws {
+        _ = try setTemplate("chrome")
+        let env = CustomizationEnvironment(defaults: defaults, shortcuts: ShortcutStore(defaults: defaults))
+        RegistrySettings.willChange("search.engine", env: env)
+        XCTAssertEqual(LayoutTemplate.current(defaults), .chrome)
     }
 }

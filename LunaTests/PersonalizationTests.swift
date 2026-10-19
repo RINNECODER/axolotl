@@ -114,7 +114,7 @@ final class PersonalizationTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "luma_appearance"), "light")
         XCTAssertEqual(customizer.env.shortcuts.shortcuts.map(\.url.host), ["github.com", "mail.example.com"])
         XCTAssertEqual(customizer.env.shortcuts.shortcuts.last?.title, "My Mail", "kept tiles keep their titles")
-        XCTAssertEqual(change.lines.first, ChangeLine(title: "Toolbar", from: "Off", to: "On"))
+        XCTAssertEqual(change.lines.first, ChangeLine(title: "Show toolbar", from: "Off", to: "On"))
 
         _ = try customizer.undo(change.id)
         XCTAssertNil(defaults.object(forKey: ChromePrefs.showToolbar), "a never-set key is unset again, not set to false")
@@ -356,7 +356,7 @@ final class PersonalizationTests: XCTestCase {
                                               "bookmark:https://github.com", "favorite:https://news.ycombinator.com"],
                        "tabs.layout already matches, so it's dropped")
         XCTAssertEqual(card.rejected.count, 3)
-        XCTAssertEqual(card.items[0].line, ChangeLine(title: "Toolbar", from: "Off", to: "On"))
+        XCTAssertEqual(card.items[0].line, ChangeLine(title: "Show toolbar", from: "Off", to: "On"))
         XCTAssertEqual(card.plan.settings.count, 2)
         XCTAssertEqual(Personalize.parse("no json here", request: "", ctx: context, customizer: customizer).status, .failed)
     }

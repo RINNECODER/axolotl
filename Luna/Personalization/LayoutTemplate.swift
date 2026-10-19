@@ -1,7 +1,7 @@
 import Foundation
 
 /// A whole-window look applied as one bundle of registry settings (Settings → Appearance → Layout).
-/// "Luna" is the user's own setup; any other template saves that setup first and switching back
+/// `.luna` ("Custom") is the user's own setup; any other template saves that setup first and switching back
 /// to Luna restores it exactly. Add a case and its `bundle` to offer another template.
 enum LayoutTemplate: String, CaseIterable, Identifiable {
     case luna
@@ -15,14 +15,14 @@ enum LayoutTemplate: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .luna: return "Luna"
+        case .luna: return "Custom"
         case .chrome: return "Chrome"
         }
     }
 
     var summary: String {
         switch self {
-        case .luna: return "Your own layout and settings."
+        case .luna: return "Your own layout, set with Customize below."
         case .chrome: return "Google Chrome's layout: curved tabs on top, toolbar with a pill address bar, bookmarks bar."
         }
     }
@@ -60,6 +60,14 @@ enum LayoutTemplate: String, CaseIterable, Identifiable {
         defaults.string(forKey: defaultsKey).flatMap(LayoutTemplate.init(rawValue:)) ?? .luna
     }
 
+    /// Settings → Appearance → Customize changed a setting a template manages: the window now looks like the
+    /// user's own setup, so the template becomes Custom and keeps the current values (the old saved setup is dropped).
+    static func switchToCustom(env: CustomizationEnvironment) {
+        guard current(env.defaults) != .luna else { return }
+        env.defaults.removeObject(forKey: savedKey)
+        env.defaults.removeObject(forKey: defaultsKey)
+    }
+
     /// Applies a template. Leaving Luna saves the managed settings; returning restores them exactly.
     static func apply(_ template: LayoutTemplate, env: CustomizationEnvironment) {
         let defaults = env.defaults
@@ -87,7 +95,7 @@ enum LayoutTemplate: String, CaseIterable, Identifiable {
     static let setting = CustomizableSetting(
         key: "layout.template", title: "Layout template",
         summary: "Whole-window look. chrome = Google Chrome's layout (tabs on top, toolbar, bookmarks bar); "
-            + "luna = back to the user's own settings, restored exactly.",
+            + "luna (shown as Custom) = back to the user's own settings, restored exactly.",
         kind: .choice(allCases.map { (value: $0.rawValue, title: $0.title) }),
         read: { .string(current($0.defaults).rawValue) },
         write: { env, value in
