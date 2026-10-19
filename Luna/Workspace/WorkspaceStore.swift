@@ -157,12 +157,19 @@ final class WorkspaceStore: ObservableObject {
         return persistent ? .reset : .removed
     }
 
-    /// Reopens the most recently closed tab where it was (Cmd+Shift+T).
+    /// Closed tabs that can be reopened, newest first (tab search).
+    var recentlyClosedTabs: [Tab] {
+        recentlyClosed.reversed().map(\.tab).filter { workspace.tabs[$0.id] == nil }
+    }
+
+    /// Reopens the most recently closed tab (Cmd+Shift+T), or the closed tab `id`, where it was.
     @discardableResult
-    func reopenClosedTab() -> UUID? {
+    func reopenClosedTab(_ id: UUID? = nil) -> UUID? {
         // Skip entries already brought back by Undo.
-        while let last = recentlyClosed.last, workspace.tabs[last.tab.id] != nil { recentlyClosed.removeLast() }
-        guard let entry = recentlyClosed.popLast() else { return nil }
+        recentlyClosed.removeAll { workspace.tabs[$0.tab.id] != nil }
+        let index = id == nil ? recentlyClosed.indices.last : recentlyClosed.lastIndex { $0.tab.id == id }
+        guard let index else { return nil }
+        let entry = recentlyClosed.remove(at: index)
         var tab = entry.tab
         tab.lastActiveAt = Date()
         perform("Reopen Tab") { ws in

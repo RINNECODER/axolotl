@@ -394,6 +394,78 @@ final class TabDragPreview {
     }
 }
 
+/// Chrome's tab hover card: full title and host under the hovered tab, in a click-through child window.
+@MainActor
+final class TabHoverCard {
+    static let shared = TabHoverCard()
+    private var panel: NSPanel?
+    private var shownTab: UUID?
+
+    /// `frame` is the tab in its window's SwiftUI global space.
+    func show(tab: Tab, below frame: CGRect) {
+        let mouse = NSEvent.mouseLocation
+        let number = NSWindow.windowNumber(at: mouse, belowWindowWithWindowNumber: 0)
+        // shortcut: assumes the shell's hosting view is the window's content view (true for browser windows).
+        guard let window = NSApp.window(withWindowNumber: number), let content = window.contentView else { return }
+        let panel = self.panel ?? makePanel()
+        let host = NSHostingView(rootView: Card(title: displayTitle(for: tab), host: tab.url?.host.map(SiteShortcut.normalizedHost) ?? ""))
+        host.appearance = window.effectiveAppearance
+        let size = host.fittingSize
+        panel.contentView = host
+        let anchor = window.convertToScreen(content.convert(NSRect(x: frame.minX, y: frame.maxY, width: 0, height: 0), to: nil))
+        panel.setFrame(NSRect(x: anchor.minX, y: anchor.minY - 4 - size.height, width: size.width, height: size.height), display: true)
+        if panel.parent !== window {
+            panel.parent?.removeChildWindow(panel)
+            window.addChildWindow(panel, ordered: .above)
+        }
+        panel.orderFront(nil)
+        shownTab = tab.id
+    }
+
+    /// Hides the card if it's showing `tabId`.
+    func hide(_ tabId: UUID) {
+        guard shownTab == tabId, let panel else { return }
+        panel.parent?.removeChildWindow(panel)
+        panel.orderOut(nil)
+        shownTab = nil
+    }
+
+    private func makePanel() -> NSPanel {
+        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = true
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
+        panel.animationBehavior = .none
+        panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
+        self.panel = panel
+        return panel
+    }
+
+    struct Card: View {
+        let title: String
+        let host: String
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !host.isEmpty {
+                    Text(host).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(width: 240, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(LunaSurface.raised))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(LunaSurface.stroke))
+        }
+    }
+}
+
 /// Reports the window a view is in, as it moves between windows.
 struct WindowReader: NSViewRepresentable {
     let onWindow: (NSWindow?) -> Void
@@ -445,7 +517,19 @@ private struct StripTab: View {
         content
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
-            .help(displayTitle(for: tab))
+            // Hover card after 500 ms (Chrome); the task only exists while hovering.
+            .background {
+                GeometryReader { geo in
+                    Color.clear.task(id: isHovered) {
+                        guard isHovered else { TabHoverCard.shared.hide(tab.id); return }
+                        try? await Task.sleep(for: .milliseconds(500))
+                        guard !Task.isCancelled else { return }
+                        TabHoverCard.shared.show(tab: tab, below: geo.frame(in: .global))
+                    }
+                }
+            }
+            .onDisappear { TabHoverCard.shared.hide(tab.id) }
+            .accessibilityHint(displayTitle(for: tab))
             .lunaContextMenu {
                 var entries: [LunaMenuEntry] = []
                 if let onSplitWithCurrent {
