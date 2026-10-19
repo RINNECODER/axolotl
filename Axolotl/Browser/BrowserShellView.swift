@@ -655,6 +655,7 @@ struct BrowserShellView: View {
             openSettings: { openSettingsTab($0) },
             showBookmarkManager: { openBookmarkManager() },
             searchTabs: { showTabSearch.toggle() },
+            openURL: { newTabWithURL($0) },
             showDownloads: { openDownloadsPage() },
             showPasswords: { openPasswordsPage() },
             viewSource: { openViewSource() },

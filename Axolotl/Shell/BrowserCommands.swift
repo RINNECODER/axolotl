@@ -21,6 +21,8 @@ struct BrowserCommandActions {
     var openSettings: (SettingsPane?) -> Void
     var showBookmarkManager: () -> Void = {}
     var searchTabs: () -> Void = {}
+    /// Opens a link from another app (Axolotl as the default browser) in a new tab.
+    var openURL: (URL) -> Void = { _ in }
     var showDownloads: () -> Void = {}
     var showPasswords: () -> Void = {}
     var viewSource: () -> Void = {}
@@ -49,10 +51,27 @@ final class BrowserCommandTargets {
 
     /// Settings was asked for while no browser window was open (outer nil = nothing pending).
     var pendingSettings: SettingsPane?? = nil
+    /// Links from other apps that arrived before any browser window was ready.
+    private var pendingURLs: [URL] = []
+
+    /// Links from other apps: new tabs in the front browser window, like Chrome.
+    func openExternal(_ urls: [URL]) {
+        let links = urls.filter { ["http", "https", "file"].contains($0.scheme?.lowercased() ?? "") }
+        guard !links.isEmpty else { return }
+        guard let entry = keyOrFrontmost else { pendingURLs += links; return }
+        links.forEach(entry.actions.openURL)
+        entry.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+    }
 
     func register(window: NSWindow, actions: BrowserCommandActions) {
         entries.removeAll { $0.window == nil || $0.window === window }
         entries.append(Entry(window: window, actions: actions))
+        if !pendingURLs.isEmpty {
+            let urls = pendingURLs
+            pendingURLs = []
+            DispatchQueue.main.async { urls.forEach(actions.openURL) }
+        }
         if let pane = pendingSettings {
             pendingSettings = nil
             DispatchQueue.main.async { actions.openSettings(pane) }

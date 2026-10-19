@@ -6,8 +6,17 @@
 //
 import SwiftUI
 
+/// Receives links from other apps while Axolotl is the default browser. Without this,
+/// SwiftUI answers each link with a new, empty window.
+final class AxolotlAppDelegate: NSObject, NSApplicationDelegate {
+    func application(_ application: NSApplication, open urls: [URL]) {
+        BrowserCommandTargets.shared.openExternal(urls)
+    }
+}
+
 @main
 struct AxolotlApp: App {
+    @NSApplicationDelegateAdaptor(AxolotlAppDelegate.self) private var appDelegate
     /// The main window's scene id, so ⌘⇧T can reopen it after it closed.
     static let mainWindowId = "main"
 
