@@ -169,7 +169,8 @@ final class PageToolsTests: XCTestCase {
         let manager = DownloadManager(store: store)
         try render(DownloadsPageView(profileId: profile, isPrivate: false, manager: manager), size: NSSize(width: 900, height: 620),
                    to: dir.appendingPathComponent("downloads-page.png"))
-        ViewSourceStore.html[URL(string: "https://example.com/")!] = """
+        let sourceTab = UUID()
+        ViewSourceStore.html[sourceTab] = ("""
             <!DOCTYPE html>
             <html lang="en">
             <head>
@@ -183,8 +184,8 @@ final class PageToolsTests: XCTestCase {
               </div>
             </body>
             </html>
-            """
-        try render(ViewSourceView(page: URL(string: "https://example.com/")!), size: NSSize(width: 700, height: 320),
+            """, false)
+        try render(ViewSourceView(page: URL(string: "https://example.com/")!, tabId: sourceTab), size: NSSize(width: 700, height: 320),
                    to: dir.appendingPathComponent("view-source.png"))
         let web = WebViewWrapper(profileId: UUID(), dataStore: .nonPersistent())
         let tab = UUID()

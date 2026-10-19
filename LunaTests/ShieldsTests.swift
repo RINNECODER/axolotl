@@ -77,6 +77,10 @@ final class ShieldsTests: XCTestCase {
         counter.observe(tab: tab, count: 4)
         XCTAssertEqual(counter.total, 4)
         XCTAssertNil(defaults.object(forKey: key), "no write before the batch fills")
+        counter.observe(tab: tab, count: 0) // badge went empty…
+        counter.observe(tab: tab, count: 4) // …and back: nothing new
+        XCTAssertEqual(counter.total, 4)
+        counter.navigationCommitted(tab)
         counter.observe(tab: tab, count: 1) // new page: count restarted
         XCTAssertEqual(counter.total, 5)
         XCTAssertEqual(defaults.integer(forKey: key), 5)
@@ -115,6 +119,7 @@ final class ShieldsTests: XCTestCase {
         _ = await bridge.send(["what": "setFilteringMode", "hostname": "shields.example", "level": 3])
         let after = await bridge.send(["what": "getFilteringMode", "hostname": "shields.example"]) as? Int
         XCTAssertEqual(after, 3)
+        XCTAssertEqual(bridge.pageLoads, 1, "back-to-back messages share one hidden page")
     }
 
     /// Panel PNGs (Shields up and down), only when LUNA_SETTINGS_SHOTS names an output folder.

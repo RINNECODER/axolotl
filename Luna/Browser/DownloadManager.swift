@@ -53,6 +53,11 @@ struct DownloadItem: Identifiable, Codable {
     var displayName: String { fileURL.lastPathComponent }
     var isActive: Bool { state == .downloading }
 
+    /// Shown in that window: private windows see only private items, others only their profile's.
+    func belongs(profileId: UUID?, isPrivate: Bool) -> Bool {
+        self.isPrivate == isPrivate && (self.profileId == nil || self.profileId == profileId)
+    }
+
     init(id: UUID = UUID(), url: URL, fileURL: URL, suggestedFilename: String, date: Date = Date(), state: State = .finished,
          profileId: UUID? = nil, isPrivate: Bool = false) {
         self.profileId = profileId
@@ -286,16 +291,6 @@ final class DownloadManager: ObservableObject {
         presentHub()
     }
 
-    /// Call when a file was saved to path outside WKDownload (e.g. URLSession).
-    func addDownload(url: URL, fileURL: URL, suggestedFilename: String) {
-        let item = DownloadItem(url: url, fileURL: fileURL, suggestedFilename: suggestedFilename)
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.insert(item)
-            if LunaMaxPrefs.isOn(LunaMaxPrefs.tidyDownloads) { self.tidy(item.id) }
-        }
-    }
-
     private func insert(_ item: DownloadItem) {
         recentDownloads.insert(item, at: 0)
         if recentDownloads.count > maxRecent, let last = recentDownloads.lastIndex(where: { !$0.isActive && $0.state != .paused }) {
@@ -306,6 +301,12 @@ final class DownloadManager: ObservableObject {
     /// Clears finished, failed and cancelled downloads from the list.
     func clearInactive(where matches: (DownloadItem) -> Bool = { _ in true }) {
         recentDownloads.removeAll { !$0.isActive && $0.state != .paused && matches($0) }
+    }
+
+    /// The last private window closed: forget its downloads (cancelling any still running).
+    func dropPrivate() {
+        for item in recentDownloads where item.isPrivate && item.isActive { cancel(item.id) }
+        recentDownloads.removeAll(where: \.isPrivate)
     }
 
     // MARK: - Luna Max: tidy downloads

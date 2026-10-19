@@ -4,6 +4,7 @@ import SwiftUI
 /// Shows the HTML captured from the tab; after a relaunch it re-requests the page.
 struct ViewSourceView: View {
     let page: URL
+    let tabId: UUID
     var isPrivate = false
     @State private var lines: [String]?
 
@@ -32,11 +33,11 @@ struct ViewSourceView: View {
             }
         }
         .background(Color(nsColor: .textBackgroundColor))
-        .task(id: page) { lines = await Self.source(of: page, isPrivate: isPrivate).components(separatedBy: "\n") }
+        .task(id: tabId) { lines = await Self.source(of: page, tabId: tabId, isPrivate: isPrivate).components(separatedBy: "\n") }
     }
 
-    private static func source(of page: URL, isPrivate: Bool) async -> String {
-        if let html = ViewSourceStore.html[page] { return html }
+    private static func source(of page: URL, tabId: UUID, isPrivate: Bool) async -> String {
+        if let html = ViewSourceStore.html[tabId] { return html.source }
         guard page.scheme == "http" || page.scheme == "https" else { return "" }
         let session = isPrivate ? PrivateBrowsing.urlSession : URLSession.shared
         guard let (data, _) = try? await session.data(from: page) else { return "Couldn't load \(page.absoluteString)" }

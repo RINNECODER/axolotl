@@ -43,6 +43,9 @@ enum PrivateBrowsing {
         openWindows = max(0, openWindows - 1)
         guard openWindows == 0 else { return }
         store = nil
+        DownloadManager.shared.dropPrivate()
+        FaviconCache.resetPrivate()
+        ViewSourceStore.html = ViewSourceStore.html.filter { !$0.value.isPrivate }
         urlSession.invalidateAndCancel()
         urlSession = URLSession(configuration: .ephemeral)
     }
@@ -57,6 +60,8 @@ enum PrivateBrowsing {
 extension EnvironmentValues {
     /// True inside a private window.
     @Entry var isPrivateBrowsing = false
+    /// The window's profile (nil outside a browser window).
+    @Entry var browserProfileId: UUID? = nil
 }
 
 /// Stands in for the profile button in a private window, like Chrome's Incognito chip.

@@ -35,7 +35,7 @@ final class SitePermissionsTests: XCTestCase {
 
         // Choosing the default drops the exception; a stricter global default then applies.
         reloaded.set(.ask, .camera, host: "meet.example")
-        XCTAssertNil(reloaded.sites["meet.example"]?[.camera])
+        XCTAssertNil(reloaded.sites["https://meet.example"]?[.camera])
         defaults.set("block", forKey: SitePermission.camera.defaultsKey)
         XCTAssertEqual(reloaded.decision(.camera, host: "meet.example"), .block)
         // An "ask" exception now differs from the default, so it is kept.
@@ -44,6 +44,24 @@ final class SitePermissionsTests: XCTestCase {
 
         reloaded.removeAll(host: "meet.example")
         XCTAssertTrue(SitePermissionStore(fileURL: file, defaults: defaults).sites.isEmpty)
+    }
+
+    func testGrantsAreKeyedByOriginAndHostFilesMigrate() throws {
+        try JSONEncoder().encode(["meet.example": [SitePermission.camera: SitePermissionDecision.allow]]).write(to: file)
+        let store = SitePermissionStore(fileURL: file, defaults: defaults)
+        XCTAssertEqual(Array(store.sites.keys), ["https://meet.example"])
+        XCTAssertEqual(store.decision(.camera, host: "https://meet.example"), .allow)
+        // Another scheme or port is another origin.
+        XCTAssertEqual(store.decision(.camera, host: "http://meet.example"), .ask)
+        XCTAssertEqual(store.decision(.camera, host: "https://meet.example:8443"), .ask)
+        XCTAssertEqual(SitePermissionStore.origin(URL(string: "https://Meet.Example:443/a")), "https://meet.example")
+        // Plain-http grants aren't remembered; localhost's are.
+        store.set(.allow, .camera, host: "http://evil.example")
+        XCTAssertEqual(store.decision(.camera, host: "http://evil.example"), .ask)
+        store.set(.allow, .camera, host: "http://localhost:3000")
+        XCTAssertEqual(store.decision(.camera, host: "http://localhost:3000"), .allow)
+        XCTAssertEqual(Set(SitePermissionStore(fileURL: file, defaults: defaults).sites.keys),
+                       ["https://meet.example", "http://localhost:3000"])
     }
 
     func testInMemoryStoreWritesNothing() {
@@ -65,6 +83,15 @@ final class SitePermissionsTests: XCTestCase {
         for s in notSecure { XCTAssertTrue(SiteSecurity.showsNotSecure(URL(string: s)), s) }
         for s in secure { XCTAssertFalse(SiteSecurity.showsNotSecure(URL(string: s)), s) }
         XCTAssertFalse(SiteSecurity.showsNotSecure(nil))
+    }
+
+    func testLockNeedsLoadedSecurePage() {
+        let https = URL(string: "https://example.com")!
+        // An https URL alone (no page, a pending error, or plain http) never earns the lock.
+        XCTAssertFalse(SiteSecurity.isSecure(https, webView: nil, hasPageError: false))
+        XCTAssertFalse(SiteSecurity.isSecure(https, webView: WKWebView(), hasPageError: false))
+        XCTAssertFalse(SiteSecurity.isSecure(https, webView: WKWebView(), hasPageError: true))
+        XCTAssertFalse(SiteSecurity.isSecure(URL(string: "http://example.com")!, webView: WKWebView(), hasPageError: false))
     }
 
     func testDelegateDecisionMapping() {

@@ -29,9 +29,10 @@ enum PageScripts {
     """
 }
 
-/// HTML captured for luna://source tabs, by page URL (the tab re-requests the page when missing).
+/// HTML captured for luna://source tabs, by source tab id (a reopened tab re-requests the page).
+/// Dropped when the tab closes; private windows' entries go when the last private window closes.
 enum ViewSourceStore {
-    static var html: [URL: String] = [:]
+    static var html: [UUID: (source: String, isPrivate: Bool)] = [:]
 }
 
 extension WebViewWrapper {

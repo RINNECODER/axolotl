@@ -1198,6 +1198,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         tabRuntime.setAudible(false, for: tabId)
         mutedTabs.remove(tabId)
         if !keepMetadata {
+            ViewSourceStore.html[tabId] = nil
             tabRuntime.remove(tabId)
             primaryTintByTab.removeValue(forKey: tabId)
             pageThemeByTab.removeValue(forKey: tabId)
@@ -1390,6 +1391,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         guard let tabId = tabId(for: webView) else { return }
         httpsUpgrades.removeValue(forKey: tabId)
         findResultByTab.removeValue(forKey: tabId)
+        shieldsCounter.navigationCommitted(tabId)
         if let host = webView.url?.host {
             let zoom = siteZoom.zoom(for: host)
             if zoomByTab[tabId] != zoom { zoomByTab[tabId] = zoom }
@@ -1628,7 +1630,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         let opener = tabId(for: webView)
         let now = Date()
         let recent = opener.flatMap { popupTimes[$0] } ?? []
-        let popupsAllowed = sitePermissions.decision(.popups, host: webView.url?.host) == .allow
+        let popupsAllowed = sitePermissions.decision(.popups, host: SitePermissionStore.origin(webView.url)) == .allow
         guard popupsAllowed || Self.allowsPopup(userActivated: navigationAction.navigationType == .linkActivated || lwv?.hadUserInput(within: 1) == true,
                                recent: recent, now: now) else { return nil }
         if let opener { popupTimes[opener] = recent.filter { now.timeIntervalSince($0) < 60 } + [now] }
@@ -1655,16 +1657,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
                  type: WKMediaCaptureType, decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        requestSitePermissions(SitePermission.forMedia(type), host: origin.host, webView: webView, decisionHandler: decisionHandler)
+        requestSitePermissions(SitePermission.forMedia(type), host: SitePermissionStore.origin(origin), webView: webView, decisionHandler: decisionHandler)
     }
 
     @available(macOS 27.0, *)
     func webView(_ webView: WKWebView, requestGeolocationPermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        requestSitePermissions([.location], host: origin.host, webView: webView, decisionHandler: decisionHandler)
+        requestSitePermissions([.location], host: SitePermissionStore.origin(origin), webView: webView, decisionHandler: decisionHandler)
     }
 
-    /// Applies saved decisions, else shows the tab's permission bubble. "Remember" saves the answer for the host.
+    /// Applies saved decisions, else shows the tab's permission bubble. "Remember" saves the answer for the origin (`host`).
     func requestSitePermissions(_ permissions: [SitePermission], host: String, webView: WKWebView,
                                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
         let store = sitePermissions
@@ -1677,7 +1679,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             // shortcut: one prompt per tab; a newer request denies the older one. Queue them if sites need both.
             pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
             var request: SitePermissionRequest!
-            request = SitePermissionRequest(host: host, permissions: asking) { [weak self] allow, remember in
+            request = SitePermissionRequest(host: URL(string: host)?.host ?? host, permissions: asking) { [weak self] allow, remember in
                 if self?.pendingPermissions[tabId] === request { self?.pendingPermissions[tabId] = nil }
                 if remember { for p in asking { store.set(allow ? .allow : .block, p, host: host) } }
                 decisionHandler(allow ? .grant : .deny)
