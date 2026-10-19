@@ -37,11 +37,14 @@ nonisolated enum ChromiumSecureImport {
 
     // MARK: Cookies
 
-    static func cookies(profileFolder: URL, key: Data) throws -> [ImportedCookie] {
-        // Newer Chromium keeps cookies under Network/; fall back to the old location.
+    /// Newer Chromium keeps cookies under Network/; fall back to the old location.
+    private static func cookiesFile(_ profileFolder: URL) -> URL {
         let network = profileFolder.appendingPathComponent("Network/Cookies")
-        let flat = profileFolder.appendingPathComponent("Cookies")
-        let file = FileManager.default.fileExists(atPath: network.path) ? network : flat
+        return FileManager.default.fileExists(atPath: network.path) ? network : profileFolder.appendingPathComponent("Cookies")
+    }
+
+    static func cookies(profileFolder: URL, key: Data) throws -> [ImportedCookie] {
+        let file = cookiesFile(profileFolder)
         guard FileManager.default.fileExists(atPath: file.path) else { return [] }
         let db = try SQLiteSnapshot(copying: file)
         let stripHostHash = metaVersion(db) >= 24
@@ -69,7 +72,29 @@ nonisolated enum ChromiumSecureImport {
             ?? 0
     }
 
+    /// Unexpired, persistent cookie counts per site, for the import picker; nothing is decrypted.
+    static func cookieSites(profileFolder: URL) throws -> [String: Int] {
+        let file = cookiesFile(profileFolder)
+        guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
+        let rows = try SQLiteSnapshot(copying: file).rows("SELECT host_key FROM cookies WHERE expires_utc > ?1",
+                                                          bind: [ChromiumImporter.chromiumTime(from: Date())])
+        return rows.reduce(into: [:]) { sites, r in if let host = r.first?.text { sites[ImportPick.site(host), default: 0] += 1 } }
+    }
+
     // MARK: Logins
+
+    /// Saved sign-ins (origin, username) for the import picker; passwords are never read here.
+    static func loginSites(profileFolder: URL) throws -> [(origin: String, username: String)] {
+        let file = profileFolder.appendingPathComponent("Login Data")
+        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        // "Never save" entries have an empty password blob; import drops them too.
+        let rows = try SQLiteSnapshot(copying: file).rows(
+            "SELECT origin_url, username_value FROM logins WHERE length(password_value) > 0")
+        return rows.compactMap { r in
+            guard r.count == 2, let origin = r[0].text, !origin.isEmpty else { return nil }
+            return (origin, r[1].text ?? "")
+        }
+    }
 
     static func logins(profileFolder: URL, key: Data) throws -> [ImportedLogin] {
         let file = profileFolder.appendingPathComponent("Login Data")
