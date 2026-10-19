@@ -34,7 +34,7 @@ enum DebugUIDriver {
         case "key": LunaMenuController.current?.debugKey(arg)
         case "close": LunaMenuController.current?.close()
         case "front":
-            // Put browser / settings windows on the current Space, behind other apps' windows,
+            // Put browser windows on the current Space, behind other apps' windows,
             // without activating Luna: they stay capturable without covering anything.
             for window in NSApp.windows where window.isVisible && window.frame.width > 300 && window.parent == nil {
                 window.collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary])
@@ -48,8 +48,7 @@ enum DebugUIDriver {
             }
         case "pin": LunaMenuController.debugPinned = arg == "1"
         case "settings":
-            SettingsRouter.shared.request(arg)
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            if !SettingsOpener.open(named: arg) { SettingsOpener.open() }
         case "glass": UserDefaults.standard.set(arg == "1", forKey: LiquidGlass.defaultsKey)
         case "appearance": UserDefaults.standard.set(arg, forKey: "luma_appearance")
         default: break

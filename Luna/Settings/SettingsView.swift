@@ -4,15 +4,27 @@ import SwiftUI
 import AppKit
 import Combine
 
-/// Settings window: category sidebar, search, and grouped forms (macOS
-/// System Settings style, mirroring Helium's categories).
+/// Settings: category sidebar, search, and grouped forms (macOS System Settings style,
+/// mirroring Helium's categories). Shown in a browser tab at `luna://settings/<pane>`;
+/// the tab's URL holds the selected pane.
 struct SettingsView: View {
-    @State private var selection: SettingsPane?
+    private let external: Binding<SettingsPane?>?
+    @State private var local: SettingsPane?
     @State private var query = ""
 
-    init(initialPane: SettingsPane = .general) {
-        _selection = State(initialValue: initialPane)
+    /// In a tab: the pane follows (and writes back to) the tab's URL.
+    init(selection: Binding<SettingsPane?>) {
+        external = selection
     }
+
+    /// Standalone (debug snapshots): the view keeps its own pane.
+    init(initialPane: SettingsPane = .general) {
+        external = nil
+        _local = State(initialValue: initialPane)
+    }
+
+    private var selectionBinding: Binding<SettingsPane?> { external ?? $local }
+    private var selection: SettingsPane? { selectionBinding.wrappedValue }
 
     private var visiblePanes: [SettingsPane] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -24,24 +36,22 @@ struct SettingsView: View {
 
     var body: some View {
         Group {
-            if liquidGlass { nativeLayout } else { solidLayout }
+            // A tab has no window toolbar for the split view's sidebar search: it uses the
+            // list + content layout, on glass or solid surfaces.
+            if liquidGlass && external == nil { nativeLayout } else { solidLayout }
         }
-        .frame(minWidth: 860, idealWidth: 900, minHeight: 520, idealHeight: 600)
+        // Sizes to the tab; no window minimums.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SettingsInitialFocus())
         .onChange(of: query) { _, _ in
-            if let selection, !visiblePanes.contains(selection) { self.selection = visiblePanes.first }
-        }
-        .onReceive(SettingsRouter.shared.$requestedPane.compactMap { $0 }) { pane in
-            query = ""
-            selection = pane
-            SettingsRouter.shared.requestedPane = nil
+            if let selection, !visiblePanes.contains(selection) { selectionBinding.wrappedValue = visiblePanes.first }
         }
     }
 
     /// System Settings style split view (Liquid Glass sidebar on macOS 26).
     private var nativeLayout: some View {
         NavigationSplitView {
-            List(visiblePanes, selection: $selection) { pane in
+            List(visiblePanes, selection: selectionBinding) { pane in
                 Label(pane.title, systemImage: pane.icon)
                     .tag(pane)
             }
@@ -68,32 +78,34 @@ struct SettingsView: View {
                 ScrollView {
                     VStack(spacing: 2) {
                         ForEach(visiblePanes) { pane in
-                            SolidSidebarRow(pane: pane, isSelected: (selection ?? .general) == pane) { selection = pane }
+                            SolidSidebarRow(pane: pane, isSelected: (selection ?? .general) == pane) { selectionBinding.wrappedValue = pane }
                         }
                     }
                 }
                 .scrollIndicators(.never)
             }
             .padding(.horizontal, 10)
-            .padding(.top, 38)
+            .padding(.top, inTab ? 14 : 38)
             .frame(width: 240)
             .frame(maxHeight: .infinity, alignment: .top)
-            .background(LunaSurface.sidebar)
+            .background {
+                if inTab && liquidGlass { Rectangle().fill(.regularMaterial) } else { LunaSurface.sidebar }
+            }
             Rectangle().fill(LunaSurface.stroke).frame(width: 1)
             VStack(alignment: .leading, spacing: 0) {
                 Text((selection ?? .general).title)
                     .font(.system(size: 15, weight: .semibold))
                     .padding(.horizontal, 20)
-                    .frame(height: 38, alignment: .center)
+                    .frame(height: inTab ? 46 : 38, alignment: .center)
                 detail
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .ignoresSafeArea(.container, edges: .top)
-        // The pane header is the title: no window title or titlebar material over it.
-        .toolbar(removing: .title)
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .background(inTab ? AnyShapeStyle(LunaSurface.window) : AnyShapeStyle(.clear))
+        .modifier(StandaloneWindowChrome(enabled: !inTab))
     }
+
+    private var inTab: Bool { external != nil }
 
     private var detail: some View {
             Group {
@@ -112,9 +124,9 @@ struct SettingsView: View {
     }
 }
 
-/// AppKit focuses the window's first text field (General's profile name) each time Settings
-/// opens. Start with nothing focused instead, like System Settings: once when the window
-/// appears and again whenever it reopens after closing (the window is reused).
+/// AppKit focuses the first text field (General's profile name) when Settings opens. Start with
+/// nothing focused instead, like System Settings: each time the Settings tab (or a standalone
+/// window) appears, and again whenever a standalone window reopens after closing.
 private struct SettingsInitialFocus: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { FocusView() }
     func updateNSView(_ view: NSView, context: Context) {}
@@ -149,6 +161,21 @@ private struct SettingsInitialFocus: NSViewRepresentable {
         }
 
         deinit { observers.forEach(NotificationCenter.default.removeObserver) }
+    }
+}
+
+/// A standalone Settings window: the pane header is the title, so no window title or titlebar material.
+private struct StandaloneWindowChrome: ViewModifier {
+    let enabled: Bool
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .ignoresSafeArea(.container, edges: .top)
+                .toolbar(removing: .title)
+                .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        } else {
+            content
+        }
     }
 }
 
@@ -313,8 +340,7 @@ private struct GeneralSettingsView: View {
             Section {
                 LabeledContent("Welcome") {
                     Button("Show Welcome Again") {
-                        // The welcome flow shows in a browser window; don't leave Settings stranded behind it.
-                        NSApp.keyWindow?.close()
+                        // Settings is a tab, so the welcome sheet shows over this window.
                         OnboardingState.showAgain()
                     }
                 }

@@ -34,6 +34,24 @@ final class SettingsPaneLinkTests: XCTestCase {
         XCTAssertNil(SettingsRouter.shared.requestedPane)
     }
 
+    func testSettingsTabURLsOpenTheirPane() {
+        for pane in SettingsPane.allCases {
+            let url = InternalPage.settingsURL(pane)
+            XCTAssertEqual(url.absoluteString, "luna://settings/\(pane.rawValue)")
+            XCTAssertEqual(InternalPage.settingsPane(url), pane)
+        }
+        // Old pane names deep-link too; the bare URL keeps the default pane.
+        XCTAssertEqual(InternalPage.settingsPane(URL(string: "luna://settings/developer")), .agents)
+        XCTAssertNil(InternalPage.settingsPane(URL(string: "luna://settings")))
+        XCTAssertTrue(InternalPage.isSettings(URL(string: "luna://settings")))
+        XCTAssertFalse(InternalPage.isSettings(URL(string: "https://settings")))
+        XCTAssertFalse(InternalPage.isSettings(URL(string: "luma://history")))
+    }
+
+    func testTypingASettingsURLOpensItInsteadOfSearching() {
+        XCTAssertEqual(AddressInput.url(for: "luna://settings/agents")?.absoluteString, "luna://settings/agents")
+    }
+
     func testEachRegistrySettingAppearsInOnePaneAndExists() {
         var seen: [String: SettingsPane] = [:]
         for pane in SettingsPane.allCases {

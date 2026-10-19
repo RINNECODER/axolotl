@@ -219,11 +219,10 @@ private struct FavoriteDrop: DropDelegate {
 private struct SidebarMoreMenu: View {
     let extensions: ExtensionHost
     let bookmarkPage: (() -> Void)?
-    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         LunaMenuButton(alignment: .leading, minWidth: 220, help: "More", opensAbove: true, debugID: "sidebar.more", items: {
-            let settings = LunaSettingsOpener(openSettings: openSettings)
+            let settings = LunaSettingsOpener()
             return [.button("Bookmark This Page", icon: "star", shortcut: "⌘D", enabled: bookmarkPage != nil) { bookmarkPage?() },
                     .divider("b")]
                 + ExtensionMenuEntries.build(host: extensions, settings: settings, icon: "puzzlepiece.extension")

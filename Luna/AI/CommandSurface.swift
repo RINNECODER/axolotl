@@ -31,7 +31,6 @@ struct CommandSurfaceView: View {
     @AppStorage("luma_ollama_model") private var ollamaModel: String = ""
     @AppStorage(DevPrefs.panelModeKey) private var panelModeRaw: String = AIPanelMode.general.rawValue
     @AppStorage(DevPrefs.terminalKey) private var devTerminal: Bool = false
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.colorScheme) private var outerColorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var modeSwitchNS
@@ -255,13 +254,11 @@ struct CommandSurfaceView: View {
     }
 
     private func openConnectAgents() {
-        SettingsRouter.shared.requestedPane = .ai
-        openSettings()
+        SettingsOpener.open(.agents)
     }
 
     private func openModelSettings() {
-        SettingsRouter.shared.requestedPane = .ai
-        openSettings()
+        SettingsOpener.open(.ai)
     }
 
     private func startNewChat() {
@@ -1016,8 +1013,7 @@ struct CommandSurfaceView: View {
                 card.message = error.localizedDescription
             }
         case .openSettings:
-            SettingsRouter.shared.requestedPane = .privacy
-            openSettings()
+            SettingsOpener.open(.privacy)
             return
         }
         updateCard(messageId) { $0 = .personalize(card) }

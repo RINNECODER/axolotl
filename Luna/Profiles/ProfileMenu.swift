@@ -76,12 +76,9 @@ final class SettingsRouter: ObservableObject {
 
 /// Opens Settings on the General pane, where profiles live.
 struct ManageProfilesButton: View {
-    @Environment(\.openSettings) private var openSettings
-
     var body: some View {
         Button("Manage Profiles…") {
-            SettingsRouter.shared.requestedPane = .general
-            openSettings()
+            SettingsOpener.open(.general)
         }
     }
 }
@@ -114,8 +111,6 @@ struct ProfileMenu: View {
     let activeProfileId: UUID
     let onSwitch: (BrowserProfile) -> Void
     let onOpenInNewWindow: (BrowserProfile) -> Void
-
-    @Environment(\.openSettings) private var openSettings
 
     private var active: BrowserProfile { profileManager.profile(for: activeProfileId) }
 
@@ -150,7 +145,7 @@ extension ProfileMenu {
                 }
             }))
         }
-        let settings = LunaSettingsOpener(openSettings: openSettings)
+        let settings = LunaSettingsOpener()
         entries += [
             .divider("p1"),
             .button("New Profile…", icon: "person.badge.plus") {

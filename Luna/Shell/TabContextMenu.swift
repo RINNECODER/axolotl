@@ -92,7 +92,7 @@ enum TabContextMenu {
         let order = store.orderedTabIds
         let persistent = Set(order.filter { ws.isPersistent($0) })
         let url = ws.tabs[tabId]?.url
-        let hasPage = url.map { $0.absoluteString != "about:blank" && $0.scheme != "luma" } ?? false
+        let hasPage = url.map { $0.absoluteString != "about:blank" && !InternalPage.isInternal($0) } ?? false
         let hasSite = web.flatMap { WebViewWrapper.siteKey($0.webViewIfLoaded(for: tabId)?.url) } != nil
         let isMuted = web?.isMuted(tabId) ?? false
         return sections(for: tabId, order: order, persistent: persistent, hasPage: hasPage, hasSite: hasSite, isMuted: isMuted)
