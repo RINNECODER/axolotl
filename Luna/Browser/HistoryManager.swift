@@ -154,6 +154,14 @@ final class HistoryManager: ObservableObject {
         scheduleSummariesSave()
     }
     
+    /// Clears history and chat summaries from `cutoff` to now (Chrome's "Clear browsing data" time range).
+    func clearHistory(since cutoff: Date) {
+        historyEvents.removeAll { $0.timestamp >= cutoff }
+        conversationSummaries = conversationSummaries.mapValues { $0.filter { $0.timestamp < cutoff } }.filter { !$0.value.isEmpty }
+        scheduleHistorySave()
+        scheduleSummariesSave()
+    }
+
     func clearIndividualEvent(_ eventId: UUID) {
         historyEvents.removeAll { $0.id == eventId }
         scheduleHistorySave()

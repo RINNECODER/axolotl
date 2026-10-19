@@ -19,7 +19,10 @@ final class MCPApprovalCenter {
 
         var title: String {
             if isPreview { return "\(client) proposes: \(Self.previewTitles[tool] ?? "a change")" }
-            return "\(client) wants to \(tool.replacingOccurrences(of: "_", with: " "))"
+            // "tabs_list" -> "list tabs": verb first, no internal tool names.
+            let parts = tool.split(separator: "_").map(String.init)
+            let phrase = parts.count == 2 ? "\(parts[1]) \(parts[0])" : parts.joined(separator: " ")
+            return "\(client) wants to \(phrase)"
         }
 
         static let previewTitles = [

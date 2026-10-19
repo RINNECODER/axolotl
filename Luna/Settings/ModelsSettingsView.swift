@@ -406,6 +406,7 @@ private struct ModelPicker: View {
             }
             .buttonStyle(.borderless)
             .help("Refresh models")
+            .accessibilityLabel("Refresh models")
             .disabled(loading)
         }
         .task { await refresh() }

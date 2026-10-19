@@ -338,6 +338,7 @@ private struct ChromeStar: View {
             .onHover { isHovering = $0 }
             .disabled(url == nil)
             .help(saved ? "Remove Bookmark" : "Bookmark This Tab (⌘D)")
+            .accessibilityLabel(saved ? "Remove Bookmark" : "Bookmark This Tab")
         }
     }
 }
@@ -390,5 +391,6 @@ private struct ChromeMenuButton: View {
         .fixedSize()
         .background(PopupAnchor { extensions.menuAnchor = $0 })
         .help("Customize and control Luna")
+        .accessibilityLabel("Customize and control Luna")
     }
 }

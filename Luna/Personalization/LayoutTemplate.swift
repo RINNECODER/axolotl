@@ -1,7 +1,7 @@
 import Foundation
 
 /// A whole-window look applied as one bundle of registry settings (Settings → Appearance → Layout).
-/// `.luna` ("Custom") is the user's own setup; any other template saves that setup first and switching back
+/// `.luna` ("Luna") is the user's own setup; any other template saves that setup first and switching back
 /// to Luna restores it exactly. Add a case and its `bundle` to offer another template.
 enum LayoutTemplate: String, CaseIterable, Identifiable {
     case luna
@@ -15,14 +15,14 @@ enum LayoutTemplate: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .luna: return "Custom"
+        case .luna: return "Luna"
         case .chrome: return "Chrome"
         }
     }
 
     var summary: String {
         switch self {
-        case .luna: return "Your own layout, set with Customize below."
+        case .luna: return "Luna's own layout, set up the way you like with Customize below."
         case .chrome: return "Google Chrome's layout: curved tabs on top, toolbar with a pill address bar, bookmarks bar."
         }
     }

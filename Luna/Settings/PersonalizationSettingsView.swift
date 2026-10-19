@@ -1,16 +1,15 @@
 import SwiftUI
 import WebKit
 
-/// Settings → Privacy & Data: the opt-in usage record, browsing data, and the AI changes made with it.
+/// Settings → Privacy & Data: the opt-in usage record and browsing data.
 struct PersonalizationSettingsView: View {
     @AppStorage(PersonalizationPrefs.enabledKey) private var enabled = false
     @AppStorage(PersonalizationPrefs.retentionKey) private var retention = PersonalizationPrefs.defaultRetention
     @ObservedObject private var usage = UsageStore.forProfile(Usage.profileId())
-    @ObservedObject private var log = AIChangeLog.shared
     @State private var showData = false
     @State private var confirmDelete = false
-    @State private var undoError: String?
     @State private var confirmClearSiteData = false
+    @State private var showClearHistory = false
     @State private var siteDataStatus: String?
     @State private var dataProfileId = ProfileManager.shared.lastActiveProfileId
     @ObservedObject private var profileManager = ProfileManager.shared
@@ -50,31 +49,19 @@ struct PersonalizationSettingsView: View {
                     Button("Clear…", role: .destructive) { confirmClearSiteData = true }
                 }
                 LabeledContent("History") {
-                    Text("Clear it from History (⌘Y) in a browser window.").foregroundStyle(.secondary)
+                    Button("Clear browsing data…", role: .destructive) { showClearHistory = true }
                 }
                 if let siteDataStatus { Text(siteDataStatus).font(.callout).foregroundStyle(.secondary) }
             } header: {
                 Text("Browsing data")
             }
-
-            Section {
-                if log.entries.isEmpty {
-                    Text("Changes your AI agent makes appear here, with Undo.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(log.entries) { entry in
-                        ChangeRow(entry: entry) {
-                            do { _ = try Customizer.shared.undo(entry.id) } catch { undoError = error.localizedDescription }
-                        }
-                    }
-                }
-            } header: {
-                Text("Recent AI changes")
-            }
         }
         .formStyle(.grouped)
         .onChange(of: retention) { _, _ in usage.prune() }
         .sheet(isPresented: $showData) { UsageDataSheet(usage: usage) }
+        .sheet(isPresented: $showClearHistory) {
+            ClearHistorySheet(history: ProfileStoreRegistry.stores(for: dataProfileId).history) { siteDataStatus = $0 }
+        }
         .confirmationDialog("Clear cookies and site data for \(profileManager.profile(for: dataProfileId).name)?",
                             isPresented: $confirmClearSiteData) {
             Button("Clear", role: .destructive, action: clearSiteData)
@@ -86,11 +73,6 @@ struct PersonalizationSettingsView: View {
         } message: {
             Text("Removes every recorded count for this profile. Your browsing history is kept; clear it from History.")
         }
-        .alert("Couldn't undo", isPresented: Binding(get: { undoError != nil }, set: { if !$0 { undoError = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(undoError ?? "")
-        }
     }
 
     private func clearSiteData() {
@@ -98,34 +80,6 @@ struct PersonalizationSettingsView: View {
         store.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: .distantPast) {
             siteDataStatus = "Cookies and site data cleared."
         }
-    }
-}
-
-private struct ChangeRow: View {
-    let entry: AIChange
-    let onUndo: () -> Void
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(entry.lines.prefix(2), id: \.self) { line in
-                    Text(line.text).strikethrough(entry.undone).lineLimit(1)
-                }
-                if entry.lines.count > 2 {
-                    Text("and \(entry.lines.count - 2) more").foregroundStyle(.secondary)
-                }
-                Text("\(entry.source) · \(entry.date.formatted(date: .abbreviated, time: .shortened))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 8)
-            if entry.undone {
-                Text("Undone").foregroundStyle(.secondary)
-            } else {
-                Button("Undo", action: onUndo)
-            }
-        }
-        .accessibilityElement(children: .combine)
     }
 }
 
@@ -220,5 +174,56 @@ private struct HourBars: View {
         }
         .accessibilityElement()
         .accessibilityLabel("Activity by hour")
+    }
+}
+
+/// Chrome-style "Clear browsing data": pick a time range, confirm, clear history from then to now.
+private struct ClearHistorySheet: View {
+    let history: HistoryManager
+    let onDone: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var range = TimeRange.hour
+
+    enum TimeRange: String, CaseIterable, Identifiable {
+        case hour, day, week, all
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .hour: return "Last hour"
+            case .day: return "Last 24 hours"
+            case .week: return "Last 7 days"
+            case .all: return "All time"
+            }
+        }
+        var cutoff: Date {
+            switch self {
+            case .hour: return Date().addingTimeInterval(-3600)
+            case .day: return Date().addingTimeInterval(-86_400)
+            case .week: return Date().addingTimeInterval(-7 * 86_400)
+            case .all: return .distantPast
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Clear browsing history").font(.headline)
+            Text("Removes the pages you visited in this time range from History on this Mac. Cookies, passwords and bookmarks are kept.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            LunaPicker("Time range", selection: $range, options: TimeRange.allCases.map { .init($0, $0.label) })
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Clear history", role: .destructive) {
+                    history.clearHistory(since: range.cutoff)
+                    onDone("History cleared (\(range.label.lowercased())).")
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
     }
 }

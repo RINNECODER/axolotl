@@ -74,12 +74,15 @@ struct PasswordsSettingsView: View {
                             }
                             .buttonStyle(.borderless)
                             .help(revealed[cred.id] == nil ? "Show password" : "Hide password")
+                            .accessibilityLabel(revealed[cred.id] == nil ? "Show password" : "Hide password")
                             Button { copy(cred) } label: { Image(systemName: "doc.on.doc") }
                                 .buttonStyle(.borderless)
                                 .help("Copy password")
+                                .accessibilityLabel("Copy password")
                             Button(role: .destructive) { pendingDelete = cred } label: { Image(systemName: "trash") }
                                 .buttonStyle(.borderless)
                                 .help("Delete")
+                                .accessibilityLabel("Delete login")
                         }
                     }
                 } header: {
