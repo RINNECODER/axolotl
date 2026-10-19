@@ -1391,6 +1391,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         guard let tabId = tabId(for: webView) else { return }
         httpsUpgrades.removeValue(forKey: tabId)
         findResultByTab.removeValue(forKey: tabId)
+        shieldsCounter.navigationCommitted(tabId)
         if let host = webView.url?.host {
             let zoom = siteZoom.zoom(for: host)
             if zoomByTab[tabId] != zoom { zoomByTab[tabId] = zoom }

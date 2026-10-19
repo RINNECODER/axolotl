@@ -169,18 +169,21 @@ final class ShieldsCounter: ObservableObject {
         return c
     }
 
-    /// A tab's badge count; it restarts at 0 on navigation, so a drop starts a new page.
+    /// A tab's badge count. Only growth past the page's high-water mark counts, so a badge that goes
+    /// empty and comes back isn't added twice; `navigationCommitted` starts the next page at 0.
     func observe(tab: UUID, count: Int) {
         let last = lastByTab[tab] ?? 0
+        guard count > last else { return }
         lastByTab[tab] = count
-        let delta = count >= last ? count - last : count
-        guard delta > 0 else { return }
+        let delta = count - last
         total += delta
         pending += delta
         if pending >= flushEvery { flush() }
     }
 
     func tabClosed(_ tab: UUID) { lastByTab.removeValue(forKey: tab) }
+
+    func navigationCommitted(_ tab: UUID) { lastByTab[tab] = 0 }
 
     @objc private func flushNow() { flush() }
 

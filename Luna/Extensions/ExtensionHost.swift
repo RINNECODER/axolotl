@@ -38,10 +38,13 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
             }
             .store(in: &cancellables)
         // Settings' Shields level is uBOL's default mode; changing it clears uBOL's per-site modes at that level.
+        // Only the level key matters; any other default changing is skipped by removeDuplicates.
         NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
-            .sink { [weak self] _ in
+            .map { _ in UserDefaults.standard.string(forKey: ShieldsPrefs.level).flatMap(ShieldsLevel.init(rawValue:)) ?? .standard }
+            .removeDuplicates()
+            .sink { [weak self] level in
                 DispatchQueue.main.async {
-                    guard let self, ShieldsPrefs.defaults().level != self.shieldsDefault else { return }
+                    guard let self, level != self.shieldsDefault else { return }
                     self.pushShields()
                 }
             }
