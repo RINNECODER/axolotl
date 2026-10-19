@@ -379,6 +379,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         guard let webView, let tabId = tabId(for: webView), let dict = body as? [String: Any] else { return }
         if dict["type"] as? String == "show",
            LunaMaxPrefs.isOn(LunaMaxPrefs.linkPreviews),
+           !isPrivate || LLMService.shared.provider == .ollama, // private links never go to a cloud model
            NSEvent.modifierFlags.contains(.shift),
            let href = dict["url"] as? String, let url = URL(string: href),
            url.scheme == "http" || url.scheme == "https" {

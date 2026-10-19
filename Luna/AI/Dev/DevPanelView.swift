@@ -40,6 +40,7 @@ struct DevPanelView: View {
     @State private var harnesses: [HarnessInfo] = []
     @State private var listing: ModelListing?
     @State private var modelsLoading = false
+    @State private var modelsLoadID = 0
     @State private var modelError: String?
     @State private var confirmTakeOver = false
     @Namespace private var viewSwitchNS
@@ -130,6 +131,8 @@ struct DevPanelView: View {
             input = ""
             expandedGroups = []
             turnDurations = [:]
+            // The old session's start time must not be timed against this one.
+            turnStartedAt = isTurnActive ? Date() : nil
         }
         .onChange(of: isTurnActive) { _, active in
             if active {
@@ -459,6 +462,14 @@ struct DevPanelView: View {
     private enum Row {
         case item(Int, DevThreadState.Item)
         case work(start: Int, entries: [(Int, DevThreadState.Item)])
+
+        /// Index of the row's first item: stable while tokens stream into the last row.
+        var id: Int {
+            switch self {
+            case .item(let i, _): return i
+            case .work(let start, _): return start
+            }
+        }
     }
 
     private func rows(_ thread: DevThreadState) -> [Row] {
@@ -481,7 +492,7 @@ struct DevPanelView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
                     LazyVStack(alignment: .leading, spacing: DevMetrics.rowSpacing) {
-                        ForEach(Array(rows(thread).enumerated()), id: \.offset) { _, row in
+                        ForEach(rows(thread), id: \.id) { row in
                             rowView(row, thread: thread)
                         }
                         if thread.isTurnActive, !lastIsStreaming(thread), thread.pendingApprovals == 0 {
@@ -1084,8 +1095,11 @@ struct DevPanelView: View {
 
     private func loadModels(refresh: Bool) async {
         let harness = agent.harnessID
+        modelsLoadID += 1
+        let loadID = modelsLoadID
         modelsLoading = true
-        defer { modelsLoading = false }
+        // A superseded (e.g. cancelled) load must not clear the newer one's spinner.
+        defer { if loadID == modelsLoadID { modelsLoading = false } }
         do {
             let result = try await HarnessModelCatalog.shared.listing(for: harness, refresh: refresh)
             guard harness == agent.harnessID else { return }

@@ -7,6 +7,11 @@ import Security
 /// password, remembered for a few minutes. Logins sync through iCloud
 /// Keychain unless the profile turns that off.
 final class PasswordVault {
+    /// "https://<host>" for a favicon; brackets IPv6 literals ("::1"), nil if the host still isn't valid.
+    nonisolated static func siteURL(host: String) -> URL? {
+        URL(string: "https://" + (host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host))
+    }
+
     static let shared = PasswordVault()
 
     struct Credential: Identifiable, Hashable {

@@ -44,7 +44,6 @@ struct SmartSearchView: View {
 
     @State private var hasGeneratedTitle: Bool = false
     @State private var searchBarOffset: CGFloat = 0
-    @State private var previousInputLength: Int = 0
     @State private var currentIntent: QueryIntent = .search
     /// True while an ambiguous query is being routed by the model.
     @State private var isRouting: Bool = false
@@ -61,6 +60,10 @@ struct SmartSearchView: View {
     // Suggestions
     @State private var searchSuggestions: [String] = []
     @State private var urlRows: [AddressSuggestion] = []
+    /// Inline autocomplete, as in the address bar: what was typed, the text before it, and the selected tail.
+    @State private var typedText = ""
+    @State private var previousTyped = ""
+    @State private var inlineTail = ""
     @State private var selectedSuggestionIndex: Int = -1
     @State private var suggestionDebounceTask: DispatchWorkItem? = nil
     @State private var suggestionKeyMonitor: Any? = nil
@@ -540,10 +543,17 @@ struct SmartSearchView: View {
                     .foregroundColor(ChatTokens.textPrimary)
                     .focused($isInputFocused)
                     .onSubmit { submitWithSelection() }
-                    .onChange(of: inputText) { _, newValue in
-                        selectedSuggestionIndex = -1
-                        fetchSuggestions(for: newValue)
-                        handlePasteDetection(newValue)
+                    .onChange(of: inputText) { oldValue, newValue in
+                        // Skip our own inline completion landing in the field.
+                        if inlineTail.isEmpty || newValue != typedText + inlineTail {
+                            previousTyped = typedText
+                            typedText = newValue
+                            inlineTail = ""
+                            selectedSuggestionIndex = -1
+                            fetchSuggestions(for: newValue)
+                            handlePasteDetection(old: oldValue, new: newValue)
+                            applyInlineCompletion()
+                        }
                         let t = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                         let hasContext = !attachedDocuments.isEmpty || !includedOtherTabIds.isEmpty
                         currentIntent = t.isEmpty ? .search : (hasContext ? .ai : QueryClassifier.classify(t))
@@ -697,7 +707,10 @@ struct SmartSearchView: View {
                 Task {
                     let rows = await urlSuggestions(trimmed)
                     // A newer keystroke makes this answer stale.
-                    if inputText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed { urlRows = rows }
+                    if inputText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed {
+                        urlRows = rows
+                        applyInlineCompletion()
+                    }
                 }
             }
             guard wantsPhrases, let url = SearchEngine.current.suggestURL(for: trimmed) else { return }
@@ -716,15 +729,10 @@ struct SmartSearchView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
-    private func handlePasteDetection(_ newValue: String) {
-        let delta = newValue.count - previousInputLength
-        previousInputLength = newValue.count
-
-        // Large jump in length (>300 chars in a single frame) = likely a paste
-        if delta > 300 {
-            let pastedText = newValue
-            inputText = ""
-            previousInputLength = 0
+    private func handlePasteDetection(old: String, new newValue: String) {
+        // A large insertion in one change = a paste; attach it and keep what was typed around it.
+        if let (kept, pastedText) = LargePaste.split(old: old, new: newValue) {
+            inputText = kept
 
             let filename = "\(UUID().uuidString.prefix(8)).txt"
             attachedDocuments.append(SmartAttachedDocument(
@@ -734,6 +742,20 @@ struct SmartSearchView: View {
 
             if viewState == .idle {
                 enterChatWithContext()
+            }
+        }
+    }
+
+    /// Address-bar inline autocomplete: the top page's host after the caret, selected; Tab or → accepts it.
+    private func applyInlineCompletion() {
+        guard inlineTail.isEmpty, inputText == typedText,
+              let tail = Omnibox.inlineCompletion(typed: typedText, previous: previousTyped, pages: urlRows) else { return }
+        let typed = typedText
+        DispatchQueue.main.async {
+            guard typedText == typed, inputText == typed else { return }
+            inlineTail = tail
+            if !Omnibox.showInlineCompletion(tail, typed: typed, in: NSApp.keyWindow?.firstResponder as? NSTextView) {
+                inlineTail = ""
             }
         }
     }
@@ -751,6 +773,13 @@ struct SmartSearchView: View {
             // window's start page should steal arrow keys.
             guard event.window === NSApp.keyWindow else { return event }
             guard viewState == .idle, hasSuggestions, isInputFocused else { return event }
+            if event.keyCode == 48, event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
+               !inlineTail.isEmpty,
+               Omnibox.acceptInlineCompletion(full: typedText + inlineTail, in: NSApp.keyWindow?.firstResponder as? NSTextView) { // Tab
+                typedText += inlineTail
+                inlineTail = ""
+                return nil
+            }
             let rows = suggestionRows
             guard !rows.isEmpty else { return event }
 
@@ -1461,6 +1490,29 @@ private struct SmartMultilineField: NSViewRepresentable {
     }
 }
 
+/// Long pastes become an attached document instead of field text; a single-line URL always stays text.
+enum LargePaste {
+    static let threshold = 300
+
+    static func shouldAttach(_ text: String) -> Bool {
+        guard text.count > threshold else { return false }
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isURL = !t.contains(where: \.isWhitespace) && URL(string: t)?.host != nil
+        return !isURL
+    }
+
+    /// For one edit old → new, the text to keep in the field and the pasted run to attach, or nil.
+    static func split(old: String, new: String) -> (kept: String, pasted: String)? {
+        guard new.count - old.count > threshold else { return nil }
+        let prefix = old.commonPrefix(with: new).count
+        let suffix = min(String(old.dropFirst(prefix).reversed()).commonPrefix(with: String(new.dropFirst(prefix).reversed())).count,
+                         old.count - prefix)
+        let pasted = String(new.dropFirst(prefix).dropLast(suffix))
+        guard shouldAttach(pasted) else { return nil }
+        return (String(old.prefix(prefix)) + String(old.suffix(suffix)), pasted)
+    }
+}
+
 private class SmartSubmitTextView: NSTextView {
     var onSubmit: (() -> Void)?
     var onLargePaste: ((String) -> Void)?
@@ -1468,7 +1520,8 @@ private class SmartSubmitTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36
         let isNumpad = event.keyCode == 76
-        if (isReturn || isNumpad) && !event.modifierFlags.contains(.shift) {
+        // Return while an IME is composing commits the candidate, not the message.
+        if (isReturn || isNumpad) && !event.modifierFlags.contains(.shift) && !hasMarkedText() {
             onSubmit?()
             return
         }
@@ -1477,7 +1530,7 @@ private class SmartSubmitTextView: NSTextView {
 
     override func paste(_ sender: Any?) {
         if let clipboard = NSPasteboard.general.string(forType: .string),
-           clipboard.count > 300 {
+           LargePaste.shouldAttach(clipboard) {
             onLargePaste?(clipboard)
             return
         }

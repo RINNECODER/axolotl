@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 /// One row of the Chrome-style suggestion dropdown (toolbar address bar and start page).
 struct OmniboxRow: Equatable, Identifiable {
@@ -93,6 +94,23 @@ enum Omnibox {
             }
         }
         return nil
+    }
+
+    /// Shows `tail` selected after the caret, if the field editor still holds exactly `typed` with the caret
+    /// at its end. insertText goes through the field's own edit path, so the binding follows it.
+    static func showInlineCompletion(_ tail: String, typed: String, in editor: NSTextView?) -> Bool {
+        let start = (typed as NSString).length
+        guard let editor, editor.string == typed, editor.selectedRange() == NSRange(location: start, length: 0) else { return false }
+        editor.insertText(tail, replacementRange: NSRange(location: start, length: 0))
+        editor.setSelectedRange(NSRange(location: start, length: (tail as NSString).length))
+        return true
+    }
+
+    /// Tab accepts an inline completion: caret to the end of `full` (typed + completion).
+    static func acceptInlineCompletion(full: String, in editor: NSTextView?) -> Bool {
+        guard let editor, editor.string == full else { return false }
+        editor.setSelectedRange(NSRange(location: (full as NSString).length, length: 0))
+        return true
     }
 
     /// Chrome bolds the typed match in page titles and the suggested remainder in search phrases.

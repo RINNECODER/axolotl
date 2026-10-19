@@ -176,7 +176,7 @@ final class BorderedTextView: NSTextView {
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if isReturn, flags.contains(.command) || (keys.submitOnReturn && !flags.contains(.shift) && !flags.contains(.option)) {
+        if isReturn, !hasMarkedText(), flags.contains(.command) || (keys.submitOnReturn && !flags.contains(.shift) && !flags.contains(.option)) {
             onSubmit?()
             return
         }

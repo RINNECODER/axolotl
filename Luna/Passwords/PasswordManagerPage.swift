@@ -229,7 +229,7 @@ struct PasswordManagerPageView: View {
 private struct SiteIcon: View {
     let host: String
     var body: some View {
-        if let image = FaviconCache.shared.cachedImage(for: URL(string: "https://\(host)")!) {
+        if let url = PasswordVault.siteURL(host: host), let image = FaviconCache.shared.cachedImage(for: url) {
             Image(nsImage: image).resizable().frame(width: 20, height: 20)
         } else {
             Image(systemName: "globe").font(.system(size: 15)).foregroundStyle(.secondary).frame(width: 20, height: 20)

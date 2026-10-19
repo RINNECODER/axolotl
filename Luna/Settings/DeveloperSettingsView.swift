@@ -153,8 +153,8 @@ struct ConnectAgentsSection: View {
     }
 
     private func copy(_ text: String, _ what: String) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        // These carry the MCP token: same concealed + 90 s auto-clear path as grabbed keys.
+        SecretVault.putOnPasteboard(text)
         copied = what
     }
 }

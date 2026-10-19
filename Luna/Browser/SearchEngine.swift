@@ -30,7 +30,7 @@ enum SearchEngine: String, CaseIterable, Identifiable {
 
     /// The engine's OpenSearch suggest endpoint (["query", ["phrase", …]]), or nil if it has none.
     func suggestURL(for query: String) -> URL? {
-        guard let q = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
+        guard let q = query.addingPercentEncoding(withAllowedCharacters: Self.queryValueAllowed) else { return nil }
         switch self {
         case .google: return URL(string: "https://suggestqueries.google.com/complete/search?client=firefox&q=\(q)")
         case .duckduckgo: return URL(string: "https://ac.duckduckgo.com/ac/?q=\(q)&type=list")
@@ -40,12 +40,15 @@ enum SearchEngine: String, CaseIterable, Identifiable {
         }
     }
 
+    /// .urlQueryAllowed keeps &+=?#/ literal, which splits or truncates a query value ("AT&T", "C++").
+    static let queryValueAllowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "&+=?#/"))
+
     static var current: SearchEngine {
         UserDefaults.standard.string(forKey: defaultsKey).flatMap(SearchEngine.init(rawValue:)) ?? .google
     }
 
     func searchURL(for query: String) -> URL? {
-        let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
+        let encoded = query.addingPercentEncoding(withAllowedCharacters: Self.queryValueAllowed) ?? query
         return URL(string: base + encoded)
     }
 

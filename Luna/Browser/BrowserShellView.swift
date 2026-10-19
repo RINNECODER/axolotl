@@ -915,6 +915,8 @@ struct BrowserShellView: View {
 
     private func openAskOnPage() {
         guard !isCurrentTabStartOrAIChat else { return }
+        // Private windows never send page text to a cloud model.
+        guard !isPrivate || LLMService.shared.provider == .ollama else { return }
         Usage.record(.askOnPage)
         if showBrowserFindBar {
             showBrowserFindBar = false
@@ -1104,7 +1106,7 @@ struct BrowserShellView: View {
                                 LinkPreviewCard(url: preview.url, onOpen: {
                                     web.linkPreview = nil
                                     newTabWithURL(preview.url)
-                                }, onClose: { web.linkPreview = nil })
+                                }, onClose: { web.linkPreview = nil }, isPrivate: isPrivate)
                                 .offset(x: min(max(8, preview.rect.minX), geo.size.width - width - 8), y: y)
                                 .transition(.opacity)
                             }
@@ -1248,22 +1250,19 @@ struct BrowserShellView: View {
               let tail = Omnibox.inlineCompletion(typed: omniTyped, previous: omniPrevious, pages: pages) else { return }
         let typed = omniTyped
         DispatchQueue.main.async {
-            let start = (typed as NSString).length
-            guard omniTyped == typed, addressBarText == typed,
-                  let editor = hostWindow?.firstResponder as? NSTextView, editor.string == typed,
-                  editor.selectedRange() == NSRange(location: start, length: 0) else { return }
+            guard omniTyped == typed, addressBarText == typed else { return }
             omniCompletion = tail
-            // insertText goes through the field's own edit path, so the binding follows it.
-            editor.insertText(tail, replacementRange: NSRange(location: start, length: 0))
-            editor.setSelectedRange(NSRange(location: start, length: (tail as NSString).length))
+            if !Omnibox.showInlineCompletion(tail, typed: typed, in: hostWindow?.firstResponder as? NSTextView) {
+                omniCompletion = ""
+            }
         }
     }
 
     /// Tab accepts the inline completion: caret to the end, completion becomes typed text.
     private func acceptInlineCompletion() -> Bool {
-        guard !omniCompletion.isEmpty, let editor = hostWindow?.firstResponder as? NSTextView,
-              editor.string == omniTyped + omniCompletion else { return false }
-        editor.setSelectedRange(NSRange(location: (editor.string as NSString).length, length: 0))
+        guard !omniCompletion.isEmpty,
+              Omnibox.acceptInlineCompletion(full: omniTyped + omniCompletion, in: hostWindow?.firstResponder as? NSTextView)
+        else { return false }
         omniTyped += omniCompletion
         omniCompletion = ""
         return true

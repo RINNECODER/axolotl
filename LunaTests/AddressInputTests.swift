@@ -34,6 +34,35 @@ final class AddressInputTests: XCTestCase {
         XCTAssertTrue(SearchEngine.bing.suggestURL(for: "a b")!.absoluteString.contains("query=a%20b"))
     }
 
+    func testSearchQueryKeepsReservedCharactersInsideTheValue() {
+        let url = SearchEngine.google.searchURL(for: "AT&T stock C++ a=b?#/")!
+        let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value
+        XCTAssertEqual(q, "AT&T stock C++ a=b?#/")
+        let suggest = SearchEngine.duckduckgo.suggestURL(for: "C++")!
+        XCTAssertEqual(URLComponents(url: suggest, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value, "C++")
+    }
+
+    func testShortcutsAcceptOnlyWebURLs() {
+        XCTAssertEqual(SiteShortcut.siteURL(from: "github.com")?.absoluteString, "https://github.com")
+        XCTAssertEqual(SiteShortcut.siteURL(from: "http://example.com/a")?.absoluteString, "http://example.com/a")
+        XCTAssertNil(SiteShortcut.siteURL(from: "javascript://example.com/%0Aalert(1)"))
+        XCTAssertNil(SiteShortcut.siteURL(from: "file://example.com/etc/passwd"))
+        XCTAssertNil(SiteShortcut.siteURL(from: "ftp://example.com"))
+    }
+
+    func testLargePasteKeepsTypedTextAndLeavesURLsAsText() {
+        let big = String(repeating: "lorem ipsum ", count: 40)
+        let split = LargePaste.split(old: "summarize ", new: "summarize " + big)
+        XCTAssertEqual(split?.kept, "summarize ")
+        XCTAssertEqual(split?.pasted, big)
+        XCTAssertEqual(LargePaste.split(old: "ab", new: "a" + big + "b")?.kept, "ab")
+        let longURL = "https://example.com/search?q=" + String(repeating: "x", count: 400)
+        XCTAssertNil(LargePaste.split(old: "", new: longURL))
+        XCTAssertFalse(LargePaste.shouldAttach(longURL))
+        XCTAssertTrue(LargePaste.shouldAttach(big))
+        XCTAssertNil(LargePaste.split(old: "", new: "short"))
+    }
+
     func testSuggestionsPutBookmarksFirstDedupeAndOfferOpenTabs() {
         let docs = URL(string: "https://docs.swift.org/")!
         let forum = URL(string: "https://forums.swift.org")!

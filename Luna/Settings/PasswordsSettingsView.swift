@@ -64,7 +64,14 @@ struct PasswordsSettingsView: View {
                     }
                     ForEach(filtered) { cred in
                         HStack(spacing: 10) {
-                            FaviconView(url: URL(string: "https://\(cred.host)")!).scaleEffect(0.8).frame(width: 16, height: 16)
+                            Group {
+                                if let url = PasswordVault.siteURL(host: cred.host) {
+                                    FaviconView(url: url).scaleEffect(0.8)
+                                } else {
+                                    Image(systemName: "globe").foregroundStyle(.secondary)
+                                }
+                            }
+                            .frame(width: 16, height: 16)
                             VStack(alignment: .leading, spacing: 1) {
                                 Text(cred.host).font(.system(size: 13)).lineLimit(1)
                                 Text(cred.username.isEmpty ? "(no username)" : cred.username)

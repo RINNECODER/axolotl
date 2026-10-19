@@ -5,12 +5,15 @@ struct LinkPreviewCard: View {
     let url: URL
     let onOpen: () -> Void
     let onClose: () -> Void
+    /// Private windows neither read nor fill the shared cache.
+    var isPrivate = false
 
     @State private var preview: LunaMax.Preview?
     @State private var error: String?
 
     /// Summaries are cached per URL for the session.
     private static var cache: [URL: LunaMax.Preview] = [:]
+    private static let cacheLimit = 50
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -51,10 +54,14 @@ struct LinkPreviewCard: View {
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.22), radius: 14, y: 5)
         .task(id: url) {
-            if let hit = Self.cache[url] { preview = hit; return }
+            if !isPrivate, let hit = Self.cache[url] { preview = hit; return }
             do {
                 let result = try await LunaMax.preview(of: url)
-                Self.cache[url] = result
+                if !isPrivate {
+                    // shortcut: drops the whole cache at the cap, not LRU; fine for a hover cache.
+                    if Self.cache.count >= Self.cacheLimit { Self.cache.removeAll() }
+                    Self.cache[url] = result
+                }
                 if !Task.isCancelled { preview = result }
             } catch {
                 if !Task.isCancelled { self.error = error.localizedDescription }

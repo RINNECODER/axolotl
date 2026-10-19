@@ -49,6 +49,16 @@ final class ShortcutStore: ObservableObject {
 }
 
 extension SiteShortcut {
+    /// Accepts "github.com" or a full http(s) URL; nil for anything else (javascript:, file:, …).
+    nonisolated static func siteURL(from text: String) -> URL? {
+        let raw = text.trimmingCharacters(in: .whitespaces)
+        guard !raw.isEmpty, !raw.contains(" ") else { return nil }
+        guard let u = URL(string: raw.contains("://") ? raw : "https://\(raw)"),
+              let scheme = u.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              let host = u.host, host.contains(".") else { return nil }
+        return u
+    }
+
     nonisolated static func normalizedHost(_ host: String) -> String {
         host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
     }
@@ -73,18 +83,14 @@ struct StartShortcutsRow: View {
     private static let tileWidth: CGFloat = 76
 
     var body: some View {
-        GeometryReader { geo in
-            // As many tiles as the width allows, plus the add tile.
-            let fit = max(1, Int(geo.size.width / Self.tileWidth))
-            HStack(spacing: 0) {
-                ForEach(store.shortcuts.prefix(fit - 1)) { s in
-                    tile(s)
-                }
-                addTile
+        // Wraps onto more rows so every shortcut stays reachable.
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: Self.tileWidth, maximum: Self.tileWidth), spacing: 0)], spacing: 4) {
+            ForEach(store.shortcuts) { s in
+                tile(s)
             }
-            .frame(maxWidth: .infinity)
+            addTile
         }
-        .frame(height: 78)
+        .frame(maxWidth: .infinity)
     }
 
     private func tile(_ s: SiteShortcut) -> some View {
@@ -134,14 +140,7 @@ private struct ShortcutEditor: View {
 
     private enum Field { case name, url }
 
-    /// Accepts "github.com" or a full URL; nil until it looks like a site.
-    private var url: URL? {
-        let raw = urlText.trimmingCharacters(in: .whitespaces)
-        guard !raw.isEmpty, !raw.contains(" ") else { return nil }
-        guard let u = URL(string: raw.contains("://") ? raw : "https://\(raw)"),
-              let host = u.host, host.contains(".") else { return nil }
-        return u
-    }
+    private var url: URL? { SiteShortcut.siteURL(from: urlText) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {

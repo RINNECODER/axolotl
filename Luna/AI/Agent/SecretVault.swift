@@ -63,7 +63,7 @@ final class SecretVault {
             suffix += 1
             account = "\(requested)-\(suffix)"
         }
-        putOnPasteboard(value)
+        Self.putOnPasteboard(value, pasteboard: pasteboard)
         return Saved(keychainItem: "\(service) / \(account)", account: account)
     }
 
@@ -85,7 +85,7 @@ final class SecretVault {
     @discardableResult
     func copy(account: String) -> Bool {
         guard let value = value(account: account) else { return false }
-        putOnPasteboard(value)
+        Self.putOnPasteboard(value, pasteboard: pasteboard)
         return true
     }
 
@@ -106,7 +106,7 @@ final class SecretVault {
     }
 
     /// Optional (Settings, default on): clears the clipboard after 90 s unless something else was copied.
-    private func putOnPasteboard(_ value: String) {
+    static func putOnPasteboard(_ value: String, pasteboard: NSPasteboard = .general) {
         pasteboard.clearContents()
         pasteboard.setString(value, forType: .string)
         // Clipboard managers skip items carrying these markers (nspasteboard.org).
