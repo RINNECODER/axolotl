@@ -13,6 +13,8 @@ struct CustomizableSetting {
         case intChoice([(value: Int, title: String)])
         /// http(s) URLs.
         case urlList(max: Int)
+        /// A color as "#RRGGBB".
+        case color
 
         static func == (a: Kind, b: Kind) -> Bool { a.typeName == b.typeName }
 
@@ -23,6 +25,7 @@ struct CustomizableSetting {
             case .int: return "int"
             case .intChoice: return "int-enum"
             case .urlList: return "url-list"
+            case .color: return "color"
             }
         }
     }
@@ -68,6 +71,8 @@ struct CustomizableSetting {
             for item in items {
                 guard let s = item.stringValue, Self.parseURL(s) != nil else { throw fail("every item must be an http(s) URL.") }
             }
+        case .color:
+            guard let s = value.stringValue, ThemeHex.parse(s) != nil else { throw fail("expected a hex color like #3265CB.") }
         }
     }
 
@@ -88,6 +93,8 @@ struct CustomizableSetting {
                     .map(SiteShortcut.normalizedHost)
                 return hosts.isEmpty ? "None" : hosts.joined(separator: ", ")
             }
+        case .color:
+            if let v = value.stringValue.flatMap(ThemeHex.parse) { return ThemeHex.format(v) }
         }
         return value.jsonString()
     }
@@ -100,6 +107,7 @@ struct CustomizableSetting {
         case .int(let r): return "int(\(r.lowerBound)...\(r.upperBound))"
         case .intChoice(let o): return "enum(" + o.map { String($0.value) }.joined(separator: "|") + ")"
         case .urlList(let max): return "list of up to \(max) http(s) URLs"
+        case .color: return "color(#RRGGBB)"
         }
     }
 
@@ -190,9 +198,86 @@ enum CustomizationRegistry {
         bool("lunaMax.tidyDownloads", LunaMaxPrefs.tidyDownloads, "Tidy downloads",
              "Rename downloaded files (sends file names to the AI provider).", default: false,
              help: "Renames downloaded files so they're easier to find. Undo it in Downloads."),
-    ]
+    ] + themeSettings + glassSettings
 
     static func setting(_ key: String) -> CustomizableSetting? { all.first { $0.key == key } }
+
+    // MARK: Theme and Liquid Glass breakdown
+
+    private static var themeSettings: [CustomizableSetting] {
+        var out = [themePreset]
+        for token in ThemeColorToken.allCases {
+            for dark in [false, true] {
+                out.append(color(token.registryKey(dark: dark), token.defaultsKey(dark: dark),
+                                 "\(token.title) (\(dark ? "dark" : "light"))", token.summary + " \(dark ? "Dark" : "Light") appearance.",
+                                 default: ThemePreset.luna.color(token).hex(dark: dark)))
+            }
+        }
+        out += [
+            choice("appearance.contrast", Theme.contrastKey, "Text contrast", "high = stronger secondary text and borders.",
+                   default: "standard", [("standard", "Standard"), ("high", "High")]),
+            choice("appearance.density", Theme.densityKey, "Density", "compact = shorter sidebar rows and menus.",
+                   default: "regular", [("regular", "Regular"), ("compact", "Compact")]),
+            intChoice("appearance.cornerRadius", Theme.radiusKey, "Corner radius", "Roundness of tabs, menus and glass, in percent.",
+                      default: 100, [(50, "Square"), (75, "Small"), (100, "Regular"), (125, "Large"), (150, "Extra large")]),
+            intChoice("appearance.fontScale", Theme.fontScaleKey, "Interface text size", "Tab, sidebar and menu text, in percent.",
+                      default: 100, [(90, "Small"), (100, "Regular"), (110, "Large"), (125, "Extra large")]),
+        ]
+        return out
+    }
+
+    private static var glassSettings: [CustomizableSetting] {
+        GlassSurface.allCases.map { surface in
+            bool(surface.registryKey, surface.defaultsKey, "Glass: \(surface.title)",
+                 "With Liquid Glass on: \(surface.summary) Off = solid. Ignored while appearance.liquidGlass is off.", default: true)
+        } + [
+            bool("glass.blur", GlassSettings.blurKey, "Glass blur", "On = frosted glass; off = clear glass.", default: true),
+            intChoice("glass.tint", GlassSettings.tintKey, "Glass tint", "How much of the theme color shows through glass, percent.",
+                      default: 0, [(0, "None"), (15, "Subtle"), (30, "Medium"), (50, "Strong")]),
+        ]
+    }
+
+    /// Color keys written by a theme preset.
+    static var themeColorKeys: [String] {
+        ThemeColorToken.allCases.flatMap { t in [t.defaultsKey(dark: false), t.defaultsKey(dark: true)] }
+    }
+
+    /// `appearance.themePreset`: reads the preset the colors match (else custom); writing one sets every color.
+    /// Its snapshot covers all color keys, so undo (and leaving a layout template) restores them exactly.
+    private static let themePreset = CustomizableSetting(
+        key: "appearance.themePreset", title: "Theme",
+        summary: "Color preset for the whole window (light and dark). Reads custom when the colors were edited one by one "
+            + "(set theme.* colors for that).",
+        kind: .choice(ThemePreset.allCases.map { (value: $0.rawValue, title: $0.title) }),
+        read: { .string(Theme.load($0.defaults).preset?.rawValue ?? ThemePreset.customValue) },
+        write: { env, value in
+            guard let preset = value.stringValue.flatMap(ThemePreset.init(rawValue:)) else { return }
+            for token in ThemeColorToken.allCases {
+                for dark in [false, true] {
+                    let key = token.defaultsKey(dark: dark)
+                    // Luna is the default: leave its keys unset.
+                    if preset == .luna { env.defaults.removeObject(forKey: key) }
+                    else { env.defaults.set(ThemeHex.format(preset.color(token).hex(dark: dark)), forKey: key) }
+                }
+            }
+        },
+        snapshot: { env in
+            let dict = Dictionary(uniqueKeysWithValues: themeColorKeys.compactMap { k in env.defaults.string(forKey: k).map { (k, $0) } })
+            return (try? PropertyListSerialization.data(fromPropertyList: dict, format: .binary, options: 0)) ?? Data()
+        },
+        restore: { env, data in
+            let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: String] ?? [:]
+            for k in themeColorKeys { if let v = dict[k] { env.defaults.set(v, forKey: k) } else { env.defaults.removeObject(forKey: k) } }
+        },
+        help: "Light and dark colors for the window, sidebar, tabs and accent."
+    )
+
+    private static func color(_ key: String, _ defaultsKey: String, _ title: String, _ summary: String,
+                              default def: UInt32) -> CustomizableSetting {
+        pref(key, defaultsKey, title, summary, kind: .color, help: nil,
+             read: { .string(ThemeHex.format($0.string(forKey: defaultsKey).flatMap(ThemeHex.parse) ?? def)) },
+             write: { d, v in if let n = v.stringValue.flatMap(ThemeHex.parse) { d.set(ThemeHex.format(n), forKey: defaultsKey) } })
+    }
 
     // MARK: Builders over UserDefaults
 

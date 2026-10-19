@@ -42,16 +42,28 @@ extension NSColor {
     }
 }
 
-/// Luna's solid surface colors (Liquid Glass off).
+/// Luna's surface colors. Window, sidebar, toolbar, active tab and accent come from the theme
+/// (Settings → Appearance → Theme); reading them inside a view body re-renders it when the theme changes.
 enum LunaSurface {
+    private static var theme: Theme { ThemeStore.shared.theme }
     /// The window backdrop behind tabs and content (replaces sidebar / titlebar vibrancy).
-    static let window = Color(light: .lunaHex(0xECECEE), dark: .lunaHex(0x1C1C1E))
+    static var window: Color { theme.color(.window) }
     /// A floating sidebar sitting over the page.
-    static let sidebar = Color(light: .lunaHex(0xF5F5F7), dark: .lunaHex(0x242426))
+    static var sidebar: Color { theme.color(.sidebar) }
+    /// The tab strip / toolbar backdrop in top layouts.
+    static var toolbar: Color { theme.color(.toolbar) }
+    /// The selected tab.
+    static var activeTab: Color { theme.color(.activeTab) }
+    static var accent: Color { theme.color(.accent) }
     /// Cards, bars, capsules and popups.
     static let raised = Color(light: .white, dark: .lunaHex(0x2A2A2D))
-    /// Hairline border around raised surfaces.
-    static let stroke = Color(light: .black.withAlphaComponent(0.10), dark: .white.withAlphaComponent(0.10))
+    /// Hairline border around raised surfaces (stronger with high contrast).
+    static var stroke: Color {
+        let a: CGFloat = theme.highContrast ? 0.24 : 0.10
+        return Color(light: .black.withAlphaComponent(a), dark: .white.withAlphaComponent(a))
+    }
+    /// Secondary labels (inactive tab titles): the primary color with high contrast.
+    static var secondaryText: Color { theme.highContrast ? .primary : .secondary }
     /// Hover and pressed fills for controls on any surface.
     static let hover = Color(light: .black.withAlphaComponent(0.06), dark: .white.withAlphaComponent(0.08))
     static let pressed = Color(light: .black.withAlphaComponent(0.11), dark: .white.withAlphaComponent(0.14))
@@ -92,11 +104,15 @@ struct LunaBackdrop: View {
     var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
     var state: NSVisualEffectView.State = .active
     var solid: Color = LunaSurface.window
-    @AppStorage(LiquidGlass.defaultsKey) private var glass = LiquidGlass.defaultValue
+    var surface: GlassSurface? = nil
 
     var body: some View {
-        if glass {
-            VisualEffectView(material: material, blendingMode: blendingMode, state: state)
+        let glass = ThemeStore.shared.glass
+        if glass.isOn(surface) {
+            ZStack {
+                VisualEffectView(material: material, blendingMode: blendingMode, state: state)
+                if glass.tint > 0 { solid.opacity(Double(glass.tint) / 100) }
+            }
         } else {
             solid
         }
@@ -106,9 +122,10 @@ struct LunaBackdrop: View {
 /// The start page / chat backdrop: under-window material with a near-opaque
 /// dark wash (glass on), or the same dark grey, opaque (glass off).
 struct StartPageBackdrop: View {
-    @AppStorage(LiquidGlass.defaultsKey) private var glass = LiquidGlass.defaultValue
+    var surface: GlassSurface = .startPage
 
     var body: some View {
+        let glass = ThemeStore.shared.glass.isOn(surface)
         ZStack {
             if glass {
                 VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow, state: .active)
@@ -125,11 +142,13 @@ struct LunaMaterialFill<S: InsettableShape>: View {
     var material: Material = .regularMaterial
     var solid: Color = LunaSurface.raised
     var strokesWhenSolid = true
-    @AppStorage(LiquidGlass.defaultsKey) private var glass = LiquidGlass.defaultValue
+    var surface: GlassSurface? = .popovers
 
     var body: some View {
-        if glass {
-            shape.fill(material)
+        let glass = ThemeStore.shared.glass
+        if glass.isOn(surface) {
+            // Blur off: clear glass, a see-through wash of the solid color.
+            if glass.blur { shape.fill(material) } else { shape.fill(solid.opacity(0.55)) }
         } else {
             shape.fill(solid).overlay(shape.strokeBorder(strokesWhenSolid ? LunaSurface.stroke : .clear, lineWidth: 1))
         }
@@ -145,11 +164,12 @@ struct LunaGlass<S: Shape>: ViewModifier {
     var shape: S
     var interactive: Bool = false
     var tint: Color? = nil
-    @AppStorage(LiquidGlass.defaultsKey) private var glassOn = LiquidGlass.defaultValue
+    var surface: GlassSurface? = nil
     @State private var isHovering = false
 
     func body(content: Content) -> some View {
-        if !glassOn {
+        let settings = ThemeStore.shared.glass
+        if !settings.isOn(surface) {
             content
                 .background(shape.fill(LunaSurface.hover.opacity(interactive && isHovering ? 1 : 0)))
                 .background(shape.fill(tint ?? LunaSurface.raised))
@@ -158,19 +178,25 @@ struct LunaGlass<S: Shape>: ViewModifier {
                 .shadow(color: LunaSurface.shadow, radius: 6, y: 2)
                 .onHover { if interactive { isHovering = $0 } }
         } else if #available(macOS 26.0, *) {
-            content.glassEffect(glass, in: shape)
+            content.glassEffect(glass(settings), in: shape)
         } else {
             content
-                .background(shape.fill(.ultraThinMaterial))
+                .background(shape.fill(settings.blur ? AnyShapeStyle(.ultraThinMaterial) : AnyShapeStyle(Color.clear)))
+                .background(shape.fill(themeTint(settings) ?? .clear))
                 .background(shape.fill(Color.white.opacity(0.06)))
                 .overlay(shape.stroke(Color.white.opacity(0.12), lineWidth: 1))
         }
     }
 
+    /// The caller's tint, else the accent at the chosen glass tint strength.
+    private func themeTint(_ settings: GlassSettings) -> Color? {
+        tint ?? (settings.tint > 0 ? LunaSurface.accent.opacity(Double(settings.tint) / 100) : nil)
+    }
+
     @available(macOS 26.0, *)
-    private var glass: Glass {
-        var g: Glass = .regular
-        if let tint { g = g.tint(tint) }
+    private func glass(_ settings: GlassSettings) -> Glass {
+        var g: Glass = settings.blur ? .regular : .clear
+        if let tint = themeTint(settings) { g = g.tint(tint) }
         if interactive { g = g.interactive() }
         return g
     }
@@ -179,10 +205,9 @@ struct LunaGlass<S: Shape>: ViewModifier {
 /// Groups sibling glass shapes (macOS 26+, setting on); a no-op otherwise.
 private struct LunaGlassContainer: ViewModifier {
     var spacing: CGFloat?
-    @AppStorage(LiquidGlass.defaultsKey) private var glassOn = LiquidGlass.defaultValue
 
     func body(content: Content) -> some View {
-        if glassOn, #available(macOS 26.0, *) {
+        if ThemeStore.shared.glass.master, #available(macOS 26.0, *) {
             GlassEffectContainer(spacing: spacing) { content }
         } else {
             content
@@ -192,16 +217,18 @@ private struct LunaGlassContainer: ViewModifier {
 
 extension View {
     /// Glass (or solid) capsule — the default shape across the app's controls.
-    func lunaGlassCapsule(interactive: Bool = false, tint: Color? = nil) -> some View {
-        modifier(LunaGlass(shape: Capsule(style: .continuous), interactive: interactive, tint: tint))
+    func lunaGlassCapsule(interactive: Bool = false, tint: Color? = nil, surface: GlassSurface? = nil) -> some View {
+        modifier(LunaGlass(shape: Capsule(style: .continuous), interactive: interactive, tint: tint, surface: surface))
     }
 
     /// Glass (or solid) rounded rectangle.
-    func lunaGlass(cornerRadius: CGFloat, interactive: Bool = false, tint: Color? = nil) -> some View {
+    func lunaGlass(cornerRadius: CGFloat, interactive: Bool = false, tint: Color? = nil,
+                   surface: GlassSurface? = nil) -> some View {
         modifier(LunaGlass(
-            shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
+            shape: RoundedRectangle(cornerRadius: ThemeStore.shared.theme.radius(cornerRadius), style: .continuous),
             interactive: interactive,
-            tint: tint
+            tint: tint,
+            surface: surface
         ))
     }
 

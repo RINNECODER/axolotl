@@ -339,6 +339,9 @@ final class Customizer {
 
     /// What reading the setting back should give (URL lists come back normalized).
     private static func normalized(_ change: SettingChange) -> JSONValue {
+        if CustomizationRegistry.setting(change.key)?.kind == .color, let v = change.value.stringValue.flatMap(ThemeHex.parse) {
+            return .string(ThemeHex.format(v))
+        }
         guard case .array(let items) = change.value, CustomizationRegistry.setting(change.key)?.kind.typeName == "url-list" else {
             return change.value
         }

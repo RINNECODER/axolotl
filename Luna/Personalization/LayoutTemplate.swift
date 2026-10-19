@@ -45,6 +45,7 @@ enum LayoutTemplate: String, CaseIterable, Identifiable {
                 ("addressBar.minimalURL", .bool(true)),
                 // Chrome draws solid, opaque surfaces and menus.
                 ("appearance.liquidGlass", .bool(false)),
+                ("appearance.themePreset", .string(ThemePreset.chrome.rawValue)),
             ]
         }
     }
