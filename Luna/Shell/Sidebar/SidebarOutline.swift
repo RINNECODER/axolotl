@@ -46,6 +46,8 @@ struct SidebarActions {
     var tidyToday: () -> Void = {}
     /// A tab dragged out of the window, released at a screen point.
     var tearOff: (UUID, CGPoint) -> Void = { _, _ in }
+    /// ⋯ → Bookmark This Page (⌘D); nil when the current tab has no web page.
+    var bookmarkPage: (() -> Void)? = nil
 }
 
 /// Native source-list sidebar (NSOutlineView): pinned tabs, a divider, a New

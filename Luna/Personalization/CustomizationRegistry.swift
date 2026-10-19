@@ -144,7 +144,7 @@ enum CustomizationRegistry {
              help: "Back, forward, reload and the address field above the page."),
         bool("bookmarksBar.visible", ChromePrefs.showBookmarksBar, "Show bookmarks bar",
              "A row of bookmarks above the page (add them with bookmarks_add).", default: false,
-             help: "Add pages with ⋯ → Bookmark This Page."),
+             help: "Add pages with ⌘D or Bookmarks → Bookmark This Page in the menu bar."),
         bool("sidebar.visible", "luna_sidebar_visible", "Show sidebar", "Sidebar layout: sidebar docked open.", default: true),
         bool("chrome.autoHide", ChromePrefs.frameless, "Auto-hide browser UI",
              "Hide the sidebar (or the top bar in top layouts) until the window edge is hovered.", default: false,
