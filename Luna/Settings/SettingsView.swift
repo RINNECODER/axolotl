@@ -26,7 +26,7 @@ struct SettingsView: View {
         Group {
             if liquidGlass { nativeLayout } else { solidLayout }
         }
-        .frame(minWidth: 760, idealWidth: 820, minHeight: 520, idealHeight: 600)
+        .frame(minWidth: 800, idealWidth: 860, minHeight: 520, idealHeight: 600)
         .onChange(of: query) { _, _ in
             if let selection, !visiblePanes.contains(selection) { self.selection = visiblePanes.first }
         }
@@ -44,7 +44,7 @@ struct SettingsView: View {
                 Label(pane.title, systemImage: pane.icon)
                     .tag(pane)
             }
-            .navigationSplitViewColumnWidth(min: 190, ideal: 210, max: 240)
+            .navigationSplitViewColumnWidth(min: 230, ideal: 250, max: 280)
             .searchable(text: $query, placement: .sidebar, prompt: "Search settings")
         } detail: {
             detail.navigationTitle((selection ?? .general).title)
@@ -74,7 +74,7 @@ struct SettingsView: View {
             }
             .padding(.horizontal, 10)
             .padding(.top, 38)
-            .frame(width: 210)
+            .frame(width: 240)
             .frame(maxHeight: .infinity, alignment: .top)
             .background(LunaSurface.sidebar)
             Rectangle().fill(LunaSurface.stroke).frame(width: 1)

@@ -20,8 +20,9 @@ struct OnboardingView: View {
                 .transition(.opacity)
             footer
         }
-        .frame(width: 680, height: 620)
+        .frame(width: 680, height: 700)
         .background(glassOn ? Color.clear : LunaSurface.window)
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
         .animation(.easeInOut(duration: 0.18), value: flow.index)
         .onChange(of: flow.isFinished) { _, done in if done { onClose() } }
         .onExitCommand { flow.skipAll() }
@@ -74,7 +75,10 @@ struct OnboardingView: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+        .safeAreaPadding(.top, flow.step == .welcome ? 48 : 0)
+        .safeAreaPadding(.bottom, 12)
         .frame(maxHeight: .infinity)
+        .overlay(alignment: .bottom) { Rectangle().fill(LunaSurface.stroke).frame(height: 1) }
     }
 
     private var footer: some View {

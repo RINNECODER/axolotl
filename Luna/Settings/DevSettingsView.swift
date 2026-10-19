@@ -67,7 +67,7 @@ struct DevSettingsView: View {
                     Text("Show tool inputs and outputs in work rows.")
                 }
             } header: {
-                Text("Appearance")
+                Text("Dev chat appearance")
             }
 
             Section {

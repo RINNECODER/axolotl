@@ -47,7 +47,7 @@ struct OnboardingImportStep: View {
         } else if let browser = model.selected {
             Section {
                 HStack {
-                    Button(model.hasAccess(browser) ? "Import Bookmarks & History" : "Allow Access & Import…") {
+                    Button(model.hasAccess(browser) ? "Import" : "Allow Access…") {
                         importBookmarksAndHistory(browser)
                     }
                     .buttonStyle(.borderedProminent)
@@ -102,7 +102,7 @@ struct OnboardingAIStep: View {
     var body: some View {
         AIProviderSections()
         Section {
-            APIKeyField(account: .typesafeKey, placeholder: "TypeSafe API key")
+            APIKeyField(account: .typesafeKey, placeholder: "API key")
         } header: {
             Text("Computer use (Jev) — optional")
         } footer: {
