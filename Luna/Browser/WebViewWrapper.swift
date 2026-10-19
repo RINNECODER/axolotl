@@ -59,6 +59,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Retried downloads, mapped to the list item they replace.
     private var retryItemByDownload: [ObjectIdentifier: UUID] = [:]
     private var resumeWebView: WKWebView?
+    /// Downloads running on `resumeWebView`; it is released when the last one ends.
+    private var resumeDownloads: Set<ObjectIdentifier> = []
     /// Tabs created for `target="_blank"` / `window.open()` popups.
     private var popupTabIds: Set<UUID> = []
     /// Recent popup times per opener tab, for the popup cap.
@@ -1578,11 +1580,13 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
 
     func downloadDidFinish(_ download: WKDownload) {
+        releaseResumeWebViewIfIdle(after: download)
         guard let id = downloadItemByID.removeValue(forKey: ObjectIdentifier(download)) else { return }
         DownloadManager.shared.finish(id)
     }
 
     func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {
+        releaseResumeWebViewIfIdle(after: download)
         downloadLog.error("Download failed: \(download.originalRequest?.url?.absoluteString ?? "(unknown)", privacy: .public) \(String(describing: error), privacy: .public)")
         guard let id = downloadItemByID.removeValue(forKey: ObjectIdentifier(download)) else { return }
         DownloadManager.shared.fail(id, error: error, resumeData: resumeData)
@@ -1600,10 +1604,16 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         return wv
     }
 
+    private func releaseResumeWebViewIfIdle(after download: WKDownload) {
+        guard resumeDownloads.remove(ObjectIdentifier(download)) != nil, resumeDownloads.isEmpty else { return }
+        resumeWebView = nil
+    }
+
     func resumeDownload(from data: Data, item: UUID) {
         downloadWebView.resumeDownload(fromResumeData: data) { [weak self] download in
             guard let self else { return }
             download.delegate = self
+            self.resumeDownloads.insert(ObjectIdentifier(download))
             self.downloadItemByID[ObjectIdentifier(download)] = item
             DownloadManager.shared.attach(download, to: item, owner: self)
         }
@@ -1613,6 +1623,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         downloadWebView.startDownload(using: URLRequest(url: url)) { [weak self] download in
             guard let self else { return }
             download.delegate = self
+            self.resumeDownloads.insert(ObjectIdentifier(download))
             self.menuDownloads.insert(ObjectIdentifier(download))
             self.retryItemByDownload[ObjectIdentifier(download)] = item
         }
