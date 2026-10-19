@@ -58,7 +58,9 @@ nonisolated enum ChromiumImporter {
 
     // MARK: History
 
-    /// Most recent visits first, only those after `since`.
+    /// Most recent visits first, only those after `since`. The limit matches the
+    /// history store's cap (HistoryManager keeps the newest 10,000), so older rows would be dropped anyway;
+    /// web URLs are filtered in SQL so the limit counts only importable visits.
     static func history(profileFolder: URL, since: Date? = nil, limit: Int = 10_000) throws -> [ImportedVisit] {
         let file = profileFolder.appendingPathComponent("History")
         guard FileManager.default.fileExists(atPath: file.path) else { return [] }
@@ -67,7 +69,7 @@ nonisolated enum ChromiumImporter {
         let rows = try db.rows("""
             SELECT urls.url, urls.title, visits.visit_time FROM visits
             JOIN urls ON urls.id = visits.url
-            WHERE visits.visit_time > ?
+            WHERE visits.visit_time > ? AND (urls.url LIKE 'http://%' OR urls.url LIKE 'https://%')
             ORDER BY visits.visit_time DESC LIMIT ?
             """, bind: [after, Int64(limit)])
         return rows.compactMap { r in

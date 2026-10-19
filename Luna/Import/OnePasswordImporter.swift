@@ -147,8 +147,13 @@ nonisolated enum ZipReader {
         return nil
     }
 
+    /// export.data is JSON only (attachments are separate entries), so this is generous.
+    static let maxEntrySize = 256 << 20
+
     private static func inflate(_ data: Data, size: Int) throws -> Data {
-        var out = Data(count: max(size, 1))
+        // `size` comes from the file: a hostile header must not make us allocate gigabytes.
+        guard size > 0, size <= maxEntrySize, !data.isEmpty else { throw ImportError.unreadable("1PUX") }
+        var out = Data(count: size)
         let written = out.withUnsafeMutableBytes { dst in
             data.withUnsafeBytes { src in
                 compression_decode_buffer(dst.bindMemory(to: UInt8.self).baseAddress!, size,
