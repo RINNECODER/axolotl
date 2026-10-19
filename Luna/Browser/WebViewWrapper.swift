@@ -16,7 +16,7 @@ private let downloadLog = Logger(subsystem: "com.luna.browser", category: "downl
 /// and site data (including credentials the system may use for autofill) are saved and shared
 /// across tabs. On macOS 12+ WebKit uses a single process pool per app; no need to set one.
 /// Autofill of saved credentials works when sites use standard autocomplete attributes.
-final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
+final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate, DownloadResuming {
     let profileId: UUID
     /// A private window's tabs: no password-save offers, no disk-cached favicons, new windows stay private.
     var isPrivate = false
@@ -57,13 +57,18 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     private var downloadItemByID: [ObjectIdentifier: UUID] = [:]
     /// Downloads started from the context menu: the user asked for them, so they save without a prompt.
     private var menuDownloads: Set<ObjectIdentifier> = []
+    /// Retried downloads, mapped to the list item they replace.
+    private var retryItemByDownload: [ObjectIdentifier: UUID] = [:]
+    private var resumeWebView: WKWebView?
     /// Tabs created for `target="_blank"` / `window.open()` popups.
     private var popupTabIds: Set<UUID> = []
     /// Recent popup times per opener tab, for the popup cap.
     private var popupTimes: [UUID: [Date]] = [:]
 
     /// Per-tab zoom (1.0 = 100%). Applied via WKWebView.pageZoom.
-    private var zoomByTab: [UUID: CGFloat] = [:]
+    @Published private var zoomByTab: [UUID: CGFloat] = [:]
+    /// Chrome's per-site zoom; private windows keep it in memory only.
+    lazy var siteZoom: SiteZoomStore = isPrivate ? SiteZoomStore(fileURL: nil) : .forProfile(profileId)
     private let zoomMin: CGFloat = 0.5
     private let zoomMax: CGFloat = 3.0
     private let zoomStep: CGFloat = 0.10
@@ -72,7 +77,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     private var observations: [UUID: [NSKeyValueObservation]] = [:]
 
     /// Last find-in-page query per tab so Next/Previous work even after the selection changes.
-    private var lastFindQueryByTab: [UUID: String] = [:]
+    var lastFindQueryByTab: [UUID: String] = [:]
+    /// Find-bar match count per tab ("3 of 17"), set by FindInPage.
+    @Published var findResultByTab: [UUID: FindInPage.Result] = [:]
     
     /// Favicon URLs per tab (extracted from page <link rel="icon">)
     var faviconURLByTab: [UUID: URL?] { tabRuntime.faviconURLByTab }
@@ -133,6 +140,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         self.profileId = profileId
         self.websiteDataStore = dataStore
         super.init()
+        DownloadManager.shared.register(self)
         // Settings → Enable Developer Tools: open tabs become inspectable now (Inspect Element follows on new tabs).
         developerToolsObserver = NotificationCenter.default.addObserver(
             forName: Self.developerToolsChangedNotification, object: nil, queue: .main) { [weak self] _ in
@@ -965,42 +973,6 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     static let developerToolsChangedNotification = Notification.Name("LunaDeveloperToolsChanged")
 
-    // MARK: - Find in page (Cmd+F)
-
-    /// JSON-encodes a string for safe embedding in JavaScript source (handles quotes, backslashes, newlines).
-    private static func jsStringLiteral(_ s: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: [s]),
-              let json = String(data: data, encoding: .utf8) else { return "''" }
-        // ["..."] → "..."
-        return String(json.dropFirst().dropLast())
-    }
-
-    func findInPage(query: String, in tabId: UUID) {
-        guard let wv = webViews[tabId], !query.isEmpty else { return }
-        lastFindQueryByTab[tabId] = query
-        let literal = Self.jsStringLiteral(query)
-        wv.evaluateJavaScript("""
-            window.getSelection().removeAllRanges();
-            window.find(\(literal), false, false, true);
-        """, completionHandler: nil)
-    }
-
-    func findNext(in tabId: UUID) {
-        guard let wv = webViews[tabId], let query = lastFindQueryByTab[tabId] else { return }
-        wv.evaluateJavaScript("window.find(\(Self.jsStringLiteral(query)), false, false, true);", completionHandler: nil)
-    }
-
-    func findPrevious(in tabId: UUID) {
-        guard let wv = webViews[tabId], let query = lastFindQueryByTab[tabId] else { return }
-        wv.evaluateJavaScript("window.find(\(Self.jsStringLiteral(query)), false, true, true);", completionHandler: nil)
-    }
-
-    func clearFind(in tabId: UUID) {
-        guard let wv = webViews[tabId] else { return }
-        lastFindQueryByTab.removeValue(forKey: tabId)
-        wv.evaluateJavaScript("window.getSelection().removeAllRanges();", completionHandler: nil)
-    }
-
     // MARK: - Zoom (Cmd+ / Cmd- / Cmd0)
 
     func zoomIn(_ tabId: UUID?) {
@@ -1026,9 +998,17 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         setZoom(1.0, for: id)
     }
 
+    /// Zoom follows the site: every open tab on the same host changes with it, like Chrome.
     private func setZoom(_ zoom: CGFloat, for tabId: UUID) {
-        zoomByTab[tabId] = zoom
-        applyZoom(to: tabId)
+        guard let host = webViews[tabId]?.url?.host else {
+            zoomByTab[tabId] = zoom
+            return applyZoom(to: tabId)
+        }
+        siteZoom.set(zoom, for: host)
+        for (id, wv) in webViews where wv.url?.host == host {
+            zoomByTab[id] = zoom
+            applyZoom(to: id)
+        }
     }
 
     private func applyZoom(to tabId: UUID) {
@@ -1404,6 +1384,12 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard let tabId = tabId(for: webView) else { return }
         httpsUpgrades.removeValue(forKey: tabId)
+        findResultByTab.removeValue(forKey: tabId)
+        if let host = webView.url?.host {
+            let zoom = siteZoom.zoom(for: host)
+            if zoomByTab[tabId] != zoom { zoomByTab[tabId] = zoom }
+            applyZoom(to: tabId)
+        }
         if pageErrorByTab[tabId] != nil { pageErrorByTab.removeValue(forKey: tabId) }
         // The old document's media is gone; frames of the new one report again.
         setAudible(false, frame: nil, in: tabId)
@@ -1501,7 +1487,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         if url.scheme == "data" {
             // Inline images (e.g. Google Images thumbnails) are already in the URL.
             guard let data = try? Data(contentsOf: url) else { return }
-            DownloadManager.shared.save(data, mimeType: Self.dataURLMIMEType(url), sourceURL: webView.url ?? url)
+            DownloadManager.shared.save(data, mimeType: Self.dataURLMIMEType(url), sourceURL: webView.url ?? url, owner: self)
             return
         }
         var request = URLRequest(url: url)
@@ -1520,6 +1506,11 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     // MARK: - WKDownloadDelegate (saves to ~/Downloads, notifies DownloadManager)
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping (URL?) -> Void) {
+        // A resumed download keeps writing to its file.
+        if let id = downloadItemByID[ObjectIdentifier(download)],
+           let file = DownloadManager.shared.recentDownloads.first(where: { $0.id == id })?.fileURL {
+            return completionHandler(file)
+        }
         let downloadsDir = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first!
         var dest = downloadsDir.appendingPathComponent(suggestedFilename)
         let pathExt = dest.pathExtension
@@ -1532,8 +1523,14 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         }
         let requestURL = response.url ?? download.originalRequest?.url ?? dest
         let save = { [weak self] (dest: URL) in
-            self?.downloadItemByID[ObjectIdentifier(download)] = DownloadManager.shared.begin(
-                download, url: requestURL, fileURL: dest, suggestedFilename: suggestedFilename)
+            guard let self else { return completionHandler(nil) }
+            if let retry = self.retryItemByDownload.removeValue(forKey: ObjectIdentifier(download)) {
+                self.downloadItemByID[ObjectIdentifier(download)] = retry
+                DownloadManager.shared.attach(download, to: retry, fileURL: dest, owner: self)
+            } else {
+                self.downloadItemByID[ObjectIdentifier(download)] = DownloadManager.shared.begin(
+                    download, url: requestURL, fileURL: dest, suggestedFilename: suggestedFilename, owner: self)
+            }
             downloadLog.info("Saving download to \(dest.path, privacy: .public)")
             completionHandler(dest)
         }
@@ -1562,7 +1559,37 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func download(_ download: WKDownload, didFailWithError error: any Error, resumeData: Data?) {
         downloadLog.error("Download failed: \(download.originalRequest?.url?.absoluteString ?? "(unknown)", privacy: .public) \(String(describing: error), privacy: .public)")
         guard let id = downloadItemByID.removeValue(forKey: ObjectIdentifier(download)) else { return }
-        DownloadManager.shared.fail(id, error: error)
+        DownloadManager.shared.fail(id, error: error, resumeData: resumeData)
+    }
+
+    // MARK: - DownloadResuming (Resume / Retry from the downloads list)
+
+    /// Off-screen web view in this profile's data store, so resumes work after the starting tab closed.
+    private var downloadWebView: WKWebView {
+        if let wv = resumeWebView { return wv }
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = websiteDataStore
+        let wv = WKWebView(frame: .zero, configuration: config)
+        resumeWebView = wv
+        return wv
+    }
+
+    func resumeDownload(from data: Data, item: UUID) {
+        downloadWebView.resumeDownload(fromResumeData: data) { [weak self] download in
+            guard let self else { return }
+            download.delegate = self
+            self.downloadItemByID[ObjectIdentifier(download)] = item
+            DownloadManager.shared.attach(download, to: item, owner: self)
+        }
+    }
+
+    func restartDownload(from url: URL, item: UUID) {
+        downloadWebView.startDownload(using: URLRequest(url: url)) { [weak self] download in
+            guard let self else { return }
+            download.delegate = self
+            self.menuDownloads.insert(ObjectIdentifier(download))
+            self.retryItemByDownload[ObjectIdentifier(download)] = item
+        }
     }
 
     // MARK: - WKUIDelegate

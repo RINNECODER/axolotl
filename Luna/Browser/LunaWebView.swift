@@ -60,7 +60,10 @@ final class LunaWebView: WKWebView {
         case copyImageAddress = "Copy Image Address"
         case openImageInNewTab = "Open Image in New Tab"
         case print = "Print…"
+        case pictureInPicture = "Picture in Picture"
     }
+
+    static let downloadMediaID = "WKMenuItemIdentifierDownloadMedia"
 
     static let openLinkInNewWindowID = "WKMenuItemIdentifierOpenLinkInNewWindow"
     static let openImageInNewWindowID = "WKMenuItemIdentifierOpenImageInNewWindow"
@@ -82,6 +85,8 @@ final class LunaWebView: WKWebView {
         for id in ["WKMenuItemIdentifierOpenFrameInNewWindow", "WKMenuItemIdentifierOpenMediaInNewWindow"] where identifiers.contains(id) {
             edits.append(.retitle(id, to: id.contains("Frame") ? "Open Frame in New Tab" : "Open Video in New Tab"))
         }
+        // The video menu: Picture in Picture (the script ignores audio).
+        if identifiers.contains(downloadMediaID) { edits.append(.insertAfter(.pictureInPicture, after: downloadMediaID)) }
         // The page menu (Back, Forward, Reload): add Print.
         if identifiers.contains(reloadID) { edits.append(.insertAfter(.print, after: reloadID)) }
         return edits
@@ -110,7 +115,9 @@ final class LunaWebView: WKWebView {
         }
         let identifiers = menu.items.compactMap { $0.identifier?.rawValue }
         func index(of id: String) -> Int? { menu.items.firstIndex { $0.identifier?.rawValue == id } }
-        for edit in Self.menuEdits(for: identifiers) {
+        // Skip Luna's Picture in Picture if WebKit already offers one.
+        let hasPiP = menu.items.contains { $0.title.localizedCaseInsensitiveContains("Picture in Picture") }
+        for edit in Self.menuEdits(for: identifiers) where !(hasPiP && edit == .insertAfter(.pictureInPicture, after: Self.downloadMediaID)) {
             switch edit {
             case .insert(let command, let before):
                 if let i = index(of: before) { menu.insertItem(menuItem(command), at: i) }
@@ -134,6 +141,9 @@ final class LunaWebView: WKWebView {
         switch command {
         case .print:
             onPrint?()
+        case .pictureInPicture:
+            callAsyncJavaScript(PageScripts.pictureInPicture, arguments: ["x": menuPoint.x, "y": menuPoint.y],
+                                in: nil, in: .defaultClient, completionHandler: nil)
         case .openLinkInNewTab:
             resolve(.link) { [weak self] in self?.onOpenInNewTab?($0) }
         case .openLinkInNewWindow:

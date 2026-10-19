@@ -644,7 +644,11 @@ struct BrowserShellView: View {
             toggleBookmark: { bookmarkCurrentPage() },
             openSettings: { openSettingsTab($0) },
             showBookmarkManager: { openBookmarkManager() },
-            searchTabs: { showTabSearch.toggle() }
+            searchTabs: { showTabSearch.toggle() },
+            showDownloads: { openDownloadsPage() },
+            viewSource: { openViewSource() },
+            savePage: { if !isCurrentTabStartOrAIChat, let id = tabManager.currentTab { web.savePageAs(in: id) } },
+            pictureInPicture: { if let id = tabManager.currentTab { web.pictureInPicture(in: id) } }
         )
     }
 
@@ -756,12 +760,26 @@ struct BrowserShellView: View {
     }
 
     /// ⌥⌘B: focuses the luna://bookmarks tab, or opens one.
-    private func openBookmarkManager() {
-        if let existing = tabManager.tabOrder.first(where: { InternalPage.isBookmarks(tabManager.tabURL[$0] ?? nil) }) {
+    private func openBookmarkManager() { focusOrOpen(InternalPage.bookmarksURL) }
+
+    /// ⇧⌘J: focuses the luna://downloads tab, or opens one.
+    private func openDownloadsPage() { focusOrOpen(InternalPage.downloadsURL) }
+
+    /// ⌥⌘U: the current page's HTML in a new luna://source tab.
+    private func openViewSource() {
+        guard !isCurrentTabStartOrAIChat, let id = tabManager.currentTab else { return }
+        web.pageSource(in: id) { url, html in
+            ViewSourceStore.html[url] = html
+            focusOrOpen(InternalPage.viewSourceURL(for: url))
+        }
+    }
+
+    private func focusOrOpen(_ url: URL) {
+        if let existing = tabManager.tabOrder.first(where: { tabManager.tabURL[$0] ?? nil == url }) {
             switchToTab(existing)
             return
         }
-        let id = tabManager.newTab(url: InternalPage.bookmarksURL)
+        let id = tabManager.newTab(url: url)
         web.setActiveTab(id)
         isFirstLoad = false
         syncAddressBarFromCurrentTab()
@@ -1025,6 +1043,10 @@ struct BrowserShellView: View {
                 } else if InternalPage.isBookmarks(currentURL) {
                     BookmarkManagerView(store: bookmarks, onOpen: openBookmark)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if InternalPage.isDownloads(currentURL) {
+                    DownloadsPageView(profileId: session.profileId, isPrivate: isPrivate)
+                } else if let page = InternalPage.viewSourcePage(currentURL) {
+                    ViewSourceView(page: page, isPrivate: isPrivate)
                 } else if currentURL?.scheme == "luma", currentURL?.host == "history" {
                     // History page (always in its own tab)
                     // Special luma://history page
@@ -1119,10 +1141,10 @@ struct BrowserShellView: View {
                         if isFocused && showBrowserFindBar {
                             BrowserFindBar(
                                 query: $browserFindQuery,
+                                result: web.findResultByTab[currentId],
                                 onFind: { query in
-                                    if let id = tabManager.currentTab {
-                                        web.findInPage(query: query, in: id)
-                                    }
+                                    guard let id = tabManager.currentTab else { return }
+                                    if query.isEmpty { web.clearFind(in: id) } else { web.findInPage(query: query, in: id) }
                                 },
                                 onNext: {
                                     if let id = tabManager.currentTab {
@@ -1922,8 +1944,10 @@ struct NonDraggableWindowView: NSViewRepresentable {
 
 // MARK: - Browser Find Bar (Cmd+F)
 
-private struct BrowserFindBar: View {
+struct BrowserFindBar: View {
     @Binding var query: String
+    /// "3 of 17"; nil before the first search finishes.
+    let result: FindInPage.Result?
     let onFind: (String) -> Void
     let onNext: () -> Void
     let onPrevious: () -> Void
@@ -1940,10 +1964,20 @@ private struct BrowserFindBar: View {
                 .font(.system(size: 13))
                 .foregroundColor(Color.white.opacity(0.9))
                 .focused($isFocused)
-                .onSubmit { onFind(query) }
-                .onChange(of: query) { _, newValue in
-                    if !newValue.isEmpty { onFind(newValue) }
+                // Enter / ⇧Enter step through matches, like Chrome.
+                .onSubmit { NSEvent.modifierFlags.contains(.shift) ? onPrevious() : onNext() }
+                .task(id: query) {
+                    // Debounce typing so long pages aren't re-searched on every key.
+                    try? await Task.sleep(for: .milliseconds(query.count < 3 ? 250 : 120))
+                    guard !Task.isCancelled else { return }
+                    onFind(query)
                 }
+            if !query.isEmpty, let result {
+                Text(result.label)
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundColor(Color.white.opacity(result.count == 0 ? 0.4 : 0.6))
+                    .fixedSize()
+            }
             Button(action: onPrevious) {
                 Image(systemName: "chevron.up")
                     .font(.system(size: 11, weight: .semibold))

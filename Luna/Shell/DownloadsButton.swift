@@ -52,7 +52,10 @@ struct DownloadsButton: View {
         .accessibilityValue(accessibilityProgress)
         .background(WindowReader { window = $0 })
         .lunaPopover(isPresented: $isPresented, arrowEdge: .bottom) {
-            DownloadsHubView()
+            DownloadsHubView(showAll: {
+                isPresented = false
+                BrowserCommandTargets.shared.keyOrFrontmost?.actions.showDownloads()
+            })
         }
         .onChange(of: manager.presentRequest) { _, _ in
             // Only the window the user is working in shows the popover.
@@ -86,6 +89,8 @@ private struct IndeterminateRing: View {
 
 struct DownloadsHubView: View {
     @ObservedObject private var manager = DownloadManager.shared
+    /// Opens luna://downloads (⇧⌘J).
+    var showAll: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -93,6 +98,11 @@ struct DownloadsHubView: View {
                 Text("Downloads")
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
+                if let showAll {
+                    Button("Show All") { showAll() }
+                        .buttonStyle(.borderless)
+                        .font(.system(size: 12))
+                }
                 if manager.recentDownloads.contains(where: { !$0.isActive }) {
                     Button("Clear") { manager.clearInactive() }
                         .buttonStyle(.borderless)
@@ -168,9 +178,17 @@ private struct DownloadRow: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            if item.isActive {
+            if item.isActive || item.state == .paused {
+                if item.isActive {
+                    iconButton("pause.circle.fill", help: "Pause") { manager.pause(item.id) }
+                } else {
+                    iconButton("play.circle.fill", help: "Resume") { manager.resume(item.id) }
+                }
                 iconButton("xmark.circle.fill", help: "Cancel") { manager.cancel(item.id) }
             } else {
+                if item.retryPlan != nil {
+                    iconButton("arrow.clockwise", help: "Retry") { manager.resume(item.id) }
+                }
                 if item.state == .finished {
                     if isHovering, item.originalFileURL == nil, !item.isTidying {
                         iconButton("sparkles", help: "Tidy file name") { manager.tidy(item.id) }
@@ -208,10 +226,11 @@ private struct DownloadRow: View {
 
     private var status: String {
         switch item.state {
-        case .downloading:
+        case .downloading, .paused:
             let received = ByteCountFormatter.string(fromByteCount: item.bytesReceived, countStyle: .file)
-            guard item.bytesExpected > 0 else { return "\(received)" }
-            return "\(received) of \(ByteCountFormatter.string(fromByteCount: item.bytesExpected, countStyle: .file))"
+            let prefix = item.state == .paused ? "Paused · " : ""
+            guard item.bytesExpected > 0 else { return prefix + received }
+            return "\(prefix)\(received) of \(ByteCountFormatter.string(fromByteCount: item.bytesExpected, countStyle: .file))"
         case .finished:
             if item.isTidying { return "Tidying name…" }
             if let original = item.originalFileURL { return "Renamed from \(original.lastPathComponent)" }

@@ -21,6 +21,10 @@ struct BrowserCommandActions {
     var openSettings: (SettingsPane?) -> Void
     var showBookmarkManager: () -> Void = {}
     var searchTabs: () -> Void = {}
+    var showDownloads: () -> Void = {}
+    var viewSource: () -> Void = {}
+    var savePage: () -> Void = {}
+    var pictureInPicture: () -> Void = {}
 }
 
 /// Browser windows by NSWindow, so menu commands reach the key window's shell. Extra windows
@@ -101,6 +105,8 @@ struct BrowserCommands: Commands {
                 if let browser { browser.closeTab() } else { NSApp.keyWindow?.performClose(nil) }
             }
             .keyboardShortcut("w")
+            Button("Save Page As…") { browser?.savePage() }
+                .keyboardShortcut("s")
         }
         CommandGroup(replacing: .printItem) {
             Button("Print…") { browser?.printPage() }
@@ -121,6 +127,12 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("=")
             Button("Zoom Out") { browser?.zoomOut() }
                 .keyboardShortcut("-")
+            Divider()
+            Button("Picture in Picture") { browser?.pictureInPicture() }
+            Button("View Source") { browser?.viewSource() }
+                .keyboardShortcut("u", modifiers: [.command, .option])
+            Button("Downloads") { browser?.showDownloads() }
+                .keyboardShortcut("j", modifiers: [.command, .shift])
             Divider()
         }
         CommandGroup(after: .toolbar) {

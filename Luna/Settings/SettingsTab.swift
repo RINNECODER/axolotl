@@ -24,6 +24,30 @@ enum InternalPage {
         url?.scheme?.lowercased() == settingsScheme && url?.host?.lowercased() == "bookmarks"
     }
 
+    /// luna://downloads: Chrome's downloads page (⇧⌘J).
+    static let downloadsURL = URL(string: "\(settingsScheme)://downloads")!
+
+    static func isDownloads(_ url: URL?) -> Bool {
+        url?.scheme?.lowercased() == settingsScheme && url?.host?.lowercased() == "downloads"
+    }
+
+    /// luna://source?url=<page>: the page's HTML, read-only (⌥⌘U).
+    static func viewSourceURL(for page: URL) -> URL {
+        var c = URLComponents()
+        c.scheme = settingsScheme
+        c.host = "source"
+        c.queryItems = [URLQueryItem(name: "url", value: page.absoluteString)]
+        return c.url!
+    }
+
+    /// The page a luna://source URL shows; nil for any other URL.
+    static func viewSourcePage(_ url: URL?) -> URL? {
+        guard let url, url.scheme?.lowercased() == settingsScheme, url.host?.lowercased() == "source",
+              let value = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "url" })?.value
+        else { return nil }
+        return URL(string: value)
+    }
+
     /// `luna://settings` or `luna://settings/<pane>`.
     static func settingsURL(_ pane: SettingsPane? = nil) -> URL {
         URL(string: "\(settingsScheme)://\(settingsHost)" + (pane.map { "/\($0.rawValue)" } ?? ""))!
@@ -39,6 +63,8 @@ enum InternalPage {
     static func title(_ url: URL) -> String {
         if isSettings(url) { return "Settings" }
         if isBookmarks(url) { return "Bookmarks" }
+        if isDownloads(url) { return "Downloads" }
+        if let page = viewSourcePage(url) { return "view-source:\(page.absoluteString)" }
         return url.host == "history" ? "History" : "AI Chat"
     }
 
@@ -46,6 +72,8 @@ enum InternalPage {
     static func icon(_ url: URL?) -> String {
         if isSettings(url) { return "gearshape" }
         if isBookmarks(url) { return "book" }
+        if isDownloads(url) { return "arrow.down.circle" }
+        if viewSourcePage(url) != nil { return "chevron.left.forwardslash.chevron.right" }
         return url?.host == "history" ? "clock" : "sparkles"
     }
 }

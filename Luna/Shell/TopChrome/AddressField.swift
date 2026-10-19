@@ -91,6 +91,7 @@ struct AddressField: View {
             }
             // Balance the leading icon so centered text sits in the true middle.
             if centered && !isFocused { Color.clear.frame(width: 14) }
+            if !isFocused, let web, isWebPage { ZoomChip(web: web) }
             if let trailing { trailing }
         }
         .padding(.leading, chromeStyle ? 5 : 10)
@@ -143,6 +144,48 @@ extension AddressField {
         } else {
             icon()
         }
+    }
+}
+
+/// Chrome's magnifier in the address field while the page isn't at 100%; opens − / + / Reset.
+struct ZoomChip: View {
+    @ObservedObject var web: WebViewWrapper
+    @State private var showControls = false
+
+    var body: some View {
+        let zoom = web.zoomLevel(nil)
+        if abs(zoom - 1) > 0.001 {
+            Button { showControls.toggle() } label: {
+                Image(systemName: zoom > 1 ? "plus.magnifyingglass" : "minus.magnifyingglass")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 18, height: 18)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Zoom: \(Int((zoom * 100).rounded()))%")
+            .accessibilityLabel("Zoom \(Int((zoom * 100).rounded())) percent")
+            .lunaPopover(isPresented: $showControls, arrowEdge: .bottom) { ZoomControls(web: web) }
+        }
+    }
+}
+
+/// The zoom popover: − 110% + and Reset.
+struct ZoomControls: View {
+    @ObservedObject var web: WebViewWrapper
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("\(Int((web.zoomLevel(nil) * 100).rounded()))%")
+                .font(.system(size: 13).monospacedDigit())
+                .frame(minWidth: 44, alignment: .leading)
+            Button { web.zoomOut(nil) } label: { Image(systemName: "minus").frame(width: 18) }
+                .help("Zoom Out")
+            Button { web.zoomIn(nil) } label: { Image(systemName: "plus").frame(width: 18) }
+                .help("Zoom In")
+            Button("Reset") { web.zoomReset(nil) }
+        }
+        .padding(12)
     }
 }
 
