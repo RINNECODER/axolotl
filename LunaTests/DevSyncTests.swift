@@ -1,5 +1,9 @@
 import XCTest
+#if LUNA_DEV
+@testable import LunaDev
+#else
 @testable import Luna
+#endif
 
 /// Dev mode discovery and sync: harness discovery on a fake PATH, model-list parsing from
 /// captured response shapes, transcript parsing / tailing from synthetic transcripts, live
@@ -35,6 +39,7 @@ final class DevSyncTests: XCTestCase {
     // MARK: Harness discovery
 
     func testDiscoversHarnessesOnFakePATH() async throws {
+        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in LunaDevTests")
         let bin = try scratchDir()
         try script(bin, "claude", """
         case "$1" in --version) echo "2.1.300 (Claude Code)";; auth) echo '{"loggedIn": true, "authMethod": "x"}';; esac

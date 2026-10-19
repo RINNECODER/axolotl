@@ -1,5 +1,9 @@
 import XCTest
+#if LUNA_DEV
+@testable import LunaDev
+#else
 @testable import Luna
+#endif
 
 /// Persisted session index: warm loads reuse it, mtime/size changes invalidate it, and only
 /// titles reach disk. Synthetic fixtures only.

@@ -140,3 +140,35 @@ targets:
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
+
+  # Dev tests hosted by the unsandboxed LunaDev app, so process-spawning tests can run.
+  LunaDevTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: LunaTests
+        includes:
+          - "Dev*Tests.swift"
+          - "CLIFixtures.swift"
+    dependencies:
+      - target: LunaDev
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGNING_ALLOWED: NO
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "LUNA_DEV $(inherited)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Luna Dev.app/Contents/MacOS/Luna Dev"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+schemes:
+  LunaDev:
+    build:
+      targets:
+        LunaDev: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - LunaDevTests

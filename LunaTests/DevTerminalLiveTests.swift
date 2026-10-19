@@ -1,5 +1,9 @@
 import XCTest
+#if LUNA_DEV
+@testable import LunaDev
+#else
 @testable import Luna
+#endif
 
 /// A real interactive `claude` (haiku) in a Luna terminal, driven from chat: the reply must reach
 /// the chat timeline through the transcript tail, then the session is resumed in a new terminal.
