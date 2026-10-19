@@ -64,8 +64,10 @@ final class LegacyLunaMigrationTests: XCTestCase {
 
     func testCopiesOldSettingsWithoutOverwritingNewOnes() throws {
         defaults.set("kept", forKey: "axolotl_search_engine")
-        try writeOldDefaults(["luna_search_engine": "old", "luma_ai_provider": "ollama", "luna_theme_preset": "luna"])
+        try writeOldDefaults(["luna_search_engine": "old", "luma_ai_provider": "ollama", "luna_theme_preset": "luna",
+                              "luna_onboarding_seen": true])
         migration().migrateDefaults()
+        XCTAssertNil(defaults.object(forKey: OnboardingState.seenKey), "Axolotl's welcome still shows once")
         XCTAssertEqual(defaults.string(forKey: "axolotl_search_engine"), "kept")
         XCTAssertEqual(defaults.string(forKey: "axolotl_ai_provider"), "ollama")
         XCTAssertEqual(defaults.string(forKey: "axolotl_theme_preset"), "axolotl")

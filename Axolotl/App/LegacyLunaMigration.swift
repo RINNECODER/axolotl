@@ -115,7 +115,8 @@ nonisolated struct LegacyLunaMigration {
         guard let old = NSDictionary(contentsOf: plist) as? [String: Any] else { return }
         for (key, value) in old {
             let newKey = Self.renameKey(key)
-            guard newKey != Self.doneKey, defaults.object(forKey: newKey) == nil else { continue }
+            // Axolotl shows its own welcome once, even to Luna users.
+            guard newKey != Self.doneKey, newKey != OnboardingState.seenKey, defaults.object(forKey: newKey) == nil else { continue }
             defaults.set(Self.renameValue(value), forKey: newKey)
         }
     }
