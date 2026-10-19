@@ -44,10 +44,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     var loadingProgressByTab: [UUID: Double] { tabRuntime.loadingProgressByTab }
     @Published var canGoBackForActiveTab: Bool = false
     /// Tabs showing Luna's native error page (failed load or crashed web process).
-    @Published private(set) var pageErrorByTab: [UUID: PageError] = [:]
-    /// Tabs with audible media (unmuted, playing <audio>/<video>), and tabs the user muted.
+    var pageErrorByTab: [UUID: PageError] { tabRuntime.pageErrorByTab }
+    /// Tabs with audible media (unmuted, playing <audio>/<video>).
     var audibleTabs: Set<UUID> { tabRuntime.audibleTabs }
-    @Published private(set) var mutedTabs: Set<UUID> = []
     private var developerToolsObserver: NSObjectProtocol?
     /// Audible frames per tab, keyed by a token each frame's media script picks.
     private var audibleFramesByTab: [UUID: Set<String>] = [:]
@@ -65,8 +64,6 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Recent popup times per opener tab, for the popup cap.
     private var popupTimes: [UUID: [Date]] = [:]
 
-    /// Per-tab zoom (1.0 = 100%). Applied via WKWebView.pageZoom.
-    @Published private var zoomByTab: [UUID: CGFloat] = [:]
     /// Chrome's per-site zoom; private windows keep it in memory only.
     lazy var siteZoom: SiteZoomStore = isPrivate ? SiteZoomStore(fileURL: nil) : .forProfile(profileId)
     private let zoomMin: CGFloat = 0.5
@@ -79,7 +76,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Last find-in-page query per tab so Next/Previous work even after the selection changes.
     var lastFindQueryByTab: [UUID: String] = [:]
     /// Find-bar match count per tab ("3 of 17"), set by FindInPage.
-    @Published var findResultByTab: [UUID: FindInPage.Result] = [:]
+    var findResultByTab: [UUID: FindInPage.Result] { tabRuntime.findResultByTab }
     
     /// Favicon URLs per tab (extracted from page <link rel="icon">)
     var faviconURLByTab: [UUID: URL?] { tabRuntime.faviconURLByTab }
@@ -113,7 +110,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
     @Published var passwordFillOffer: PasswordFillOffer?
     /// Camera / microphone / location prompts waiting for the user, one per tab.
-    @Published var pendingPermissions: [UUID: SitePermissionRequest] = [:]
+    var pendingPermissions: [UUID: SitePermissionRequest] { tabRuntime.pendingPermissions }
     /// This profile's site settings; a non-persistent (private) data store keeps them in memory only.
     lazy var sitePermissions: SitePermissionStore = websiteDataStore.isPersistent
         ? .forProfile(profileId) : SitePermissionStore(fileURL: nil)
@@ -733,7 +730,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         activeTab = tabId
         // A tab showing an error page is on the page that failed, not the one underneath
         // (about:blank or nothing for a first load), as in didFailProvisionalNavigation.
-        currentURL = pageErrorByTab[tabId]?.url ?? webViews[tabId]?.url
+        currentURL = tabRuntime.state(for: tabId).pageError?.url ?? webViews[tabId]?.url
         updatePageThemeForActiveTab()
         updateBackForwardForActiveTab()
     }
@@ -767,9 +764,15 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         return https
     }
 
+    private func takePageError(_ tabId: UUID) -> PageError? {
+        let error = tabRuntime.state(for: tabId).pageError
+        tabRuntime.setPageError(nil, for: tabId)
+        return error
+    }
+
     /// The error page's "Continue to http": loads the http page and stops upgrading its host.
     func continueToHTTP(in tabId: UUID) {
-        guard let url = pageErrorByTab.removeValue(forKey: tabId)?.httpFallback else { return }
+        guard let url = takePageError(tabId)?.httpFallback else { return }
         if let host = url.host?.lowercased() { httpAllowedHosts.insert(host) }
         load(url: url, in: tabId)
     }
@@ -980,20 +983,20 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func zoomIn(_ tabId: UUID?) {
         guard let id = tabId ?? activeTab else { return }
-        let current = zoomByTab[id] ?? 1.0
+        let current = tabRuntime.state(for: id).zoom
         setZoom(min(current + zoomStep, zoomMax), for: id)
     }
 
     func zoomOut(_ tabId: UUID?) {
         guard let id = tabId ?? activeTab else { return }
-        let current = zoomByTab[id] ?? 1.0
+        let current = tabRuntime.state(for: id).zoom
         setZoom(max(current - zoomStep, zoomMin), for: id)
     }
 
     /// The tab's zoom (1.0 = 100%).
     func zoomLevel(_ tabId: UUID?) -> CGFloat {
         guard let id = tabId ?? activeTab else { return 1 }
-        return zoomByTab[id] ?? 1.0
+        return tabRuntime.state(for: id).zoom
     }
 
     func zoomReset(_ tabId: UUID?) {
@@ -1004,19 +1007,19 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Zoom follows the site: every open tab on the same host changes with it, like Chrome.
     private func setZoom(_ zoom: CGFloat, for tabId: UUID) {
         guard let host = webViews[tabId]?.url?.host else {
-            zoomByTab[tabId] = zoom
+            tabRuntime.setZoom(zoom, for: tabId)
             return applyZoom(to: tabId)
         }
         siteZoom.set(zoom, for: host)
         for (id, wv) in webViews where wv.url?.host == host {
-            zoomByTab[id] = zoom
+            tabRuntime.setZoom(zoom, for: id)
             applyZoom(to: id)
         }
     }
 
     private func applyZoom(to tabId: UUID) {
         guard let wv = webViews[tabId] else { return }
-        let zoom = zoomByTab[tabId] ?? 1.0
+        let zoom = tabRuntime.state(for: tabId).zoom
         wv.pageZoom = Double(zoom)
     }
 
@@ -1189,20 +1192,18 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         webViews.removeValue(forKey: tabId)
         popupTabIds.remove(tabId)
         popupTimes.removeValue(forKey: tabId)
-        pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
+        tabRuntime.setPendingPermission(nil, for: tabId)?.respond(allow: false, remember: false)
         faviconOriginByTab.removeValue(forKey: tabId)
         faviconWorkByTab.removeValue(forKey: tabId)?.cancel()
         tabRuntime.setLoadingProgress(nil, for: tabId)
-        pageErrorByTab.removeValue(forKey: tabId)
+        tabRuntime.setPageError(nil, for: tabId)
         audibleFramesByTab.removeValue(forKey: tabId)
         tabRuntime.setAudible(false, for: tabId)
-        mutedTabs.remove(tabId)
         if !keepMetadata {
             ViewSourceStore.html[tabId] = nil
             tabRuntime.remove(tabId)
             primaryTintByTab.removeValue(forKey: tabId)
             pageThemeByTab.removeValue(forKey: tabId)
-            zoomByTab.removeValue(forKey: tabId)
             canGoBackByTab.removeValue(forKey: tabId)
             canGoForwardByTab.removeValue(forKey: tabId)
         }
@@ -1271,21 +1272,21 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
         guard let tabId = tabId(for: webView), var pageError = PageError.classify(error, url: webView.url) else { return }
         if let http = httpsUpgrades.removeValue(forKey: tabId) { pageError.httpFallback = http }
-        pageErrorByTab[tabId] = pageError
+        tabRuntime.setPageError(pageError, for: tabId)
         // The address bar shows the page that failed, not the one still underneath.
         if tabId == activeTab, let failed = pageError.url { currentURL = failed }
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         guard let tabId = tabId(for: webView) else { return }
-        pageErrorByTab[tabId] = PageError(kind: .crashed, url: webView.url, code: nil)
+        tabRuntime.setPageError(PageError(kind: .crashed, url: webView.url, code: nil), for: tabId)
         tabRuntime.setLoadingProgress(nil, for: tabId)
         setAudible(false, frame: nil, in: tabId)
     }
 
     /// The error page's Reload: retries the page that failed (a crashed tab reloads in a new process).
     func reloadAfterError(in tabId: UUID) {
-        guard let error = pageErrorByTab.removeValue(forKey: tabId) else { return reload(in: tabId) }
+        guard let error = takePageError(tabId) else { return reload(in: tabId) }
         if error.kind != .crashed, let url = error.url, url != webViews[tabId]?.url {
             load(url: url, in: tabId)
         } else {
@@ -1390,19 +1391,19 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard let tabId = tabId(for: webView) else { return }
         httpsUpgrades.removeValue(forKey: tabId)
-        findResultByTab.removeValue(forKey: tabId)
+        tabRuntime.setFindResult(nil, for: tabId)
         shieldsCounter.navigationCommitted(tabId)
         if let host = webView.url?.host {
             let zoom = siteZoom.zoom(for: host)
-            if zoomByTab[tabId] != zoom { zoomByTab[tabId] = zoom }
+            tabRuntime.setZoom(zoom, for: tabId)
             applyZoom(to: tabId)
         }
-        if pageErrorByTab[tabId] != nil { pageErrorByTab.removeValue(forKey: tabId) }
+        tabRuntime.setPageError(nil, for: tabId)
         // The old document's media is gone; frames of the new one report again.
         setAudible(false, frame: nil, in: tabId)
         if passwordFillOffer?.tabId == tabId { passwordFillOffer = nil }
         // Chrome drops an unanswered prompt when the page navigates away.
-        pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
+        tabRuntime.setPendingPermission(nil, for: tabId)?.respond(allow: false, remember: false)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -1677,14 +1678,14 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             guard let tabId = tabId(for: webView) else { return decisionHandler(.deny) }
             let asking = permissions.filter { store.decision($0, host: host) == .ask }
             // shortcut: one prompt per tab; a newer request denies the older one. Queue them if sites need both.
-            pendingPermissions.removeValue(forKey: tabId)?.respond(allow: false, remember: false)
+            tabRuntime.setPendingPermission(nil, for: tabId)?.respond(allow: false, remember: false)
             var request: SitePermissionRequest!
             request = SitePermissionRequest(host: URL(string: host)?.host ?? host, permissions: asking) { [weak self] allow, remember in
-                if self?.pendingPermissions[tabId] === request { self?.pendingPermissions[tabId] = nil }
+                if self?.tabRuntime.state(for: tabId).pendingPermission === request { self?.tabRuntime.setPendingPermission(nil, for: tabId) }
                 if remember { for p in asking { store.set(allow ? .allow : .block, p, host: host) } }
                 decisionHandler(allow ? .grant : .deny)
             }
-            pendingPermissions[tabId] = request
+            tabRuntime.setPendingPermission(request, for: tabId)
         }
     }
 

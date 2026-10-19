@@ -154,7 +154,11 @@ struct ZoomChip: View {
     @State private var showControls = false
 
     var body: some View {
-        let zoom = web.zoomLevel(nil)
+        TabRuntimeReader(state: web.tabRuntime.state(for: web.activeTab)) { chip(zoom: $0.zoom) }
+    }
+
+    @ViewBuilder
+    private func chip(zoom: CGFloat) -> some View {
         if abs(zoom - 1) > 0.001 {
             Button { showControls.toggle() } label: {
                 Image(systemName: zoom > 1 ? "plus.magnifyingglass" : "minus.magnifyingglass")
@@ -176,6 +180,10 @@ struct ZoomControls: View {
     @ObservedObject var web: WebViewWrapper
 
     var body: some View {
+        TabRuntimeReader(state: web.tabRuntime.state(for: web.activeTab)) { _ in controls }
+    }
+
+    private var controls: some View {
         HStack(spacing: 10) {
             Text("\(Int((web.zoomLevel(nil) * 100).rounded()))%")
                 .font(.system(size: 13).monospacedDigit())

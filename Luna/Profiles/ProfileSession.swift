@@ -99,8 +99,9 @@ final class ProfileSession: ObservableObject {
             if self?.isPrivate == false, LunaMaxPrefs.isOn(LunaMaxPrefs.tidyTitles) { self?.tidyTitle(id, reportErrors: false) }
         }
 
+        // History and chats aren't forwarded: the views showing them observe them directly.
         tabManager.objectWillChange
-            .merge(with: webViewWrapper.objectWillChange, historyManager.objectWillChange, chatStore.objectWillChange)
+            .merge(with: webViewWrapper.objectWillChange)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 

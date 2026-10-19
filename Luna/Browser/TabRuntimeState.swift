@@ -2,7 +2,8 @@ import Combine
 import Foundation
 import SwiftUI
 
-/// Volatile per-tab page state: load progress, favicon and audio. Each tab has
+/// Volatile per-tab page state: load progress, favicon, audio, zoom, find
+/// result, error page and permission prompt. Each tab has
 /// its own object, so a load-progress step re-renders only the views showing
 /// that tab (its strip row, the toolbar when it's active) instead of every view
 /// observing `WebViewWrapper`.
@@ -12,6 +13,14 @@ final class TabRuntimeState: ObservableObject {
     @Published fileprivate(set) var faviconURL: URL?
     /// Playing unmuted media.
     @Published fileprivate(set) var isAudible = false
+    /// 1.0 = 100%.
+    @Published fileprivate(set) var zoom: CGFloat = 1
+    /// Find-bar match count ("3 of 17"), set by FindInPage.
+    @Published fileprivate(set) var findResult: FindInPage.Result?
+    /// Luna's native error page (failed load or crashed web process).
+    @Published fileprivate(set) var pageError: PageError?
+    /// Camera / microphone / location prompt waiting for the user.
+    @Published fileprivate(set) var pendingPermission: SitePermissionRequest?
 
     var isLoading: Bool { loadingProgress != nil }
 
@@ -38,6 +47,9 @@ final class TabRuntimeStore: ObservableObject {
     var loadingProgressByTab: [UUID: Double] { states.compactMapValues(\.loadingProgress) }
     var faviconURLByTab: [UUID: URL] { states.compactMapValues(\.faviconURL) }
     var audibleTabs: Set<UUID> { Set(states.filter { $0.value.isAudible }.keys) }
+    var findResultByTab: [UUID: FindInPage.Result] { states.compactMapValues(\.findResult) }
+    var pageErrorByTab: [UUID: PageError] { states.compactMapValues(\.pageError) }
+    var pendingPermissions: [UUID: SitePermissionRequest] { states.compactMapValues(\.pendingPermission) }
 
     /// Drops a closed tab's state so it doesn't outlive the tab.
     func remove(_ tabId: UUID) {
@@ -60,6 +72,24 @@ final class TabRuntimeStore: ObservableObject {
         revision &+= 1
     }
 
+    func setZoom(_ zoom: CGFloat, for tabId: UUID) { set(\.zoom, zoom, for: tabId) }
+    func setFindResult(_ result: FindInPage.Result?, for tabId: UUID) { set(\.findResult, result, for: tabId) }
+    func setPageError(_ error: PageError?, for tabId: UUID) { set(\.pageError, error, for: tabId) }
+
+    private func set<Value: Equatable>(_ keyPath: ReferenceWritableKeyPath<TabRuntimeState, Value>, _ value: Value, for tabId: UUID) {
+        let state = state(for: tabId)
+        if state[keyPath: keyPath] != value { state[keyPath: keyPath] = value }
+    }
+
+    /// Replaces the tab's permission prompt and returns the one it replaced.
+    @discardableResult
+    func setPendingPermission(_ request: SitePermissionRequest?, for tabId: UUID) -> SitePermissionRequest? {
+        let state = state(for: tabId)
+        let old = state.pendingPermission
+        if old !== request { state.pendingPermission = request }
+        return old
+    }
+
     func setAudible(_ audible: Bool, for tabId: UUID) {
         let state = state(for: tabId)
         guard state.isAudible != audible else { return }
@@ -75,6 +105,14 @@ struct TabRuntimeReader<Content: View>: View {
     @ViewBuilder let content: (TabRuntimeState) -> Content
 
     var body: some View { content(state) }
+}
+
+/// Re-renders `content` when `object` changes, without re-rendering the parent.
+struct ObservedReader<Object: ObservableObject, Content: View>: View {
+    @ObservedObject var object: Object
+    @ViewBuilder let content: () -> Content
+
+    var body: some View { content() }
 }
 
 /// Re-renders `content` when any tab's favicon, loading on/off or audio changes.

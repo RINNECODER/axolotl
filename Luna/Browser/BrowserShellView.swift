@@ -1032,7 +1032,7 @@ struct BrowserShellView: View {
                 let isAIChat = currentURL?.scheme == "luma" && currentURL?.host == "ai"
                 
                 if isStartPage || isAIChat {
-                    SmartSearchView(
+                    ObservedReader(object: session.chatStore) { SmartSearchView(
                         gemini: gemini,
                         ollama: ollama,
                         tabManager: tabManager,
@@ -1042,7 +1042,7 @@ struct BrowserShellView: View {
                         onNavigate: { url in navigateToURL(url) },
                         urlSuggestions: urlSuggestionRows(for:),
                         onOpenURLSuggestion: openSuggestion
-                    )
+                    ) }
                     .id(currentId)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if InternalPage.isSettings(currentURL) {
@@ -1071,9 +1071,11 @@ struct BrowserShellView: View {
                         WebViewContainer(webView: web.ensureWebView(for: currentId))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .id(currentId)
-                        if let pageError = web.pageErrorByTab[currentId] {
-                            PageErrorView(error: pageError, onReload: { web.reloadAfterError(in: currentId) },
-                                          onContinueHTTP: { web.continueToHTTP(in: currentId) })
+                        TabRuntimeReader(state: web.tabRuntime.state(for: currentId)) { runtime in
+                            if let pageError = runtime.pageError {
+                                PageErrorView(error: pageError, onReload: { web.reloadAfterError(in: currentId) },
+                                              onContinueHTTP: { web.continueToHTTP(in: currentId) })
+                            }
                         }
                         if isFocused && isFirstLoad {
                             ProgressView()
@@ -1099,13 +1101,15 @@ struct BrowserShellView: View {
                             }
                             .id(preview.url)
                         }
-                        if let request = web.pendingPermissions[currentId] {
-                            SitePermissionBubble(request: request)
-                                .id(request.id)
-                                .padding(.top, 8)
-                                .padding(.leading, 12)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .transition(.opacity)
+                        TabRuntimeReader(state: web.tabRuntime.state(for: currentId)) { runtime in
+                            if let request = runtime.pendingPermission {
+                                SitePermissionBubble(request: request)
+                                    .id(request.id)
+                                    .padding(.top, 8)
+                                    .padding(.leading, 12)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .transition(.opacity)
+                            }
                         }
                         // Luna Passwords: fill / save offers for this tab.
                         VStack(alignment: .trailing, spacing: 8) {
@@ -1151,9 +1155,9 @@ struct BrowserShellView: View {
                                 .id(currentId)
                         }
                         if isFocused && showBrowserFindBar {
-                            BrowserFindBar(
+                            TabRuntimeReader(state: web.tabRuntime.state(for: currentId)) { runtime in BrowserFindBar(
                                 query: $browserFindQuery,
-                                result: web.findResultByTab[currentId],
+                                result: runtime.findResult,
                                 onFind: { query in
                                     guard let id = tabManager.currentTab else { return }
                                     if query.isEmpty { web.clearFind(in: id) } else { web.findInPage(query: query, in: id) }
@@ -1175,7 +1179,7 @@ struct BrowserShellView: View {
                                         web.clearFind(in: id)
                                     }
                                 }
-                            )
+                            ) }
                             .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
@@ -1657,7 +1661,7 @@ struct BrowserShellView: View {
         return HStack(spacing: 0) {
             PanelResizeHandle(panelWidth: $aiPanelWidth, windowWidth: windowWidth, isDragging: $isDraggingDivider)
 
-            CommandSurfaceView(
+            ObservedReader(object: session.chatStore) { CommandSurfaceView(
                 isPresented: Binding(
                     get: { tabsWithPanelOpen.contains(key) },
                     set: { if !$0 { tabsWithPanelOpen.remove(key) } }
@@ -1679,7 +1683,7 @@ struct BrowserShellView: View {
                 },
                 tabId: currentId,
                 splitPeers: peers
-            )
+            ) }
             // Docked like the sidebar: it sits on the window chrome beside the page.
             .frame(width: aiPanelWidth - 6)
         }
