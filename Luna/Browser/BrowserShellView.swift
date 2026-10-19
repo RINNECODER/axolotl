@@ -111,6 +111,7 @@ struct BrowserShellView: View {
     @AppStorage(ChromePrefs.showBookmarksBar) private var showBookmarksBar = false
     @AppStorage(LayoutTemplate.defaultsKey) private var templateRaw: String = LayoutTemplate.luna.rawValue
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openWindow) private var openWindow
     /// Top bar temporarily shown in frameless mode (hover at the top edge, or ⌘L).
     @State private var topBarPeeking = false
     /// Window buttons shown because the pointer is at the top edge (sidebar hidden).
@@ -311,6 +312,7 @@ struct BrowserShellView: View {
                 adoptTransfer(transfer, replacingPlaceholder: true)
             }
             if windowId == nil {
+                BrowserWindows.mainClosedAt = nil
                 // The main window brings back the extra windows open at last quit.
                 DispatchQueue.main.async { BrowserWindows.restoreSaved() }
             }
@@ -490,6 +492,8 @@ struct BrowserShellView: View {
         }
         .onDisappear {
             sessionStore.flush()
+            sessionStore.closeAll()
+            if windowId == nil && !BrowserWindows.isTerminating { BrowserWindows.mainClosedAt = Date() }
             if let m = eventMonitor {
                 NSEvent.removeMonitor(m)
                 eventMonitor = nil
@@ -624,7 +628,8 @@ struct BrowserShellView: View {
             profileId: { sessionStore.activeProfileId },
             newTab: { newTab() },
             reopenClosedTab: {
-                if !isPrivate, BrowserWindows.reopenLastClosed(ifNewerThan: session.workspace.lastClosedAt) { return }
+                if !isPrivate, BrowserWindows.reopenLastClosed(ifNewerThan: session.workspace.lastClosedAt,
+                                                               openMain: { openWindow(id: LunaApp.mainWindowId) }) { return }
                 if let id = session.workspace.reopenClosedTab() { switchToTab(id) }
             },
             closeTab: { closeCurrentTab() },
@@ -1830,8 +1835,6 @@ struct BrowserShellView: View {
 
     private func closeTab(_ id: UUID) {
         Usage.record(.closeTab)
-        let closingHost = session.workspace.tab(id)?.url?.host
-        defer { forgetSiteIfLastTab(closingHost) }
         web.removeWebView(for: id)
         tabsWithPanelOpen.remove(id)
         session.chatStore.removeMessages(for: id)
@@ -1842,17 +1845,6 @@ struct BrowserShellView: View {
             web.setActiveTab(newCurrent)
             syncAddressBarFromCurrentTab()
         }
-    }
-
-    /// Forget Me sites: once a marked site's last tab (in any window of the profile) closes, clear its data.
-    private func forgetSiteIfLastTab(_ host: String?) {
-        guard !isPrivate, host != nil else { return }
-        let profileId = sessionStore.activeProfileId
-        let sites = ForgetSites.sites(profileId)
-        guard !sites.isEmpty else { return }
-        let open = ProfileSession.open(profileId: profileId).flatMap { $0.workspace.workspace.tabs.values.compactMap(\.url?.host) }
-        guard let site = ForgetSites.siteToForget(closing: host, openHosts: open, sites: sites) else { return }
-        ForgetSites.forget(site, in: ProfileManager.shared.dataStore(for: profileId))
     }
 
     private func switchToTab(_ id: UUID) {

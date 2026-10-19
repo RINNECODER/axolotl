@@ -89,6 +89,18 @@ final class PersonalizationTests: XCTestCase {
                                                   SettingChange(key: "tabs.layout", value: "classic")]))
     }
 
+    func testSearchEngineAcceptsExistingCustomEnginesOnly() throws {
+        let customizer = Customizer.shared
+        let engine = CustomSearchEngine(name: "Kagi", keyword: "k", template: "https://kagi.com/search?q=%s")
+        CustomSearchEngine.save([engine], defaults)
+        XCTAssertNoThrow(try customizer.validate([SettingChange(key: "search.engine", value: .string(engine.selectionValue))]))
+        XCTAssertThrowsError(try customizer.validate([SettingChange(key: "search.engine", value: .string("custom." + UUID().uuidString))]))
+        let setting = try XCTUnwrap(CustomizationRegistry.setting("search.engine"))
+        setting.write(customizer.env, .string(engine.selectionValue))
+        XCTAssertEqual(setting.read(customizer.env), .string(engine.selectionValue))
+        XCTAssertEqual(setting.display(.string(engine.selectionValue), env: customizer.env), "Kagi")
+    }
+
     func testBatchWithOneBadChangeAppliesNothing() async throws {
         let result = try await toolbox.call("settings_set", arguments: [
             "changes": .array([.object(["key": "toolbar.visible", "value": .bool(true)]),

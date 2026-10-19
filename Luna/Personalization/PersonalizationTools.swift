@@ -76,7 +76,7 @@ enum PersonalizationTools {
     ) { _ in
         let env = Customizer.shared.env
         return "key\ttype\tcurrent\tdescription\n" + CustomizationRegistry.all.map { s in
-            "\(s.key)\t\(s.typeDescription)\t\(s.read(env).jsonString())\t\(s.title): \(s.summary)"
+            "\(s.key)\t\(s.typeDescription(env))\t\(s.read(env).jsonString())\t\(s.title): \(s.summary)"
         }.joined(separator: "\n")
     }
 
@@ -438,7 +438,7 @@ enum PersonalizationReport {
         let sites = topSites(ctx.history(), days: days, limit: 8)
         lines.append("Top sites: " + (sites.isEmpty ? "none" : sites.map { "\($0.domain) (\($0.visits))" }.joined(separator: ", ")))
         let current = ["tabs.layout", "toolbar.visible", "bookmarksBar.visible", "appearance.theme", "search.engine"].compactMap { key -> String? in
-            CustomizationRegistry.setting(key).map { "\($0.title) \($0.display($0.read(env)))" }
+            CustomizationRegistry.setting(key).map { "\($0.title) \($0.display($0.read(env), env: env))" }
         }
         lines.append("Current setup: " + current.joined(separator: ", ") + "; \(ctx.bookmarks.bookmarks.count) bookmarks" +
             (ctx.workspace.map { "; \($0.workspace.favorites.count) favorites" } ?? ""))

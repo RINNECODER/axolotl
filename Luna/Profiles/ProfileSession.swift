@@ -31,7 +31,54 @@ final class ProfileSession: ObservableObject {
     /// Every live session (all windows), for checks across windows such as Forget Me sites.
     private static let openSessions = NSHashTable<ProfileSession>.weakObjects()
     static func open(profileId: UUID) -> [ProfileSession] {
-        openSessions.allObjects.filter { $0.profileId == profileId && !$0.isPrivate }
+        openSessions.allObjects.filter { $0.profileId == profileId && !$0.isPrivate && !$0.isClosed }
+    }
+
+    /// Set once its window closed: its tabs no longer keep Forget Me sites alive.
+    private(set) var isClosed = false
+
+    private static func openHosts(_ profileId: UUID) -> [String] {
+        open(profileId: profileId).flatMap { $0.workspace.workspace.tabs.values.compactMap(\.url?.host) }
+    }
+
+    /// Forget Me sites: once `session`'s change (its next workspace, or nil when its window closes) leaves a
+    /// marked site without a tab in any window of the profile, clears that site's data.
+    static func forgetSites(after session: ProfileSession, changesTo next: Workspace?) {
+        guard !session.isPrivate, !session.isClosed else { return }
+        let sites = ForgetSites.sites(session.profileId)
+        guard !sites.isEmpty else { return }
+        func hosts(_ ws: Workspace?) -> Set<String> { Set(ws?.tabs.values.compactMap(\.url?.host) ?? []) }
+        guard next == nil || hosts(next) != hosts(session.workspace.workspace) else { return }
+        let profileId = session.profileId, before = openHosts(profileId)
+        guard !ForgetSites.sitesToForget(sites: sites, before: before, after: []).isEmpty else { return }
+        // Checked a moment later, so a tab moving to another window counts as still open there.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            let after = openHosts(profileId)
+            let gone = ForgetSites.sitesToForget(sites: ForgetSites.sites(profileId), before: before, after: after)
+            ForgetSites.forget(gone, keeping: after, in: ProfileManager.shared.dataStore(for: profileId))
+        }
+    }
+
+    /// Clears the marked sites of every profile that have no open tab: at launch, and (best effort) at quit.
+    static func forgetClosedSites(atQuit: Bool) {
+        var pending = 0
+        for profile in ProfileManager.shared.profiles {
+            let sites = ForgetSites.sites(profile.id)
+            let open = atQuit ? [] : openHosts(profile.id)
+            let gone = ForgetSites.sitesToForget(sites: sites, before: sites, after: open)
+            guard !gone.isEmpty else { continue }
+            pending += 1
+            ForgetSites.forget(gone, keeping: open, in: ProfileManager.shared.dataStore(for: profile.id)) { pending -= 1 }
+        }
+        // Quitting: give WebKit up to 2 s to finish; next launch sweeps any marked site that has no restored tab.
+        let deadline = Date().addingTimeInterval(2)
+        while atQuit, pending > 0, Date() < deadline { RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05)) }
+    }
+
+    /// Its window closed: clear Forget Me sites only it showed.
+    func close() {
+        Self.forgetSites(after: self, changesTo: nil)
+        isClosed = true
     }
 
     let profileId: UUID
@@ -215,6 +262,7 @@ final class ProfileSession: ObservableObject {
     }
 
     private func workspaceWillChange(to ws: Workspace) {
+        Self.forgetSites(after: self, changesTo: ws)
         let visible = ws.visibleTabIds
         let previouslyKnown = knownTabIds
         knownTabIds = Set(ws.tabs.keys)
@@ -303,6 +351,9 @@ final class BrowserSessionStore: ObservableObject {
         subscribeToActiveSession()
         session.activate()
     }
+
+    /// This window closed: its tabs stop keeping Forget Me sites alive.
+    func closeAll() { sessions.values.forEach { $0.close() } }
 
     func removeSession(profileId: UUID) {
         suspensionTasks[profileId]?.cancel()
