@@ -12,6 +12,8 @@ struct AxolotlApp: App {
     static let mainWindowId = "main"
 
     init() {
+        // Before anything opens a store or WebKit data store: copy a Luna install's data over once.
+        LegacyLunaMigration.runAtLaunch()
         NSWindow.allowsAutomaticWindowTabbing = false
         // BrowserCommands owns View ▸ Enter Full Screen (⌃⌘F); drop AppKit's fn-F duplicate.
         UserDefaults.standard.set(false, forKey: "NSFullScreenMenuItemEverywhere")

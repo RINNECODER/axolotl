@@ -7,6 +7,8 @@
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.axolotl.browser.dev</string>
+		<!-- Read-only use: LegacyLunaMigration copies Luna's Keychain items from here. -->
+		<string>$(AppIdentifierPrefix)com.luna.browser.dev</string>
 	</array>
 </dict>
 </plist>

@@ -6,9 +6,16 @@
 	<true/>
 	<key>com.apple.security.files.bookmarks.app-scope</key>
 	<true/>
+	<!-- LegacyLunaMigration: read Luna's sandbox container once to copy its data. -->
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/Library/Containers/com.luna.browser/Data/Library/</string>
+	</array>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)com.axolotl.browser</string>
+		<!-- Read-only use: LegacyLunaMigration copies Luna's Keychain items from here. -->
+		<string>$(AppIdentifierPrefix)com.luna.browser</string>
 	</array>
 </dict>
 </plist>
