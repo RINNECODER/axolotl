@@ -1,5 +1,9 @@
 import XCTest
+#if LUNA_DEV
+@testable import LunaDev
+#else
 @testable import Luna
+#endif
 
 /// Dev home: the step state machine, Skip home / default setup resolution, which program the
 /// Terminal tab runs, and queuing chat sends until a freshly launched CLI is ready.
@@ -136,6 +140,7 @@ final class DevHomeTests: XCTestCase {
     /// A fake CLI that throws away anything typed before it has drawn its prompt (as Ink TUIs do),
     /// then echoes lines. A send right after launch must arrive anyway.
     func testSendIsQueuedUntilTheCLIIsReady() async throws {
+        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in LunaDevTests")
         let base = FileManager.default.temporaryDirectory.appendingPathComponent("luna-devhome-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: base) }

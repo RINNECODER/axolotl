@@ -1,5 +1,9 @@
 import XCTest
+#if LUNA_DEV
+@testable import LunaDev
+#else
 @testable import Luna
+#endif
 
 /// Dev mode thread reduction, fed with events mapped from captured real CLI output.
 @MainActor

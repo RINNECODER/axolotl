@@ -1,5 +1,9 @@
 import XCTest
+#if LUNA_DEV
+@testable import LunaDev
+#else
 @testable import Luna
+#endif
 
 /// Dev mode backend: framing, PATH resolution, and the Claude Code / Codex event mapping
 /// replayed from captured real CLI output (`CLIFixtures`).
@@ -308,6 +312,7 @@ final class DevCLITests: XCTestCase {
     }
 
     func testCrashIsReportedWithStderrTail() async throws {
+        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in LunaDevTests")
         let first = CLIFixtures.claudeTextTurn.split(separator: "\n").first!
         let (dir, exe) = try fakeCLI("read line\necho '\(first)'\necho 'boom: out of cheese' >&2\nexit 3\n")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -325,6 +330,7 @@ final class DevCLITests: XCTestCase {
     }
 
     func testCloseEndsCleanlyAndRemovesMCPConfig() async throws {
+        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in LunaDevTests")
         let (dir, exe) = try fakeCLI("printf '%s\\n' \"$@\" > \"$PWD/args.log\"\nwhile read line; do echo \"$line\" >> \"$PWD/stdin.log\"; done\n")
         defer { try? FileManager.default.removeItem(at: dir) }
         var revoked = false
@@ -352,6 +358,7 @@ final class DevCLITests: XCTestCase {
     // MARK: PTY
 
     func testPTYGivesAControllingTerminal() async throws {
+        try XCTSkipIf(DevMode.isSandboxed, "spawns processes / reads outside the container; runs in LunaDevTests")
         let pty = PTYSession(executable: "/bin/sh", arguments: ["-c", "ps -o tty= -p $$; stty size"], workingDirectory: URL(fileURLWithPath: "/tmp"))
         let exited = expectation(description: "exit")
         try pty.start(columns: 91, rows: 33) { status in

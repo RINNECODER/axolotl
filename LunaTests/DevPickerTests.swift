@@ -1,5 +1,9 @@
 import XCTest
+#if LUNA_DEV
+@testable import LunaDev
+#else
 @testable import Luna
+#endif
 
 /// Dev mode's dropdown model, picker reset rules and the resume offer.
 final class DevPickerTests: XCTestCase {

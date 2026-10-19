@@ -1,5 +1,9 @@
 import XCTest
+#if LUNA_DEV
+@testable import LunaDev
+#else
 @testable import Luna
+#endif
 
 /// Real Claude Code and Codex turns in a throwaway project folder. Costs a few cents of
 /// usage, so opt in with LUNA_LIVE_CLI=1 (xcodebuild: TEST_RUNNER_LUNA_LIVE_CLI=1).
