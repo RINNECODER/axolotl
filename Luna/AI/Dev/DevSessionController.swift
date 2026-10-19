@@ -40,8 +40,6 @@ final class DevSessionController {
     /// Whether this session was launched with Luna's browser tools (MCP bridge on).
     private(set) var hasBrowserTools = false
     private(set) var projectDir: URL?
-    /// Path of each CLI on the login PATH; nil = not checked yet, "" = not found.
-    private(set) var installed: [AgentCLIKind: String] = [:]
 
     private var session: AgentCLISession?
     private var pump: Task<Void, Never>?
@@ -53,23 +51,6 @@ final class DevSessionController {
         // A quitting Luna must not leave the CLI (and its tools) running.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { DevSessionController.shared.stop() }
-        }
-    }
-
-    func isInstalled(_ kind: AgentCLIKind) -> Bool? {
-        installed[kind].map { !$0.isEmpty }
-    }
-
-    /// Looks the CLIs up on the login shell PATH (first call can take a few seconds).
-    func refreshInstalled() {
-        let names = AgentCLIKind.allCases.map { ($0, $0.executableName) }
-        Task.detached(priority: .utility) {
-            var found: [AgentCLIKind: String] = [:]
-            for (kind, name) in names {
-                found[kind] = LoginShellEnvironment.locate(name) ?? ""
-            }
-            let result = found
-            await MainActor.run { DevSessionController.shared.installed = result }
         }
     }
 

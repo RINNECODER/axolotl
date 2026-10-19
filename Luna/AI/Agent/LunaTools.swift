@@ -70,7 +70,7 @@ enum LunaTools {
     static let click = LunaTool(
         name: "click", description: "Click an element by id from the latest snapshot. Returns a fresh snapshot.",
         params: [LunaToolParam(name: "id", kind: .string, description: "Action id, e.g. e3")],
-        mutates: true
+        mutates: true, preview: { elementPreview("Click", $0) }
     ) { call in
         LunaToolbox.describe(try await call.driver().click(call.string("id") ?? ""))
     }
@@ -79,7 +79,7 @@ enum LunaTools {
         name: "type", description: "Replace the text of a field (a 'fill' id from the latest snapshot). Returns a fresh snapshot.",
         params: [LunaToolParam(name: "id", kind: .string, description: "Fill action id, e.g. e2"),
                  LunaToolParam(name: "text", kind: .string, description: "Text to enter", allowsEmpty: true)],
-        mutates: true
+        mutates: true, preview: { elementPreview("Type “\(($0.string("text") ?? "").prefix(80))” into", $0) }
     ) { call in
         LunaToolbox.describe(try await call.driver().type(call.string("id") ?? "", text: call.string("text") ?? ""))
     }
@@ -89,7 +89,7 @@ enum LunaTools {
         description: "Choose a dropdown option. Pass the option's own select id, or any option id of that dropdown plus the option's label or value.",
         params: [LunaToolParam(name: "id", kind: .string, description: "Select action id from the latest snapshot"),
                  LunaToolParam(name: "option", kind: .string, description: "Option label or value", required: false)],
-        mutates: true
+        mutates: true, preview: { elementPreview($0.string("option").map { "Choose “\($0.prefix(80))” in" } ?? "Choose", $0) }
     ) { call in
         let driver = try call.driver()
         let id = call.string("id") ?? ""
@@ -135,7 +135,7 @@ enum LunaTools {
         params: [LunaToolParam(name: "goal", kind: .string, description: "What to accomplish on this page"),
                  LunaToolParam(name: "max_steps", kind: .integer, description: "Action budget (default 60)",
                                required: false, range: 1...AgentPrompts.maxSteps)],
-        mutates: true
+        mutates: true, preview: { "Run a task on \(pageHost($0) ?? "the current page"): \(($0.string("goal") ?? "").prefix(200))" }
     ) { call in
         let tab = try call.tab()
         guard let webView = call.host.webView(for: tab) else {
@@ -156,7 +156,7 @@ enum LunaTools {
     static let grabApiKey = LunaTool(
         name: "grab_api_key",
         description: "Create an API key on a service's dashboard with Luna's agent and save it to the user's macOS Keychain and clipboard. " +
-            "The key value is never returned or shown to any model: the result is a status, the Keychain item name and an opaque handle. " +
+            "The key value is never returned or shown to any model: the result is a status and the Keychain item name. " +
             "If the user must sign in first, the status is waiting_for_user_sign_in; ask them to sign in in Luna, then call again with the returned tab_id. " +
             "Known services: " + KeyService.registry.map(\.name).joined(separator: ", ") + "; others start at the site's home page.",
         params: [LunaToolParam(name: "service", kind: .string, description: "Service name (e.g. OpenAI, GitHub) or domain"),
@@ -187,6 +187,31 @@ enum LunaTools {
                                                   maxSteps: call.int("max_steps") ?? 30)
         result.tabId = tab.uuidString
         return result.json
+    }
+}
+
+// MARK: Approval previews
+
+extension LunaTools {
+    /// The target tab's page, without bringing it to the front (previews run before approval).
+    private static func targetWebView(_ call: LunaToolCall) -> WKWebView? {
+        guard let tab = call.string("tab_id").flatMap(UUID.init(uuidString:)) ?? call.host.activeTabId else { return nil }
+        return call.host.webView(for: tab)
+    }
+
+    static func pageHost(_ call: LunaToolCall) -> String? { targetWebView(call)?.url?.host }
+
+    /// What an element action will touch: the element's label from the last snapshot and the page host.
+    static func elementPreview(_ verb: String, _ call: LunaToolCall) -> String {
+        let id = call.string("id") ?? ""
+        let webView = targetWebView(call)
+        let label = webView.flatMap { LunaToolbox.driver(for: $0).lastSnapshot?.action(id: id)?.label }
+        return elementPreview(verb, id: id, label: label, pageHost: webView?.url?.host)
+    }
+
+    static func elementPreview(_ verb: String, id: String, label: String?, pageHost: String?) -> String {
+        let target = label.map { "“\($0.prefix(80))” (\(id))" } ?? id
+        return "\(verb) \(target) on \(pageHost ?? "the current page")"
     }
 }
 

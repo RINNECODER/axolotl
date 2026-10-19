@@ -26,13 +26,15 @@ final class ComputerUseAgent {
     /// Jev when a TypeSafe key is saved, otherwise the user's chat model.
     /// Use `LunaToolbox.agent(for:)`, which shares the tab's driver with the tools.
     static func make(driver: AgentPageDriving, maxSteps: Int = AgentPrompts.maxSteps) -> ComputerUseAgent {
-        let policy: AgentPolicy
+        ComputerUseAgent(driver: driver, policy: defaultPolicy(), maxSteps: maxSteps)
+    }
+
+    /// Jev when a TypeSafe key is set, else the chat model.
+    static func defaultPolicy() -> AgentPolicy {
         if let key = KeychainManager.shared.string(for: .typesafeKey), !key.isEmpty {
-            policy = JevPolicy(client: JevClient(apiKey: key))
-        } else {
-            policy = LLMPolicy()
+            return JevPolicy(client: JevClient(apiKey: key))
         }
-        return ComputerUseAgent(driver: driver, policy: policy, maxSteps: maxSteps)
+        return LLMPolicy()
     }
 
     /// Streams step events. Cancelling the consuming task (or dropping the stream) stops the run.

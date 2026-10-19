@@ -53,7 +53,7 @@ final class DevTerminalLiveTests: XCTestCase {
         var deps = DevSession.Dependencies()
         deps.resumeStore = AgentCLIResumeStore(defaults: UserDefaults(suiteName: defaultsName)!)
         deps.makeTerminal = {
-            let t = DevTerminalController(approval: { .ask }, mcpProvider: { nil })
+            let t = DevTerminalController(approval: { .ask }, mcpProvider: { _ in nil })
             t.outputObserver = { output.value += DevTerminalScreen.plainText($0) }
             return t
         }

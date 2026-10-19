@@ -47,6 +47,13 @@ final class CoreLogicTests: XCTestCase {
         XCTAssertFalse(WebSearchService.isSafeRemoteURL(URL(string: "http://[::1]")!))
         XCTAssertFalse(WebSearchService.isSafeRemoteURL(URL(string: "http://[fe80::1]")!))
         XCTAssertTrue(WebSearchService.isSafeRemoteURL(URL(string: "https://example.com")!))
+        for bypass in ["http://0x7f.1/", "http://2130706433/", "http://127.1/", "http://0177.0.0.1/", "http://[::ffff:127.0.0.1]/",
+                       "http://[::ffff:a9fe:a9fe]/", "http://0/", "http://[::]/", "http://169.254.169.254/", "http://100.64.0.1/"] {
+            XCTAssertFalse(WebSearchService.isSafeRemoteURL(URL(string: bypass)!), bypass)
+        }
+        for ok in ["https://8.8.8.8/", "https://[2606:4700::1111]/", "https://facebook.com", "https://fda.gov", "https://1password.com"] {
+            XCTAssertTrue(WebSearchService.isSafeRemoteURL(URL(string: ok)!), ok)
+        }
     }
 
     func testLLMClockProvidesCurrentDateContext() {

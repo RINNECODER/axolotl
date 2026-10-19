@@ -134,8 +134,8 @@ enum AgentCLISessions {
     /// attached when the bridge is on and `autoWireBrowserTools` is set).
     static func make(_ kind: AgentCLIKind, settings: DevSettings? = nil) -> AgentCLISession {
         let settings = settings ?? .shared
-        let mcp = settings.autoWireBrowserTools ? LunaMCPBridge.shared.devAttachment() : nil
         let behavior = settings.approvalBehavior
+        let mcp = settings.autoWireBrowserTools ? LunaMCPBridge.shared.devAttachment(approval: behavior) : nil
         switch kind {
         case .claudeCode:
             let adapter = ClaudeCodeAdapter(mcp: mcp)

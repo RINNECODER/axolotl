@@ -74,13 +74,6 @@ final class DevCLITests: XCTestCase {
 
     // MARK: Login shell PATH
 
-    func testPathParsingIgnoresShellNoise() {
-        let output = "Welcome!\n__LUNA_PATH_START__/opt/homebrew/bin:/usr/bin__LUNA_PATH_END__\nbye"
-        XCTAssertEqual(LoginShellEnvironment.parse(output), "/opt/homebrew/bin:/usr/bin")
-        XCTAssertNil(LoginShellEnvironment.parse("no markers here"))
-        XCTAssertNil(LoginShellEnvironment.parse("__LUNA_PATH_START____LUNA_PATH_END__"))
-    }
-
     func testPathFallsBackWhenShellFails() {
         let fallback = LoginShellEnvironment.merged(shellPATH: nil, home: "/Users/test").split(separator: ":").map(String.init)
         XCTAssertTrue(fallback.contains("/opt/homebrew/bin"))
@@ -93,7 +86,7 @@ final class DevCLITests: XCTestCase {
     }
 
     func testLoginShellFailureReturnsNil() {
-        XCTAssertNil(LoginShellEnvironment.runLoginShell(shell: "/nonexistent/shell"))
+        XCTAssertNil(LoginShellEnvironment.runLoginShellEnvironment(shell: "/nonexistent/shell"))
         XCTAssertEqual(LoginShellEnvironment.locate("sh", path: "/nonexistent:/bin"), "/bin/sh")
         XCTAssertNil(LoginShellEnvironment.locate("definitely-not-a-cli", path: "/bin"))
     }
@@ -398,5 +391,27 @@ final class DevCLITests: XCTestCase {
         for bad in ["file:///etc/passwd", "javascript:alert(1)", "x-apple.systempreferences:com.apple.preference", "data:text/html,hi", "ssh://h"] {
             XCTAssertFalse(DevPanelView.isWebLink(URL(string: bad)!), bad)
         }
+    }
+}
+
+// MARK: - Process tree
+
+extension DevCLITests {
+    func testDescendantsFindsEveryChildAndTerminateKillsThem() async throws {
+        try XCTSkipIf(DevMode.isSandboxed, "spawns processes; runs in LunaDevTests")
+        let process = CLIProcess(executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "sleep 30 & sleep 30 & wait"],
+                                 workingDirectory: FileManager.default.temporaryDirectory,
+                                 environment: ProcessInfo.processInfo.environment)
+        try process.start { _ in }
+        var kids: [Int32] = []
+        for _ in 0..<40 where kids.count < 2 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+            kids = CLIProcess.descendants(of: process.pid)
+        }
+        XCTAssertEqual(kids.count, 2, "both sleeps, not count/4 of them")
+        process.terminate(grace: 0.5)
+        for _ in 0..<40 where kids.contains(where: { kill($0, 0) == 0 }) { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertFalse(kids.contains { kill($0, 0) == 0 }, "children must not be orphaned")
+        for kid in kids { kill(kid, SIGKILL) }
     }
 }

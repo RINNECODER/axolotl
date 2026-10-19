@@ -355,12 +355,6 @@ struct DevPanelView: View {
         return "New session"
     }
 
-    static func initials(_ name: String) -> String {
-        let words = name.split(whereSeparator: { "-_ .".contains($0) })
-        let letters = words.count >= 2 ? words.prefix(2).compactMap(\.first) : Array(name.prefix(2))
-        return String(letters).uppercased()
-    }
-
     /// Project picker: found projects (ProjectFinder), "Open folder…", and hide.
     private func projectDropdown<L: View>(id: String, edge: DevDropdownEdge, @ViewBuilder label: @escaping () -> L) -> some View {
         var projects = workspace.projects

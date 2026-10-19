@@ -30,6 +30,8 @@ final class LunaMCPBridge: ObservableObject {
     private var cachedToken: String?
     /// Tokens issued to Dev mode CLI sessions; valid until the session closes.
     private(set) var devSessionTokens: Set<String> = []
+    /// Tokens for Full auto CLI sessions: the CLI asks nobody, so Luna's approvals stay on.
+    private(set) var devPromptingTokens: Set<String> = []
     private let approvals = MCPApprovalPrompt()
     private lazy var toolbox = LunaToolbox { LunaBrowserHosts.shared.current }
 
@@ -55,6 +57,7 @@ final class LunaMCPBridge: ObservableObject {
         let endpoint = MCPEndpoint(toolbox: toolbox, port: { [weak self] in self?.boundPort ?? configured }, token: { [weak self] in self?.cachedToken ?? token },
                                    isTrusted: { [weak self] in self?.isTrusted ?? false }, approver: approvals)
         endpoint.trustedTokens = { [weak self] in self?.devSessionTokens ?? [] }
+        endpoint.promptingTokens = { [weak self] in self?.devPromptingTokens ?? [] }
         let server = MCPServer(endpoint: endpoint)
         self.server = server
         status = .starting
@@ -113,13 +116,18 @@ final class LunaMCPBridge: ObservableObject {
     // MARK: Dev mode sessions
 
     /// Luna's tools for one Dev mode CLI session, or nil when the bridge is off. The session
-    /// gets its own token, trusted so Luna does not prompt on top of the CLI's approvals.
-    func devAttachment() -> DevMCPAttachment? {
+    /// gets its own token, trusted so Luna does not prompt on top of the CLI's approvals,
+    /// unless the CLI runs in Full auto and asks nobody: then Luna's approvals apply.
+    func devAttachment(approval: DevApprovalBehavior) -> DevMCPAttachment? {
         guard isEnabled else { return nil }
         let token = Self.makeToken()
-        devSessionTokens.insert(token)
+        let trusted = approval != .fullAuto
+        if trusted { devSessionTokens.insert(token) } else { devPromptingTokens.insert(token) }
         return DevMCPAttachment(url: url, token: token) { [weak self] in
-            Task { @MainActor in self?.devSessionTokens.remove(token) }
+            Task { @MainActor in
+                self?.devSessionTokens.remove(token)
+                self?.devPromptingTokens.remove(token)
+            }
         }
     }
 
@@ -258,7 +266,7 @@ final class MCPApprovalPrompt: MCPApproving {
         } else {
             alert.messageText = "\(client) wants to use Luna: \(tool.replacingOccurrences(of: "_", with: " "))"
             alert.informativeText = (detail.isEmpty ? "" : detail + "\n\n") +
-                "Allow for This Session lets this agent act without asking until it disconnects."
+                "Allow for This Session lets this agent use \(tool.replacingOccurrences(of: "_", with: " ")) without asking until it disconnects."
             alert.addButton(withTitle: "Allow Once")
             alert.addButton(withTitle: "Allow for This Session")
             let deny = alert.addButton(withTitle: "Deny")

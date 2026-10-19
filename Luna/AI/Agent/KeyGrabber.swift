@@ -247,14 +247,13 @@ struct GrabResult: Equatable {
     /// Set by the tool so a caller can resume in the same tab.
     var tabId: String?
 
-    /// What a tool caller gets: status, Keychain item and handle. Never the value.
+    /// What a tool caller gets: status and Keychain item. Never the value.
     var json: String {
         var o: [String: JSONValue] = ["status": .string(status.rawValue), "service": .string(service),
                                       "key_name": .string(keyName), "message": .string(message)]
         if let tabId { o["tab_id"] = .string(tabId) }
         if let saved {
             o["keychain_item"] = .string(saved.keychainItem)
-            o["secret_handle"] = .string(saved.handle)
         }
         return JSONValue.object(o).jsonString()
     }
@@ -269,14 +268,7 @@ final class KeyGrabber {
 
     init(vault: SecretVault = .shared, makePolicy: (() -> AgentPolicy)? = nil) {
         self.vault = vault
-        self.makePolicy = makePolicy ?? { KeyGrabber.defaultPolicy() }
-    }
-
-    static func defaultPolicy() -> AgentPolicy {
-        if let key = KeychainManager.shared.string(for: .typesafeKey), !key.isEmpty {
-            return JevPolicy(client: JevClient(apiKey: key))
-        }
-        return LLMPolicy()
+        self.makePolicy = makePolicy ?? { ComputerUseAgent.defaultPolicy() }
     }
 
     /// One grab per web view: the capture handler is registered per page controller, so a second

@@ -3,7 +3,7 @@ import Foundation
 /// Decides whether a string on a page is an API key or token.
 ///
 /// The rule (shared by `AgentRedaction` and the key grabber):
-/// 1. Candidates are runs of `[A-Za-z0-9_-]` of 20–256 characters that are not part of a URL,
+/// 1. Candidates are runs of `[A-Za-z0-9_-]` of 20–4096 characters that are not part of a URL,
 ///    path or file name (not preceded by `/ = . ? & # % @` and not followed by `/`).
 /// 2. A candidate is a secret when it
 ///    - starts with a well-known key prefix (`AgentRedaction`'s list: sk-, Stripe, GitHub, AWS, …), or
@@ -16,7 +16,7 @@ import Foundation
 enum SecretDetector {
     /// Characters before which a token is part of a URL, path, query or file name.
     static let candidatePattern = try! NSRegularExpression(
-        pattern: #"(?<![A-Za-z0-9_\-/=.?&#%@])[A-Za-z0-9_\-]{20,256}(?![A-Za-z0-9_\-/])"#)
+        pattern: #"(?<![A-Za-z0-9_\-/=.?&#%@])[A-Za-z0-9_\-]{20,4096}(?![A-Za-z0-9_\-/])"#)
     static let labelPattern = try! NSRegularExpression(
         pattern: #"(?i)\b(api[\s_-]?keys?|keys?|tokens?|secrets?|credentials?|bearer|passwords?|pat)\b"#)
     static let knownPrefixPattern = try! NSRegularExpression(pattern: "^(?:" + AgentRedaction.knownFormats.joined(separator: "|") + ")")
@@ -47,12 +47,8 @@ enum SecretDetector {
         s.count >= 20 && s.contains(where: \.isLetter) && s.contains(where: \.isNumber) && entropy(s) >= 3.0
     }
 
-    /// Luna's own handles (`‹secret:3›`) are not labels.
-    static let handlePattern = try! NSRegularExpression(pattern: "‹secret:\\d+›")
-
     static func isLabel(_ context: String) -> Bool {
-        let c = handlePattern.stringByReplacingMatches(in: context, range: NSRange(context.startIndex..., in: context), withTemplate: "")
-        return labelPattern.firstMatch(in: c, range: NSRange(c.startIndex..., in: c)) != nil
+        labelPattern.firstMatch(in: context, range: NSRange(context.startIndex..., in: context)) != nil
     }
 
     /// `candidate` is one token; `context` is the text around it (a field label, a heading).

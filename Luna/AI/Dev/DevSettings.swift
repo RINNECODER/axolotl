@@ -315,10 +315,6 @@ final class DevSettings {
         decode(defaults.dictionary(forKey: Key.cliPaths))
     }
 
-    nonisolated static func storedLiveSyncEnabled(_ defaults: UserDefaults = .standard) -> Bool {
-        defaults.object(forKey: Key.liveSync) as? Bool ?? false
-    }
-
     nonisolated private static func encode(_ map: [HarnessID: String]) -> [String: String] {
         Dictionary(uniqueKeysWithValues: map.map { ($0.key.rawValue, $0.value) })
     }

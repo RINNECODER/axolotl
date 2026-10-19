@@ -6,7 +6,7 @@ import Security
 /// account "<service>/<key name>") plus the clipboard. Items live in the data protection keychain
 /// through `KeychainStore`, stay on this Mac and are never synced to iCloud.
 /// Values only ever arrive from `SecretCapture` and leave through `copy`; callers outside get
-/// an opaque handle like `‹secret:3›`. Nothing here logs or returns a value to a model.
+/// only the Keychain item name. Nothing here logs or returns a value to a model.
 final class SecretVault {
     static let shared = SecretVault()
     static let defaultService = "Luna API Keys"
@@ -20,7 +20,6 @@ final class SecretVault {
     }
 
     struct Saved: Equatable {
-        let handle: String
         /// "Luna API Keys / <account>", as Keychain Access shows it.
         let keychainItem: String
         let account: String
@@ -37,7 +36,6 @@ final class SecretVault {
     let service: String
     let pasteboard: NSPasteboard
     private let keychain: KeychainStore
-    private var nextHandle = 1
 
     init(service: String = SecretVault.defaultService, pasteboard: NSPasteboard = .general,
          keychain: KeychainStore = .shared) {
@@ -46,7 +44,7 @@ final class SecretVault {
         self.keychain = keychain
     }
 
-    /// Saves the value under a new account, copies it, and returns a handle. An existing account is
+    /// Saves the value under a new account, copies it, and returns where it went. An existing account is
     /// never overwritten: the name gets `-2`, `-3`… instead. The value is not kept in memory.
     func store(_ value: String, account requested: String) throws -> Saved {
         let data = Data(value.utf8)
@@ -66,9 +64,7 @@ final class SecretVault {
             account = "\(requested)-\(suffix)"
         }
         putOnPasteboard(value)
-        let handle = "‹secret:\(nextHandle)›"
-        nextHandle += 1
-        return Saved(handle: handle, keychainItem: "\(service) / \(account)", account: account)
+        return Saved(keychainItem: "\(service) / \(account)", account: account)
     }
 
     /// Saved keys without their values, newest first.

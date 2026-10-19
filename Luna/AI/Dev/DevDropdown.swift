@@ -144,7 +144,6 @@ struct DevDropdownList: View {
     private var p: DevPalette { palette }
     /// Same tokens as every Luna menu (LunaMenu, pickers), so all dropdowns look like one family.
     private var menuStyle: LunaMenuStyle { LunaMenuStyle.resolve(.luna, dark: p.isDark) }
-    static func popoverFill(_ p: DevPalette) -> Color { LunaMenuStyle.resolve(.luna, dark: p.isDark).background }
 
     var body: some View {
         VStack(spacing: 0) {

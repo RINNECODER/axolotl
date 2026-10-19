@@ -33,7 +33,7 @@ enum DebugSnapshot {
         signIn.finish(GrabResult(status: .waitingForSignIn, service: openai.name, keyName: "luna-20261015", message: ""))
         var saved = GrabCard(service: KeyService.registry[5], keyName: "luna-20261015", model: "jev-1.14")
         saved.finish(GrabResult(status: .saved, service: "Hugging Face", keyName: "luna-20261015",
-                                saved: SecretVault.Saved(handle: "h", keychainItem: "Luna API Keys / huggingface/luna-20261015",
+                                saved: SecretVault.Saved(keychainItem: "Luna API Keys / huggingface/luna-20261015",
                                                          account: "huggingface/luna-20261015"), message: ""))
         let messages = [
             ChatMessage(role: .assistant, text: done.transcript, card: .agentRun(done)),
