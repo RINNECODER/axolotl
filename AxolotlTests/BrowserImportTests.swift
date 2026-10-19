@@ -445,4 +445,112 @@ final class BrowserImportTests: XCTestCase {
         let rows = PasswordVault.parseCSV(OnePasswordImporter.vaultCSV(r.logins))
         XCTAssertEqual(rows, [["url", "username", "password"], ["https://example.com", "me", "pa,ss"]])
     }
+
+    // MARK: Chromium secure (cookies, passwords, extensions, autofill)
+
+    private func hex(_ d: Data) -> String { d.map { String(format: "%02x", $0) }.joined() }
+
+    func testChromiumV10DecryptWithAndWithoutHostHashPrefix() throws {
+        let key = ChromiumCrypto.deriveKey(password: "s3cret")
+        // Round-trips through the real encrypt/decrypt path.
+        let plain = Data("session-token-123".utf8)
+        let noPrefix = ChromiumCrypto.encrypt(plain, key: key)
+        XCTAssertEqual(try ChromiumCrypto.decrypt(noPrefix, key: key), plain)
+        // Newer cookie DBs prepend a 32-byte SHA256(host); decrypt must strip it.
+        let withHash = ChromiumCrypto.encrypt(plain, key: key, hostHashPrefix: Data(repeating: 7, count: 32))
+        XCTAssertEqual(try ChromiumCrypto.decrypt(withHash, key: key, stripHostHash: true), plain)
+        // Wrong prefix flag or non-v10 values don't crash.
+        XCTAssertThrowsError(try ChromiumCrypto.decrypt(Data("plain".utf8), key: key))
+    }
+
+    func testChromiumTimeConversion() {
+        // 13324608000000000 µs since 1601-01-01 == 2023-01-02 is not needed; verify a known epoch.
+        let unix = Date(timeIntervalSince1970: 1_700_000_000)
+        let chromium = ChromiumImporter.chromiumTime(from: unix)
+        XCTAssertEqual(chromium, (1_700_000_000 + 11_644_473_600) * 1_000_000)
+        XCTAssertEqual(ChromiumImporter.date(fromChromium: chromium).timeIntervalSince1970, 1_700_000_000, accuracy: 0.001)
+    }
+
+    func testChromiumCookiesSkipExpiredAndStripHashPrefix() throws {
+        let profile = try dir("Brave/Default/Network")
+        let key = ChromiumCrypto.deriveKey(password: "pw")
+        func enc(_ s: String) -> String { hex(ChromiumCrypto.encrypt(Data(s.utf8), key: key, hostHashPrefix: Data(repeating: 0, count: 32))) }
+        let future = ChromiumImporter.chromiumTime(from: Date().addingTimeInterval(86_400))
+        let past = ChromiumImporter.chromiumTime(from: Date().addingTimeInterval(-86_400))
+        try sqlite(profile.appendingPathComponent("Cookies"), """
+            CREATE TABLE meta(key TEXT, value TEXT); INSERT INTO meta VALUES('version','24');
+            CREATE TABLE cookies(host_key TEXT,name TEXT,encrypted_value BLOB,path TEXT,expires_utc INTEGER,is_secure INTEGER,is_httponly INTEGER,samesite INTEGER);
+            INSERT INTO cookies VALUES ('.example.com','sid',x'\(enc("good"))','/',\(future),1,1,1);
+            INSERT INTO cookies VALUES ('example.com','old',x'\(enc("stale"))','/',\(past),0,0,0);
+            INSERT INTO cookies VALUES ('example.com','sess',x'\(enc("temp"))','/',0,0,0,-1);
+            """)
+        let cookies = try ChromiumSecureImport.cookies(profileFolder: try dir("Brave/Default"), key: key)
+        XCTAssertEqual(cookies.count, 1, "expired and session cookies are skipped")
+        XCTAssertEqual(cookies.first?.name, "sid")
+        XCTAssertEqual(cookies.first?.value, "good")
+        XCTAssertTrue(cookies.first?.isSecure == true && cookies.first?.isHTTPOnly == true)
+    }
+
+    func testChromiumLoginsMappingAndCSV() throws {
+        let profile = try dir("Chrome/Default")
+        let key = ChromiumCrypto.deriveKey(password: "pw")
+        func enc(_ s: String) -> String { hex(ChromiumCrypto.encrypt(Data(s.utf8), key: key)) }
+        try sqlite(profile.appendingPathComponent("Login Data"), """
+            CREATE TABLE logins(origin_url TEXT, username_value TEXT, password_value BLOB);
+            INSERT INTO logins VALUES ('https://example.com/login','me',x'\(enc("hunter2"))');
+            INSERT INTO logins VALUES ('https://example.com/login','me',x'\(enc("hunter2"))');
+            INSERT INTO logins VALUES ('','x',x'\(enc("y"))');
+            """)
+        let logins = try ChromiumSecureImport.logins(profileFolder: profile, key: key)
+        XCTAssertEqual(logins.count, 2, "rows with an empty origin are dropped")
+        XCTAssertEqual(logins.first?.origin, "https://example.com/login")
+        XCTAssertEqual(logins.first?.password, "hunter2")
+        // The CSV feeds the vault's existing (origin, username) dedupe.
+        let rows = PasswordVault.parseCSV(BrowserImporter.loginsCSV(logins))
+        XCTAssertEqual(rows.first, ["url", "username", "password"])
+        XCTAssertEqual(rows.dropFirst().map { $0[0] }, ["https://example.com/login", "https://example.com/login"])
+    }
+
+    func testChromiumExtensionFilterSkipsComponentThemeAndUBOL() {
+        func m(_ name: String, theme: Bool = false) -> [String: Any] {
+            theme ? ["name": name, "theme": ["colors": [:]]] : ["name": name]
+        }
+        XCTAssertTrue(ChromiumExtensionImport.shouldImport(manifest: m("Dark Reader"), id: "ddkjiahejlhfcafbddmgiahcphecmpfh"))
+        XCTAssertFalse(ChromiumExtensionImport.shouldImport(manifest: m("My Theme", theme: true), id: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+        XCTAssertFalse(ChromiumExtensionImport.shouldImport(manifest: m("Chrome PDF"), id: "mhjfbmdgcfjbbpaeojofohoefgiehjai"))
+        XCTAssertFalse(ChromiumExtensionImport.shouldImport(manifest: m("uBlock Origin Lite"), id: "ddkjiahejlhfcafbddmgiahcphecmpfh"))
+    }
+
+    func testChromiumAutofillUnknownSchemaSkipped() throws {
+        let profile = try dir("Chrome/Default")
+        try sqlite(profile.appendingPathComponent("Web Data"), "CREATE TABLE something_else(x INTEGER);")
+        XCTAssertEqual(try ChromiumSecureImport.addresses(profileFolder: profile), [])
+    }
+
+    func testChromiumAutofillLegacySchema() throws {
+        let profile = try dir("Chrome/Default")
+        try sqlite(profile.appendingPathComponent("Web Data"), """
+            CREATE TABLE autofill_profiles(guid TEXT, company_name TEXT, street_address TEXT, city TEXT, state TEXT, zipcode TEXT, country_code TEXT);
+            CREATE TABLE autofill_profile_names(guid TEXT, first_name TEXT, last_name TEXT);
+            CREATE TABLE autofill_profile_emails(guid TEXT, email TEXT);
+            CREATE TABLE autofill_profile_phones(guid TEXT, number TEXT);
+            INSERT INTO autofill_profiles VALUES ('g1','Acme','1 Main St','Reno','NV','89501','US');
+            INSERT INTO autofill_profile_names VALUES ('g1','Ada','Lovelace');
+            INSERT INTO autofill_profile_emails VALUES ('g1','ada@example.com');
+            INSERT INTO autofill_profile_phones VALUES ('g1','555-1212');
+            """)
+        let addrs = try ChromiumSecureImport.addresses(profileFolder: profile)
+        XCTAssertEqual(addrs.count, 1)
+        XCTAssertEqual(addrs.first?.name, "Ada Lovelace")
+        XCTAssertEqual(addrs.first?.city, "Reno")
+        XCTAssertEqual(addrs.first?.email, "ada@example.com")
+        XCTAssertEqual(addrs.first?.phone, "555-1212")
+    }
+
+    func testReadSecureReportsKeychainUnavailable() {
+        let read = BrowserImporter.readSecure(kind: .brave, dataFolder: home, profile: .init(id: "Default", name: "Default"),
+                                              types: [.cookies, .passwords], keyProvider: { _ in nil })
+        XCTAssertTrue(read.keychainUnavailable)
+        XCTAssertNil(read.cookies)
+    }
 }

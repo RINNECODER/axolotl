@@ -39,7 +39,7 @@ nonisolated final class SQLiteSnapshot {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
-    enum Value { case int(Int64), text(String), null }
+    enum Value { case int(Int64), text(String), blob(Data), null }
 
     /// Runs a query and returns each row's columns.
     func rows(_ sql: String, bind: [Int64] = []) throws -> [[Value]] {
@@ -58,6 +58,9 @@ nonisolated final class SQLiteSnapshot {
                 switch sqlite3_column_type(stmt, c) {
                 case SQLITE_INTEGER: row.append(.int(sqlite3_column_int64(stmt, c)))
                 case SQLITE_NULL: row.append(.null)
+                case SQLITE_BLOB:
+                    let n = Int(sqlite3_column_bytes(stmt, c))
+                    row.append(.blob(n > 0 ? Data(bytes: sqlite3_column_blob(stmt, c), count: n) : Data()))
                 default:
                     if let p = sqlite3_column_text(stmt, c) { row.append(.text(String(cString: p))) } else { row.append(.null) }
                 }
@@ -65,6 +68,11 @@ nonisolated final class SQLiteSnapshot {
             out.append(row)
         }
         return out
+    }
+
+    /// Whether the database has this table (lets readers tell schema eras apart).
+    func hasTable(_ name: String) -> Bool {
+        (try? rows("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '\(name)'"))?.isEmpty == false
     }
 
     /// Pages a newest-first visits query in batches so huge histories never sit in memory at once.
@@ -96,7 +104,15 @@ nonisolated extension SQLiteSnapshot.Value {
         switch self {
         case .text(let s): return s
         case .int(let v): return String(v)
+        case .blob(let d): return String(data: d, encoding: .utf8)
         case .null: return nil
+        }
+    }
+    var data: Data? {
+        switch self {
+        case .blob(let d): return d
+        case .text(let s): return Data(s.utf8)
+        default: return nil
         }
     }
 }

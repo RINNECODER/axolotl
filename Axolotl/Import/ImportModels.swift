@@ -128,13 +128,16 @@ nonisolated struct ImportedVisit: Equatable, Sendable {
 }
 
 nonisolated enum ImportDataType: String, Codable, CaseIterable, Identifiable, Sendable {
-    case bookmarks, history, passwords
+    case bookmarks, history, passwords, cookies, extensions, autofill
     var id: String { rawValue }
     var title: String {
         switch self {
         case .bookmarks: return "Bookmarks"
         case .history: return "History"
         case .passwords: return "Passwords"
+        case .cookies: return "Cookies (keep me signed in)"
+        case .extensions: return "Extensions"
+        case .autofill: return "Autofill addresses"
         }
     }
 }

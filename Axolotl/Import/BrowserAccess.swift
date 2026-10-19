@@ -44,7 +44,7 @@ enum BrowserAccess {
         panel.title = "Import from \(browser.kind.displayName)"
         panel.message = "To import from \(browser.kind.displayName), Axolotl needs to read its data folder. "
             + "“\(browser.dataFolder.lastPathComponent)” is already selected, so just click Allow Access. "
-            + "Axolotl only reads bookmarks and history, and remembers this so it won't ask again."
+            + "Axolotl only reads the data you choose to import, and remembers this so it won't ask again."
         guard panel.runModal() == .OK, let url = panel.url else { return false }
         guard url.standardizedFileURL.path == browser.dataFolder.standardizedFileURL.path else { return false }
         guard let data = try? url.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess]) else { return false }
