@@ -144,6 +144,10 @@ struct Theme: Equatable {
     static let radiusKey = "luna_theme_radius"
     static let densityKey = "luna_theme_density"
     static let fontScaleKey = "luna_theme_font_scale"
+    static var defaultsKeys: [String] {
+        ThemeColorToken.allCases.flatMap { [$0.defaultsKey(dark: false), $0.defaultsKey(dark: true)] }
+            + [contrastKey, radiusKey, densityKey, fontScaleKey]
+    }
 
     static let luna = Theme(colors: Dictionary(uniqueKeysWithValues: ThemeColorToken.allCases.map { ($0, ThemePreset.luna.color($0)) }))
 
@@ -220,6 +224,9 @@ struct GlassSettings: Equatable {
 
     static let blurKey = "luna_glass_blur"
     static let tintKey = "luna_glass_tint"
+    static var defaultsKeys: [String] {
+        [LiquidGlass.defaultsKey, blurKey, tintKey] + GlassSurface.allCases.map(\.defaultsKey)
+    }
 
     static func load(_ d: UserDefaults) -> GlassSettings {
         var g = GlassSettings()
@@ -245,20 +252,19 @@ final class ThemeStore {
     private(set) var glass: GlassSettings
     /// Offscreen renders set a theme directly and stop following preferences.
     @ObservationIgnored private var pinned = false
-    @ObservationIgnored private var observer: NSObjectProtocol?
+    @ObservationIgnored private var observer: DefaultsObserver?
 
     private init() {
         theme = .load(.standard)
         glass = .load(.standard)
-        observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { ThemeStore.shared.reload() }
-        }
+        // Only theme and glass keys: other preference writes don't re-read them.
+        observer = DefaultsObserver(keys: Theme.defaultsKeys + GlassSettings.defaultsKeys) { ThemeStore.shared.reload() }
     }
 
     func reload() {
         guard !pinned else { return }
         let t = Theme.load(.standard), g = GlassSettings.load(.standard)
-        // Assign only on change: every defaults write in the app posts this notification.
+        // Assign only on change: views re-render only for a real difference.
         if t != theme { theme = t }
         if g != glass { glass = g }
     }
