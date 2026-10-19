@@ -8,6 +8,9 @@ import SwiftUI
 
 @main
 struct LunaApp: App {
+    /// The main window's scene id, so ⌘⇧T can reopen it after it closed.
+    static let mainWindowId = "main"
+
     init() {
         NSWindow.allowsAutomaticWindowTabbing = false
         // BrowserCommands owns View ▸ Enter Full Screen (⌃⌘F); drop AppKit's fn-F duplicate.
@@ -24,7 +27,7 @@ struct LunaApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup(id: Self.mainWindowId) {
             // Unit tests run inside the app; don't open a browser window that
             // would load (and save) the user's real profile.
             if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {

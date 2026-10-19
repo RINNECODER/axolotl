@@ -83,6 +83,7 @@ final class BrowserCommandTargets {
 struct BrowserCommands: Commands {
     @AppStorage(ChromePrefs.showBookmarksBar) private var showBookmarksBar = false
 
+    @Environment(\.openWindow) private var openWindow
     private var browser: BrowserCommandActions? { BrowserCommandTargets.shared.key }
 
     var body: some Commands {
@@ -97,7 +98,12 @@ struct BrowserCommands: Commands {
                 BrowserWindows.open(profileId: browser?.profileId() ?? ProfileManager.shared.lastActiveProfileId, isPrivate: true)
             }
             .keyboardShortcut("n", modifiers: [.command, .shift])
-            Button("Reopen Closed Tab") { browser?.reopenClosedTab() }
+            Button("Reopen Closed Tab") {
+                // No browser window open: bring back the window that closed last.
+                if let browser { browser.reopenClosedTab() } else {
+                    _ = BrowserWindows.reopenLastClosed(ifNewerThan: nil, openMain: { openWindow(id: LunaApp.mainWindowId) })
+                }
+            }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
             Button("Search Tabs…") { browser?.searchTabs() }
                 .keyboardShortcut("a", modifiers: [.command, .shift])

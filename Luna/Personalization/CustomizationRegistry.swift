@@ -45,14 +45,23 @@ struct CustomizableSetting {
     var help: String? = nil
     /// The UserDefaults key behind a plain preference, so Settings can bind to it.
     var defaultsKey: String? = nil
+    /// Choice values that come from the user's data (custom search engines), on top of the fixed ones.
+    var extraChoices: ((UserDefaults) -> [(value: String, title: String)])? = nil
+
+    /// A choice setting's allowed values in `env`.
+    func choices(_ env: CustomizationEnvironment) -> [(value: String, title: String)] {
+        guard case .choice(let fixed) = kind else { return [] }
+        return fixed + (extraChoices?(env.defaults) ?? [])
+    }
 
     /// Throws unless `value` has this setting's type and is allowed.
-    func validate(_ value: JSONValue) throws {
+    func validate(_ value: JSONValue, env: CustomizationEnvironment = .live) throws {
         func fail(_ why: String) -> LunaToolError { .invalidArguments("\(key): \(why)") }
         switch kind {
         case .bool:
             guard case .bool = value else { throw fail("expected true or false.") }
-        case .choice(let options):
+        case .choice:
+            let options = choices(env)
             guard let s = value.stringValue else { throw fail("expected one of \(options.map(\.value).joined(separator: ", ")).") }
             guard options.contains(where: { $0.value == s }) else {
                 throw fail("'\(s)' is not allowed; use one of \(options.map(\.value).joined(separator: ", ")).")
@@ -77,12 +86,12 @@ struct CustomizableSetting {
     }
 
     /// Value for people: "On", "Dark", "30 minutes", "github.com, news.ycombinator.com".
-    func display(_ value: JSONValue) -> String {
+    func display(_ value: JSONValue, env: CustomizationEnvironment = .live) -> String {
         switch kind {
         case .bool:
             if case .bool(let b) = value { return b ? "On" : "Off" }
-        case .choice(let options):
-            if let s = value.stringValue { return options.first { $0.value == s }?.title ?? s }
+        case .choice:
+            if let s = value.stringValue { return choices(env).first { $0.value == s }?.title ?? s }
         case .int:
             if let n = value.intValue { return "\(n)" }
         case .intChoice(let options):
@@ -100,10 +109,10 @@ struct CustomizableSetting {
     }
 
     /// Schema line for settings_list.
-    var typeDescription: String {
+    func typeDescription(_ env: CustomizationEnvironment) -> String {
         switch kind {
         case .bool: return "bool"
-        case .choice(let o): return "enum(" + o.map(\.value).joined(separator: "|") + ")"
+        case .choice: let o = choices(env); return "enum(" + o.map(\.value).joined(separator: "|") + ")"
         case .int(let r): return "int(\(r.lowerBound)...\(r.upperBound))"
         case .intChoice(let o): return "enum(" + o.map { String($0.value) }.joined(separator: "|") + ")"
         case .urlList(let max): return "list of up to \(max) http(s) URLs"
@@ -178,7 +187,8 @@ enum CustomizationRegistry {
              help: "Your site tiles under the search bar."),
         shortcutsList,
         choice("search.engine", SearchEngine.defaultsKey, "Search engine", "Engine for searches from the address bar and start page.",
-               default: SearchEngine.google.rawValue, SearchEngine.allCases.map { ($0.rawValue, $0.title) }),
+               default: SearchEngine.google.rawValue, SearchEngine.allCases.map { ($0.rawValue, $0.title) },
+               more: { CustomSearchEngine.load($0).map { ($0.selectionValue, $0.name) } }),
         bool("search.suggestions", "luma_search_suggestions_enabled", "Show search suggestions",
              "Send typed text to the search engine for suggestions.", default: false,
              help: "Sends what you type in the address bar to the search engine."),
@@ -338,15 +348,18 @@ enum CustomizationRegistry {
     }
 
     private static func choice(_ key: String, _ defaultsKey: String, _ title: String, _ summary: String,
-                               default def: String, _ options: [(String, String)], help: String? = nil) -> CustomizableSetting {
-        pref(key, defaultsKey, title, summary, kind: .choice(options.map { (value: $0.0, title: $0.1) }), help: help,
+                               default def: String, _ options: [(String, String)], help: String? = nil,
+                               more: ((UserDefaults) -> [(String, String)])? = nil) -> CustomizableSetting {
+        var setting = pref(key, defaultsKey, title, summary, kind: .choice(options.map { (value: $0.0, title: $0.1) }), help: help,
              read: { d in
                  let raw = d.string(forKey: defaultsKey) ?? def
                  // Stored values the registry doesn't know (e.g. legacy "topTabs") read as their current meaning.
                  if key == "tabs.layout" { return .string(BrowserLayout(stored: raw).rawValue) }
-                 return .string(options.contains { $0.0 == raw } ? raw : def)
+                 return .string((options + (more?(d) ?? [])).contains { $0.0 == raw } ? raw : def)
              },
              write: { d, v in if let s = v.stringValue { d.set(s, forKey: defaultsKey) } })
+        if let more { setting.extraChoices = { more($0).map { (value: $0.0, title: $0.1) } } }
+        return setting
     }
 
     private static func int(_ key: String, _ defaultsKey: String, _ title: String, _ summary: String,

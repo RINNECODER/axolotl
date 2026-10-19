@@ -85,7 +85,7 @@ enum Personalize {
             parts.append("The user's usage record is off: base the proposal on their request only.")
         }
         parts.append("Settings registry (key, type, current value, description):\n" + CustomizationRegistry.all.map { s in
-            "\(s.key)\t\(s.typeDescription)\t\(s.read(env).jsonString())\t\(s.title): \(s.summary)"
+            "\(s.key)\t\(s.typeDescription(env))\t\(s.read(env).jsonString())\t\(s.title): \(s.summary)"
         }.joined(separator: "\n"))
         return AgentRedaction.redact(parts.joined(separator: "\n\n"))
     }
@@ -167,14 +167,14 @@ enum Personalize {
             card.rejected.append("Unknown setting “\(key)”")
             return
         }
-        do { try setting.validate(value) } catch {
+        do { try setting.validate(value, env: customizer.env) } catch {
             card.rejected.append(error.localizedDescription)
             return
         }
         let current = setting.read(customizer.env)
         guard current != value, !card.items.contains(where: { $0.id == "setting:\(key)" }) else { return }
         card.items.append(.init(id: "setting:\(key)", action: .setting(key: key, value: value),
-                                line: ChangeLine(title: setting.title, from: setting.display(current), to: setting.display(value))))
+                                line: ChangeLine(title: setting.title, from: setting.display(current, env: customizer.env), to: setting.display(value, env: customizer.env))))
     }
 
     private static func addSite(_ url: URL, title: String?, bookmark: Bool, to card: inout CustomizationCard,

@@ -269,19 +269,22 @@ enum ForgetSites {
         return h == site || h.hasSuffix("." + site)
     }
 
-    /// The site to forget after a tab on `host` closed: one marked to forget that no `openHosts` still uses.
-    static func siteToForget(closing host: String?, openHosts: [String], sites: [String]) -> String? {
-        guard let host, let site = sites.first(where: { belongs(host, to: $0) }),
-              !openHosts.contains(where: { belongs($0, to: site) }) else { return nil }
-        return site
+    /// Marked sites some `before` tab showed and no `after` tab shows any more: a tab closed or navigated away,
+    /// or its window closed. Pass `sites` as `before` to sweep every marked site with no open tab.
+    static func sitesToForget(sites: [String], before: [String], after: [String]) -> [String] {
+        sites.filter { site in before.contains { belongs($0, to: site) } && !after.contains { belongs($0, to: site) } }
     }
 
-    /// Removes every website data record of `site` from `dataStore`.
-    static func forget(_ site: String, in dataStore: WKWebsiteDataStore) {
+    /// Removes the website data records of `sites` from `dataStore`, except records an `openHosts` tab still uses
+    /// (WebKit groups data by registrable domain, so "mail.example.com" and "www.example.com" share one record).
+    static func forget(_ sites: [String], keeping openHosts: [String], in dataStore: WKWebsiteDataStore,
+                       completion: @escaping () -> Void = {}) {
+        guard !sites.isEmpty else { return completion() }
         let types = WKWebsiteDataStore.allWebsiteDataTypes()
         dataStore.fetchDataRecords(ofTypes: types) { records in
-            let mine = SiteSecurity.records(records, for: site)
-            if !mine.isEmpty { dataStore.removeData(ofTypes: types, for: mine) {} }
+            let used = Set(openHosts.flatMap { SiteSecurity.records(records, for: $0) })
+            let mine = sites.flatMap { SiteSecurity.records(records, for: $0) }.filter { !used.contains($0) }
+            if mine.isEmpty { completion() } else { dataStore.removeData(ofTypes: types, for: Array(Set(mine)), completionHandler: completion) }
         }
     }
 }

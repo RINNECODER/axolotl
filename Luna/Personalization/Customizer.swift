@@ -185,7 +185,7 @@ final class Customizer {
             guard seen.insert(change.key).inserted else {
                 throw LunaToolError.invalidArguments("'\(change.key)' appears twice.")
             }
-            try setting.validate(change.value)
+            try setting.validate(change.value, env: env)
         }
     }
 
@@ -194,7 +194,7 @@ final class Customizer {
     func preview(_ plan: CustomizationPlan, bookmarks: BookmarkStore? = nil) -> [ChangeLine] {
         var lines: [ChangeLine] = plan.settings.compactMap { change in
             guard let s = CustomizationRegistry.setting(change.key) else { return nil }
-            return ChangeLine(title: s.title, from: s.display(s.read(env)), to: s.display(change.value))
+            return ChangeLine(title: s.title, from: s.display(s.read(env), env: env), to: s.display(change.value, env: env))
         }
         lines += plan.bookmarks.map { ChangeLine(title: "Add bookmark", from: nil, to: Self.siteLabel($0)) }
         lines += plan.favorites.map { ChangeLine(title: "Add to Favorites", from: nil, to: Self.siteLabel($0)) }

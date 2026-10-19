@@ -54,11 +54,21 @@ enum BrowserWindows {
         lastClosed = (record, Date())
     }
 
-    /// Reopens the last closed window if it closed after `date` (the newest closed tab, if any).
-    static func reopenLastClosed(ifNewerThan date: Date?) -> Bool {
-        guard let last = lastClosed, last.at > (date ?? .distantPast) else { return false }
-        lastClosed = nil
-        open(profileId: last.record.profileId, windowId: last.record.id)
+    /// When the main window (the app's WindowGroup) closed; nil while it is open. Its workspace stays
+    /// saved, so opening it again brings its tabs back.
+    static var mainClosedAt: Date?
+
+    /// Reopens the window, extra or main, that closed last if it closed after `date` (the newest closed tab, if any).
+    static func reopenLastClosed(ifNewerThan date: Date?, openMain: () -> Void) -> Bool {
+        let since = date ?? .distantPast
+        if let last = lastClosed, last.at > since, last.at > (mainClosedAt ?? .distantPast) {
+            lastClosed = nil
+            open(profileId: last.record.profileId, windowId: last.record.id)
+            return true
+        }
+        guard let main = mainClosedAt, main > since else { return false }
+        mainClosedAt = nil
+        openMain()
         return true
     }
 
@@ -76,7 +86,10 @@ enum BrowserWindows {
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
             isTerminating = true
             if let last = lastClosed { forget(last.record) }
+            ProfileSession.forgetClosedSites(atQuit: true)
         }
+        // Forget Me sites whose data a quit or crash left behind, once the windows have their tabs.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { ProfileSession.forgetClosedSites(atQuit: false) }
         let profiles = Set(ProfileManager.shared.profiles.map(\.id))
         for record in records() {
             if profiles.contains(record.profileId) {
