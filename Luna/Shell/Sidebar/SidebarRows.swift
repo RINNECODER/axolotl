@@ -8,7 +8,7 @@ func displayTitle(for tab: Tab) -> String {
     // WebKit titles an empty page "about:blank"; show that tab as "New Tab".
     if !tab.title.isEmpty, tab.title != "about:blank" { return tab.title }
     guard let url = tab.url, url.absoluteString != "about:blank" else { return "New Tab" }
-    if url.scheme == "luma" { return url.host == "history" ? "History" : "AI Chat" }
+    if InternalPage.isInternal(url) { return InternalPage.title(url) }
     if url.isFileURL { return url.lastPathComponent }
     return url.host ?? url.absoluteString
 }
@@ -22,8 +22,8 @@ struct TabIcon: View {
         Group {
             if let url = tab.url, url.scheme == "http" || url.scheme == "https" || url.isFileURL {
                 FaviconView(url: url, faviconURL: faviconURL)
-            } else if tab.url?.scheme == "luma" {
-                Image(systemName: tab.url?.host == "history" ? "clock" : "sparkles")
+            } else if InternalPage.isInternal(tab.url) {
+                Image(systemName: InternalPage.icon(tab.url))
                     .foregroundStyle(.secondary)
             } else {
                 Image(systemName: "magnifyingglass")

@@ -17,6 +17,8 @@ struct BrowserCommandActions {
     var forward: () -> Void
     var showHistory: () -> Void
     var toggleBookmark: () -> Void
+    /// Opens or focuses this window's Settings tab, on a pane.
+    var openSettings: (SettingsPane?) -> Void
 }
 
 /// Browser windows by NSWindow, so menu commands reach the key window's shell. Extra windows
@@ -25,7 +27,7 @@ final class BrowserCommandTargets {
     static let shared = BrowserCommandTargets()
     private init() {}
 
-    private final class Entry {
+    final class Entry {
         weak var window: NSWindow?
         let actions: BrowserCommandActions
         init(window: NSWindow, actions: BrowserCommandActions) {
@@ -36,12 +38,30 @@ final class BrowserCommandTargets {
 
     private var entries: [Entry] = []
 
+    /// Settings was asked for while no browser window was open (outer nil = nothing pending).
+    var pendingSettings: SettingsPane?? = nil
+
     func register(window: NSWindow, actions: BrowserCommandActions) {
         entries.removeAll { $0.window == nil || $0.window === window }
         entries.append(Entry(window: window, actions: actions))
+        if let pane = pendingSettings {
+            pendingSettings = nil
+            DispatchQueue.main.async { actions.openSettings(pane) }
+        }
     }
 
-    /// The key browser window's actions; nil while Settings, a sheet or another window is key.
+    /// The key browser window, else the front-most visible one (Settings opens there).
+    var keyOrFrontmost: Entry? {
+        entries.removeAll { $0.window == nil }
+        if let key = NSApp.keyWindow, let entry = entries.first(where: { $0.window === key }) { return entry }
+        let visible = entries.filter { $0.window?.isVisible == true }
+        let order = NSApp.orderedWindows
+        return visible.min { a, b in
+            (order.firstIndex { $0 === a.window } ?? .max) < (order.firstIndex { $0 === b.window } ?? .max)
+        }
+    }
+
+    /// The key browser window's actions; nil while a sheet or another window is key.
     var key: BrowserCommandActions? {
         entries.removeAll { $0.window == nil }
         guard let window = NSApp.keyWindow else { return nil }
@@ -69,7 +89,7 @@ struct BrowserCommands: Commands {
         }
         CommandGroup(replacing: .saveItem) {
             Button("Close Tab") {
-                // Settings and other windows still close with ⌘W.
+                // Other windows (downloads, sheets) still close with ⌘W.
                 if let browser { browser.closeTab() } else { NSApp.keyWindow?.performClose(nil) }
             }
             .keyboardShortcut("w")

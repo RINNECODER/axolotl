@@ -619,7 +619,8 @@ struct BrowserShellView: View {
             back: { if let id = tabManager.currentTab { web.goBack(in: id) } },
             forward: { if let id = tabManager.currentTab { web.goForward(in: id) } },
             showHistory: { navigateToHistory() },
-            toggleBookmark: { bookmarkCurrentPage() }
+            toggleBookmark: { bookmarkCurrentPage() },
+            openSettings: { openSettingsTab($0) }
         )
     }
 
@@ -951,6 +952,10 @@ struct BrowserShellView: View {
                     )
                     .id(currentId)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if InternalPage.isSettings(currentURL) {
+                    // luna://settings[/<pane>]: native Settings, no web view
+                    SettingsView(selection: settingsPaneBinding(for: currentId))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if currentURL?.scheme == "luma", currentURL?.host == "history" {
                     // History page (always in its own tab)
                     // Special luma://history page
@@ -1231,7 +1236,9 @@ struct BrowserShellView: View {
 
     private func syncAddressBarFromCurrentTab() {
         if let id = tabManager.currentTab {
-            if let url = web.currentURL {
+            if let url = tabManager.tabURL[id] ?? nil, InternalPage.isSettings(url) {
+                addressBarText = url.absoluteString
+            } else if let url = web.currentURL {
                 tabManager.navigate(tab: id, to: url)
                 let hide = url.absoluteString == "about:blank" || (url.scheme == "luma" && url.host == "ai")
                 addressBarText = hide ? "" : url.absoluteString
@@ -1391,6 +1398,10 @@ struct BrowserShellView: View {
     }
 
     private func navigateToURL(_ url: URL) {
+        if InternalPage.isSettings(url) {
+            openSettingsTab(InternalPage.settingsPane(url))
+            return
+        }
         // Handle luma:// scheme
         if url.scheme == "luma" {
             if url.host == "history" {
@@ -1464,7 +1475,50 @@ struct BrowserShellView: View {
               let url = tabManager.tabURL[id] ?? nil else { return true }
         if url.absoluteString == "about:blank" { return true }
         if url.scheme == "luma" && url.host == "ai" { return true }
+        if InternalPage.isSettings(url) { return true }
         return false
+    }
+
+    // MARK: - Settings tab
+
+    /// Opens Settings like Chrome's chrome://settings: focuses this window's Settings tab (one per
+    /// window) or opens one, reusing an empty start-page tab. `pane` nil keeps the shown pane.
+    private func openSettingsTab(_ pane: SettingsPane?) {
+        let existing = tabManager.tabOrder.first { InternalPage.isSettings(tabManager.tabURL[$0] ?? nil) }
+        let id: UUID
+        if let existing {
+            id = existing
+            if let pane { tabManager.navigate(tab: id, to: InternalPage.settingsURL(pane)) }
+        } else {
+            let url = InternalPage.settingsURL(pane)
+            if let current = tabManager.currentTab, (tabManager.tabURL[current] ?? nil).map({ $0.absoluteString == "about:blank" }) ?? true,
+               session.workspace.workspace.splitGroup(containing: current) == nil {
+                web.removeWebView(for: current)
+                tabManager.navigate(tab: current, to: url)
+                id = current
+            } else {
+                id = tabManager.newTab(url: url)
+            }
+        }
+        if tabManager.currentTab != id { tabManager.switchToTab(id) }
+        web.setActiveTab(id)
+        addressBarFocused = false
+        isFirstLoad = false
+        syncAddressBarFromCurrentTab()
+    }
+
+    /// The Settings tab's pane, kept in its URL (`luna://settings/<pane>`) so the address bar
+    /// and session restore show the same pane.
+    private func settingsPaneBinding(for tabId: UUID) -> Binding<SettingsPane?> {
+        Binding(
+            get: { InternalPage.settingsPane(tabManager.tabURL[tabId] ?? nil) ?? .general },
+            set: { pane in
+                let url = InternalPage.settingsURL(pane ?? .general)
+                guard (tabManager.tabURL[tabId] ?? nil) != url else { return }
+                tabManager.navigate(tab: tabId, to: url)
+                if tabManager.currentTab == tabId, !addressBarFocused { addressBarText = url.absoluteString }
+            }
+        )
     }
 
     /// AI side panel for a tab (shared by every pane when the tab is in a split).

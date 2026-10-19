@@ -133,7 +133,7 @@ final class ProfileSession: ObservableObject {
         guard let tab = workspace.tab(tabId),
               let url = tab.url,
               url.absoluteString != "about:blank",
-              url.scheme != "luma" else { return }
+              !InternalPage.isInternal(url) else { return }
         if let state = tab.interactionState {
             webViewWrapper.restore(interactionState: state, fallbackURL: url, in: tabId)
             workspace.clearInteractionState(tabId)

@@ -8,7 +8,7 @@ enum AddressInput {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let lower = trimmed.lowercased()
-        if lower.hasPrefix("luma://") || lower.hasPrefix("file://")
+        if lower.hasPrefix("luma://") || lower.hasPrefix("luna://") || lower.hasPrefix("file://")
             || lower.hasPrefix("http://") || lower.hasPrefix("https://") {
             return URL(string: trimmed)
         }
