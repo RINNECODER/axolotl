@@ -18,8 +18,8 @@ struct LogoStyle: Codable, Equatable {
     enum Size: String, Codable, CaseIterable { case small, medium, large }
     enum Motion: String, Codable, CaseIterable { case wave, still }
 
-    var glyphs = Glyphs.classic
-    var tint = Tint.classic
+    var glyphs = Glyphs.blocks
+    var tint = Tint.accent
     var size = Size.medium
     var motion = Motion.wave
     var show = true

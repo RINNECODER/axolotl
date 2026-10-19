@@ -62,10 +62,10 @@ final class WallpaperTests: XCTestCase {
         XCTAssertEqual(WallpaperStore(defaults: defaults).style(for: .tidalDither), WallpaperPreset.tidalDither.defaultStyle)
     }
 
-    func testLogoStyleDefaultsToTheOriginalLogoAndPersists() {
+    func testLogoStyleDefaultsToBlueBlocksAndPersists() {
         let defaults = freshDefaults()
         XCTAssertEqual(WallpaperStore(defaults: defaults).logo,
-                       LogoStyle(glyphs: .classic, tint: .classic, size: .medium, motion: .wave, show: true))
+                       LogoStyle(glyphs: .blocks, tint: .accent, size: .medium, motion: .wave, show: true))
 
         let custom = LogoStyle(glyphs: .letters, tint: .gold, size: .large, motion: .still, show: false)
         WallpaperStore(defaults: defaults).logo = custom
