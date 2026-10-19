@@ -58,23 +58,22 @@ nonisolated enum ChromiumImporter {
 
     // MARK: History
 
-    /// Most recent visits first, only those after `since`. The limit matches the
-    /// history store's cap (HistoryManager keeps the newest 10,000), so older rows would be dropped anyway;
-    /// web URLs are filtered in SQL so the limit counts only importable visits.
-    static func history(profileFolder: URL, since: Date? = nil, limit: Int = 10_000) throws -> [ImportedVisit] {
+    /// Most recent visits first, only those after `since`, handed to `onBatch` in pages of `batchSize`.
+    /// The limit matches the history store's cap (HistoryStore keeps the newest 100,000), so older rows
+    /// would be dropped anyway; web URLs are filtered in SQL so the limit counts only importable visits.
+    static func history(profileFolder: URL, since: Date? = nil, limit: Int = HistoryStore.maxVisits, batchSize: Int = 5_000,
+                        onBatch: ([ImportedVisit]) throws -> Void) throws {
         let file = profileFolder.appendingPathComponent("History")
-        guard FileManager.default.fileExists(atPath: file.path) else { return [] }
+        guard FileManager.default.fileExists(atPath: file.path) else { return }
         let db = try SQLiteSnapshot(copying: file)
-        let after = since.map(chromiumTime(from:)) ?? 0
-        let rows = try db.rows("""
-            SELECT urls.url, urls.title, visits.visit_time FROM visits
+        try db.pageVisits("""
+            SELECT urls.url, urls.title, visits.visit_time, visits.id FROM visits
             JOIN urls ON urls.id = visits.url
-            WHERE visits.visit_time > ? AND (urls.url LIKE 'http://%' OR urls.url LIKE 'https://%')
-            ORDER BY visits.visit_time DESC LIMIT ?
-            """, bind: [after, Int64(limit)])
-        return rows.compactMap { r in
-            guard r.count == 3, let urlString = r[0].text, importableURL(urlString) != nil, let t = r[2].int else { return nil }
-            return ImportedVisit(url: urlString, title: r[1].text ?? "", date: date(fromChromium: t))
-        }
+            WHERE visits.visit_time > ?1 AND (urls.url LIKE 'http://%' OR urls.url LIKE 'https://%')
+              AND (visits.visit_time < ?2 OR (visits.visit_time = ?2 AND visits.id < ?3))
+            ORDER BY visits.visit_time DESC, visits.id DESC LIMIT ?4
+            """, after: since.map(chromiumTime(from:)) ?? 0, limit: limit, batchSize: batchSize,
+            date: date(fromChromium:), onBatch: onBatch)
     }
+
 }

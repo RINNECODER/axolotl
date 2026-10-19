@@ -66,6 +66,28 @@ nonisolated final class SQLiteSnapshot {
         }
         return out
     }
+
+    /// Pages a newest-first visits query in batches so huge histories never sit in memory at once.
+    /// `sql` must select (url, title, time, rowid), filter `time > ?1`, continue from the keyset cursor
+    /// `(time < ?2 OR (time = ?2 AND rowid < ?3))`, order by time DESC, rowid DESC, and `LIMIT ?4`.
+    func pageVisits(_ sql: String, after: Int64, limit: Int, batchSize: Int, date: (Int64) -> Date,
+                    onBatch: ([ImportedVisit]) throws -> Void) throws {
+        var cursor = (time: Int64.max, id: Int64.max)
+        var remaining = limit
+        while remaining > 0 {
+            let page = min(batchSize, remaining)
+            let rows = try rows(sql, bind: [after, cursor.time, cursor.id, Int64(page)])
+            guard let last = rows.last, last.count == 4, let t = last[2].int, let id = last[3].int else { return }
+            cursor = (t, id)
+            remaining -= rows.count
+            let batch = rows.compactMap { r -> ImportedVisit? in
+                guard r.count == 4, let urlString = r[0].text, importableURL(urlString) != nil, let t = r[2].int else { return nil }
+                return ImportedVisit(url: urlString, title: r[1].text ?? "", date: date(t))
+            }
+            if !batch.isEmpty { try onBatch(batch) }
+            if rows.count < page { return }
+        }
+    }
 }
 
 nonisolated extension SQLiteSnapshot.Value {

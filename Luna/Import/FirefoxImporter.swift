@@ -48,21 +48,21 @@ nonisolated enum FirefoxImporter {
         return result
     }
 
-    /// Most recent visits first, only those after `since`. The limit matches the
-    /// history store's cap (HistoryManager keeps the newest 10,000), so older rows would be dropped anyway;
-    /// web URLs are filtered in SQL so the limit counts only importable visits. Firefox stores microseconds since 1970.
-    static func history(profileFolder: URL, since: Date? = nil, limit: Int = 10_000) throws -> [ImportedVisit] {
+    /// Most recent visits first, only those after `since`, handed to `onBatch` in pages of `batchSize`.
+    /// The limit matches the history store's cap (HistoryStore keeps the newest 100,000), so older rows
+    /// would be dropped anyway; web URLs are filtered in SQL so the limit counts only importable visits.
+    /// Firefox stores microseconds since 1970.
+    static func history(profileFolder: URL, since: Date? = nil, limit: Int = HistoryStore.maxVisits, batchSize: Int = 5_000,
+                        onBatch: ([ImportedVisit]) throws -> Void) throws {
         let db = try SQLiteSnapshot(copying: profileFolder.appendingPathComponent("places.sqlite"))
-        let after = since.map { Int64($0.timeIntervalSince1970 * 1_000_000) } ?? 0
-        let rows = try db.rows("""
-            SELECT p.url, p.title, v.visit_date FROM moz_historyvisits v
+        try db.pageVisits("""
+            SELECT p.url, p.title, v.visit_date, v.id FROM moz_historyvisits v
             JOIN moz_places p ON p.id = v.place_id
-            WHERE v.visit_date > ? AND (p.url LIKE 'http://%' OR p.url LIKE 'https://%')
-            ORDER BY v.visit_date DESC LIMIT ?
-            """, bind: [after, Int64(limit)])
-        return rows.compactMap { r in
-            guard r.count == 3, let urlString = r[0].text, importableURL(urlString) != nil, let t = r[2].int else { return nil }
-            return ImportedVisit(url: urlString, title: r[1].text ?? "", date: Date(timeIntervalSince1970: TimeInterval(t) / 1_000_000))
-        }
+            WHERE v.visit_date > ?1 AND (p.url LIKE 'http://%' OR p.url LIKE 'https://%')
+              AND (v.visit_date < ?2 OR (v.visit_date = ?2 AND v.id < ?3))
+            ORDER BY v.visit_date DESC, v.id DESC LIMIT ?4
+            """, after: since.map { Int64($0.timeIntervalSince1970 * 1_000_000) } ?? 0, limit: limit, batchSize: batchSize,
+            date: { Date(timeIntervalSince1970: TimeInterval($0) / 1_000_000) }, onBatch: onBatch)
     }
+
 }
