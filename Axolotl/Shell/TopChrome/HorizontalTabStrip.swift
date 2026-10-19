@@ -287,7 +287,8 @@ struct HorizontalTabStrip: View {
     }
 
     /// Reorders live as the dragged tab crosses the edges of the tab under
-    /// the pointer; resting on a tab's middle third arms a split.
+    /// the pointer; holding still over a tab's centre for most of a second arms a split,
+    /// so ordinary reordering never splits by accident.
     private func track(_ dragged: UUID, at point: CGPoint) {
         let live = Set(store.orderedTabIds)
         guard let (target, frame) = frames.first(where: {
@@ -298,7 +299,7 @@ struct HorizontalTabStrip: View {
         }
         let t = (point.x - frame.minX) / max(1, frame.width)
         var trial = store.workspace
-        if t > 0.3, t < 0.7, frame.width > Self.iconTabWidth, trial.splitTab(dragged, onto: target) != nil {
+        if t > 0.38, t < 0.62, frame.width > Self.iconTabWidth, trial.splitTab(dragged, onto: target) != nil {
             // Already armed, or already waiting on this tab.
             guard splitTarget != target, dwell?.target != target else { return }
             disarmSplit()
@@ -306,7 +307,7 @@ struct HorizontalTabStrip: View {
                 withAnimation(.easeOut(duration: 0.12)) { splitTarget = target }
             }
             dwell = (target, work)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
             return
         }
         disarmSplit()
