@@ -2,9 +2,10 @@ import Foundation
 import LocalAuthentication
 import Security
 
-/// Saved website logins in the macOS Keychain (internet-password items),
-/// scoped per Luna profile. Reading a password requires Touch ID or the
-/// Mac password, remembered for a few minutes.
+/// Saved website logins in the Keychain (internet-password items), scoped
+/// per Luna profile. Reading a password requires Touch ID or the Mac
+/// password, remembered for a few minutes. Logins sync through iCloud
+/// Keychain unless the profile turns that off.
 final class PasswordVault {
     static let shared = PasswordVault()
 
@@ -28,11 +29,18 @@ final class PasswordVault {
     }
 
     /// Four-char creator code marking items Luna created ("Luna").
-    private static let creator: UInt32 = 0x4C75_6E61
+    nonisolated static let creator: UInt32 = 0x4C75_6E61
     private static let unlockDuration: TimeInterval = 5 * 60
 
     private var unlockedUntil: Date = .distantPast
     private let neverSaveKey = "luna_passwords_never_save"
+    private let keychain: KeychainStore
+    private let defaults: UserDefaults
+
+    init(store: KeychainStore = .shared, defaults: UserDefaults = .standard) {
+        keychain = store
+        self.defaults = defaults
+    }
 
     nonisolated deinit {}
 
@@ -68,7 +76,7 @@ final class PasswordVault {
 
     // MARK: Queries (no secrets)
 
-    private func baseQuery(profile: UUID) -> [String: Any] {
+    static func baseQuery(profile: UUID) -> [String: Any] {
         [
             kSecClass as String: kSecClassInternetPassword,
             kSecAttrCreator as String: Self.creator,
@@ -76,18 +84,63 @@ final class PasswordVault {
         ]
     }
 
+    private func baseQuery(profile: UUID) -> [String: Any] { Self.baseQuery(profile: profile) }
+
+    // MARK: iCloud Keychain
+
+    nonisolated static func syncKey(_ profile: String) -> String { "luna_passwords_icloud_sync.\(profile)" }
+    private func syncKey(_ profile: UUID) -> String { Self.syncKey(profile.uuidString) }
+
+    /// Whether new and existing logins of `profile` sync through iCloud Keychain (default on).
+    func isICloudSyncEnabled(profile: UUID) -> Bool {
+        defaults.object(forKey: syncKey(profile)) as? Bool ?? true
+    }
+
+    /// Turns iCloud sync on or off for `profile` and moves its existing logins to match.
+    func setICloudSync(_ enabled: Bool, profile: UUID) throws {
+        defaults.set(enabled, forKey: syncKey(profile))
+        var query = baseQuery(profile: profile)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitAll
+        let (status, result) = keychain.copyMatching(query, sync: enabled ? .deviceOnly : .synchronizable)
+        if status == errSecItemNotFound { return }
+        guard status == errSecSuccess, let items = result as? [[String: Any]] else { throw VaultError.keychain(status) }
+        let from: KeychainStore.Sync = enabled ? .deviceOnly : .synchronizable
+        let to: KeychainStore.Sync = enabled ? .synchronizable : .deviceOnly
+        for attrs in items {
+            guard let server = attrs[kSecAttrServer as String] as? String else { continue }
+            var match = baseQuery(profile: profile)
+            match[kSecAttrServer as String] = server
+            match[kSecAttrAccount as String] = attrs[kSecAttrAccount as String] as? String ?? ""
+            var read = match
+            read[kSecReturnData as String] = true
+            read[kSecMatchLimit as String] = kSecMatchLimitOne
+            let (readStatus, data) = keychain.copyMatching(read, sync: from)
+            guard readStatus == errSecSuccess, let secret = data as? Data else { throw VaultError.keychain(readStatus) }
+            var add = match
+            add[kSecValueData as String] = secret
+            add[kSecAttrProtocol as String] = kSecAttrProtocolHTTPS
+            add[kSecAttrLabel as String] = attrs[kSecAttrLabel as String] as? String ?? "\(server) (Luna)"
+            add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
+            let added = keychain.add(add, sync: to)
+            guard added == errSecSuccess || added == errSecDuplicateItem else { throw VaultError.keychain(added) }
+            _ = keychain.delete(match, sync: from)
+        }
+    }
+
     func credentials(profile: UUID, host: String? = nil) -> [Credential] {
         var query = baseQuery(profile: profile)
         if let host { query[kSecAttrServer as String] = Self.normalize(host) }
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitAll
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let items = result as? [[String: Any]] else { return [] }
+        let (status, result) = keychain.copyMatching(query, sync: .any)
+        guard status == errSecSuccess, let items = result as? [[String: Any]] else { return [] }
+        var seen = Set<String>()
         return items.compactMap { attrs in
             guard let server = attrs[kSecAttrServer as String] as? String else { return nil }
-            return Credential(host: server, username: attrs[kSecAttrAccount as String] as? String ?? "",
-                              modified: attrs[kSecAttrModificationDate as String] as? Date)
+            let cred = Credential(host: server, username: attrs[kSecAttrAccount as String] as? String ?? "",
+                                  modified: attrs[kSecAttrModificationDate as String] as? Date)
+            return seen.insert(cred.id).inserted ? cred : nil
         }
         .sorted { ($0.host, $0.username) < ($1.host, $1.username) }
     }
@@ -102,8 +155,7 @@ final class PasswordVault {
         query[kSecAttrAccount as String] = credential.username
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let (status, result) = keychain.copyMatching(query, sync: .any)
         if status == errSecItemNotFound { return nil }
         guard status == errSecSuccess, let data = result as? Data else { throw VaultError.keychain(status) }
         return String(data: data, encoding: .utf8)
@@ -116,8 +168,8 @@ final class PasswordVault {
         query[kSecAttrAccount as String] = username
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return false }
+        let (status, result) = keychain.copyMatching(query, sync: .any)
+        guard status == errSecSuccess, let data = result as? Data else { return false }
         return String(data: data, encoding: .utf8) == password
     }
 
@@ -127,7 +179,7 @@ final class PasswordVault {
         match[kSecAttrServer as String] = server
         match[kSecAttrAccount as String] = username
         let data = Data(password.utf8)
-        let update = SecItemUpdate(match as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        let update = keychain.update(match, sync: .any, set: [kSecValueData as String: data])
         if update == errSecSuccess { return }
         guard update == errSecItemNotFound else { throw VaultError.keychain(update) }
         var add = match
@@ -135,7 +187,7 @@ final class PasswordVault {
         add[kSecAttrProtocol as String] = kSecAttrProtocolHTTPS
         add[kSecAttrLabel as String] = "\(server) (Luna)"
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
-        let status = SecItemAdd(add as CFDictionary, nil)
+        let status = keychain.add(add, sync: isICloudSyncEnabled(profile: profile) ? .synchronizable : .deviceOnly)
         guard status == errSecSuccess else { throw VaultError.keychain(status) }
     }
 
@@ -143,7 +195,7 @@ final class PasswordVault {
         var query = baseQuery(profile: profile)
         query[kSecAttrServer as String] = credential.host
         query[kSecAttrAccount as String] = credential.username
-        let status = SecItemDelete(query as CFDictionary)
+        let status = keychain.delete(query, sync: .any)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw VaultError.keychain(status) }
     }
 

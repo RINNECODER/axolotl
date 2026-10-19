@@ -71,6 +71,11 @@ final class ChatGPTAuth: ObservableObject {
     nonisolated deinit {}
 
     private init() {
+        reloadFromKeychain()
+    }
+
+    /// Re-reads saved credentials (e.g. after the Keychain migration moved them).
+    func reloadFromKeychain() {
         if let data = KeychainManager.shared.data(for: .chatGPTCredentials) {
             credentials = try? JSONDecoder().decode(Credentials.self, from: data)
         }

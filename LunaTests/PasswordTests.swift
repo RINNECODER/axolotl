@@ -6,12 +6,17 @@ import WebKit
 final class PasswordTests: XCTestCase {
     private var profile: UUID!
 
-    override func setUp() { profile = UUID() }
+    override func setUp() {
+        profile = UUID()
+        // These hit the real Keychain: keep test logins out of iCloud.
+        UserDefaults.standard.set(false, forKey: PasswordVault.syncKey(profile.uuidString))
+    }
 
     override func tearDown() {
         for cred in PasswordVault.shared.credentials(profile: profile) {
             try? PasswordVault.shared.delete(cred, profile: profile)
         }
+        UserDefaults.standard.removeObject(forKey: PasswordVault.syncKey(profile.uuidString))
     }
 
     func testCSVParsingHandlesQuotesCommasAndNewlines() {
