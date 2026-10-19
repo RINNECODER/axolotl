@@ -70,7 +70,7 @@ struct HorizontalTabStrip: View {
             let iconWidth = chromeStyle ? ChromeMetrics.pinnedTabPitch : Self.iconTabWidth
             let chipsWidth = ws.tabGroups.reduce(CGFloat(0)) { $0 + TabGroupChip.width(for: $1.name) }
             let available = geo.size.width - CGFloat(iconCount) * iconWidth - chipsWidth
-                - (chromeStyle ? ChromeMetrics.newTabButtonWidth : 34)
+                - (chromeStyle ? ChromeMetrics.newTabButtonWidth + Self.leadingInset : 34)
             let width = chromeStyle ? ChromeMetrics.tabPitch(available: available, count: titled)
                 : titled > 0 ? min(Self.maxTabWidth, max(Self.minTabWidth, available / CGFloat(titled))) : 0
             let minWidth = chromeStyle ? ChromeMetrics.minTabPitch : Self.minTabWidth
@@ -184,6 +184,8 @@ struct HorizontalTabStrip: View {
             // under the window buttons or the tab search button beside it.
             .scrollClipDisabled()
             .mask(Rectangle().padding(.vertical, -24))
+            // Room for the first tab's curved corner inside the clip.
+            .contentMargins(.leading, chromeStyle ? Self.leadingInset : 0, for: .scrollContent)
             .scrollDisabled(titled == 0 || CGFloat(titled) * minWidth <= available)
             .scrollPosition($scroll)
             .onScrollGeometryChange(for: CGRect.self, of: {
@@ -200,6 +202,7 @@ struct HorizontalTabStrip: View {
     }
 
     private static let space = "axolotl.tabstrip"
+    private static let leadingInset: CGFloat = 8
 
     /// Shown when tabs overflow: a fade with a chevron that pages the strip.
     private func scrollArrow(_ direction: CGFloat) -> some View {
