@@ -40,7 +40,7 @@ struct SidebarView: View {
         HStack(spacing: 2) {
             // Leave room for the traffic lights (drawn by Luna in full screen, same spot).
             Spacer().frame(width: 70)
-            ToolbarIconButton(systemName: "sidebar.left", help: "Hide Sidebar (⌘S)", action: onToggleSidebar)
+            ToolbarIconButton(systemName: "sidebar.left", help: "Hide Sidebar (⌃⌘S)", action: onToggleSidebar)
             Spacer(minLength: 0)
             // With the toolbar on, navigation lives there instead.
             if !showToolbar {

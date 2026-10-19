@@ -531,6 +531,11 @@ struct BrowserShellView: View {
             DispatchQueue.main.async { cycleTab(by: code == 33 ? -1 : 1) }
             return true
         }
+        // ⌃⌘S: show / hide the sidebar (⌘S is Save Page As, as in Chrome).
+        if mods == [.command, .control], key == "s", usesSidebar {
+            DispatchQueue.main.async { toggleSidebar() }
+            return true
+        }
         guard mods == .command || mods == [.command, .shift] else { return nil }
         Self.recordShortcut(key, mods)
         let shift = mods.contains(.shift)
@@ -551,8 +556,6 @@ struct BrowserShellView: View {
         switch (key, shift) {
         case ("e", false):
             DispatchQueue.main.async { toggleAIPanel() }
-        case ("s", false) where usesSidebar:
-            DispatchQueue.main.async { toggleSidebar() }
         case ("l", false):
             DispatchQueue.main.async {
                 if addressBarPeeks {
