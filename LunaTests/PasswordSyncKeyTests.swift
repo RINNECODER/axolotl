@@ -180,17 +180,29 @@ final class PasswordSyncKeyTests: XCTestCase {
         let keep = profile("Keep")
         try v.save(host: "keep.com", username: "me", password: "pw", profile: keep)
 
-        v.deleteAll(profile: work)
-        v.deleteAll(profile: local)
+        v.deleteAll(profile: work, includingSynced: true)
+        v.deleteAll(profile: local, includingSynced: true)
         XCTAssertEqual(domains(), ["name:keep"])
         XCTAssertNil(defaults.object(forKey: PasswordVault.syncKey(local.uuidString)))
+    }
+
+    func testDeletingAProfileByDefaultKeepsItsSyncedLoginsForOtherMacs() throws {
+        let work = profile("Work")
+        let v = vault()
+        try v.setICloudSync(false, profile: work)
+        try v.save(host: "device.com", username: "me", password: "pw", profile: work)
+        seedSynced(domain: "name:work", host: "synced.com", secret: "pw")
+
+        v.deleteAll(profile: work)
+        XCTAssertEqual(domains(), ["name:work"], "device-only login gone, synced login kept")
+        XCTAssertNil(defaults.object(forKey: PasswordVault.syncKey(work.uuidString)))
     }
 
     func testDeletingAProfileKeepsSyncedLoginsOfAnotherProfileWithTheSameName() throws {
         let a = profile("Work")
         try vault().save(host: "example.com", username: "me", password: "pw", profile: a)
         let b = profile("work")
-        vault().deleteAll(profile: b)
+        vault().deleteAll(profile: b, includingSynced: true)
         names.removeAll { $0.id == b }
         XCTAssertTrue(vault().isSaved(host: "example.com", username: "me", password: "pw", profile: a))
     }

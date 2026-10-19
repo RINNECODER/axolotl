@@ -204,13 +204,14 @@ final class PasswordVault {
         defaults.set(enabled, forKey: syncKey(profile))
     }
 
-    /// Removes every login and the sync setting of `profile`, which is being deleted.
-    /// Call while it is still in `profileNames`. Synced logins under its name key go
-    /// only when no other local profile shares the name (`syncDomain` falls back to the UUID).
-    func deleteAll(profile: UUID) {
-        _ = keychain.delete(Self.baseQuery(domain: profile.uuidString), sync: .any)
+    /// Removes the device-only logins and the sync setting of `profile`, which is being deleted.
+    /// Synced logins stay (other Macs still use them) unless `includingSynced`. Call while it is
+    /// still in `profileNames`: synced logins under its name key go only when no other local
+    /// profile shares the name (`syncDomain` falls back to the UUID).
+    func deleteAll(profile: UUID, includingSynced: Bool = false) {
+        _ = keychain.delete(Self.baseQuery(domain: profile.uuidString), sync: includingSynced ? .any : .deviceOnly)
         let named = syncDomain(profile: profile)
-        if named != profile.uuidString, isICloudSyncEnabled(profile: profile) {
+        if includingSynced, named != profile.uuidString, isICloudSyncEnabled(profile: profile) {
             _ = keychain.delete(Self.baseQuery(domain: named), sync: .synchronizable)
         }
         defaults.removeObject(forKey: syncKey(profile))

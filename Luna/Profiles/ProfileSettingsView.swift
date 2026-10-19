@@ -1,9 +1,9 @@
+import AppKit
 import SwiftUI
 
 /// Settings → General → Profiles: rename, recolor, add and delete profiles. A settings card.
 struct ProfileSettingsSections: View {
     @ObservedObject private var profileManager = ProfileManager.shared
-    @State private var pendingDelete: BrowserProfile?
 
     var body: some View {
         SettingsCard("Profiles",
@@ -12,7 +12,7 @@ struct ProfileSettingsSections: View {
                 ProfileRow(
                     profile: profile,
                     canDelete: profileManager.profiles.count > 1,
-                    onDelete: { pendingDelete = profile }
+                    onDelete: { confirmDelete(profile) }
                 )
             }
             SettingsRow("Add a profile", subtitle: "A separate browser with its own data.") {
@@ -21,19 +21,22 @@ struct ProfileSettingsSections: View {
                 }
             }
         }
-        .confirmationDialog(
-            "Delete “\(pendingDelete?.name ?? "")”?",
-            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-            titleVisibility: .visible,
-            presenting: pendingDelete
-        ) { profile in
-            Button("Delete Profile and Data", role: .destructive) {
-                profileManager.deleteProfile(profileId: profile.id) {}
-                pendingDelete = nil
-            }
-        } message: { _ in
-            Text("Its history, cookies, logins, tabs and chats are removed. This can't be undone.")
-        }
+    }
+
+    /// Native alert so it can carry the opt-in checkbox for synced logins (off by default).
+    private func confirmDelete(_ profile: BrowserProfile) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Delete “\(profile.name)”?"
+        alert.informativeText = "Its history, cookies, logins saved only on this Mac, tabs and chats are removed. This can't be undone."
+        let deleteButton = alert.addButton(withTitle: "Delete Profile and Data")
+        deleteButton.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        let synced = NSButton(checkboxWithTitle: "Also delete this profile's passwords from iCloud Keychain on all devices", target: nil, action: nil)
+        synced.state = .off
+        alert.accessoryView = synced
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        profileManager.deleteProfile(profileId: profile.id, deleteSyncedLogins: synced.state == .on) {}
     }
 }
 

@@ -215,7 +215,8 @@ final class ProfileManager: ObservableObject {
     }
 
     /// Deletes a profile and wipes all its website data and on-disk history/chats.
-    func deleteProfile(profileId: UUID, completion: @escaping () -> Void) {
+    /// Synced iCloud logins are kept for other Macs unless `deleteSyncedLogins`.
+    func deleteProfile(profileId: UUID, deleteSyncedLogins: Bool = false, completion: @escaping () -> Void) {
         // Always keep at least one profile. Still invoke completion so callers can dismiss UI.
         guard profiles.count > 1, profiles.contains(where: { $0.id == profileId }) else {
             DispatchQueue.main.async { completion() }
@@ -232,7 +233,7 @@ final class ProfileManager: ObservableObject {
                     return
                 }
                 // Logins first: their synced key depends on the profile list still holding this name.
-                PasswordVault.shared.deleteAll(profile: profileId)
+                PasswordVault.shared.deleteAll(profile: profileId, includingSynced: deleteSyncedLogins)
                 BrowserImporter.forgetSources(lunaProfileId: profileId)
                 UsageStore.forget(profileId)
                 let wasDefault = self.profiles.first { $0.id == profileId }?.isDefault == true
