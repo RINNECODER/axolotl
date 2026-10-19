@@ -43,8 +43,15 @@ final class BookmarkStore: ObservableObject {
 
     init(fileURL: URL) {
         self.fileURL = fileURL
-        if let data = try? Data(contentsOf: fileURL),
-           let saved = try? JSONDecoder().decode([Bookmark].self, from: data) {
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        // One bad item skips only itself; a damaged file is copied aside before anything overwrites it.
+        let all = (try? JSONSerialization.jsonObject(with: data)) as? [Any]
+        let decoded = (try? JSONDecoder().decode([Lossy].self, from: data))?.compactMap(\.value)
+        if all == nil || decoded?.count != all?.count {
+            let backup = fileURL.appendingPathExtension("bak")
+            if !FileManager.default.fileExists(atPath: backup.path) { try? data.write(to: backup) }
+        }
+        if let saved = decoded {
             // An item whose folder is gone goes back to the bar.
             let folderIds = Set(saved.filter(\.isFolder).map(\.id)).union([Self.otherBookmarksId])
             items = saved.map { item in
@@ -53,6 +60,11 @@ final class BookmarkStore: ObservableObject {
                 return item
             }
         }
+    }
+
+    private struct Lossy: Decodable {
+        let value: Bookmark?
+        init(from decoder: Decoder) throws { value = try? Bookmark(from: decoder) }
     }
 
     private static var stores: [UUID: BookmarkStore] = [:]

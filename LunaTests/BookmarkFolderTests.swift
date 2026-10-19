@@ -24,6 +24,20 @@ final class BookmarkFolderTests: XCTestCase {
         XCTAssertEqual(reloaded.folders.map(\.title), ["Work"])
     }
 
+    /// One unreadable item skips only itself, and the original file is kept aside before the next save.
+    func testBadItemSkippedAndFileBackedUp() throws {
+        let file = tempFile()
+        let backup = file.appendingPathExtension("bak")
+        defer { try? FileManager.default.removeItem(at: file); try? FileManager.default.removeItem(at: backup) }
+        let json = #"[{"id":"\#(UUID().uuidString)","title":"A","url":"https:\/\/a.com"},{"title":"no id"}]"#
+        try Data(json.utf8).write(to: file)
+        let store = BookmarkStore(fileURL: file)
+        XCTAssertEqual(store.items.map(\.title), ["A"])
+        XCTAssertEqual(try Data(contentsOf: backup), Data(json.utf8))
+        store.addFolder("Work")
+        XCTAssertEqual(try Data(contentsOf: backup), Data(json.utf8), "the backup isn't overwritten")
+    }
+
     func testOrphanReturnsToBar() throws {
         let file = tempFile()
         let json = #"[{"id":"\#(UUID().uuidString)","title":"A","url":"https:\/\/a.com","parentId":"\#(UUID().uuidString)"}]"#
