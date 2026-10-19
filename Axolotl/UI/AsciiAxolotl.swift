@@ -1,25 +1,28 @@
-// Axolotl — ASCII axolotl for the start page and the AI panel (the brand mark, drawn like `AsciiMoon`).
+// Axolotl — ASCII axolotl for the start page and the AI panel (the brand mark, drawn as pre-rendered glyphs).
 // The AxolotlMark artwork is sampled once into a glyph grid; a light sweep runs across it, the
-// gills shimmer pink, and the head bobs. Same frame and pause rules as the moon.
+// gills shimmer pink, and the head bobs. Pauses off screen and under Reduce Motion.
 import SwiftUI
 import AppKit
 
 struct AsciiAxolotl: View {
-    /// Same meaning as `AsciiMoon.diameter`: the view is diameter × 1.3 wide and × 1.15 tall.
+    /// The view is diameter × 1.3 wide and × 1.15 tall.
     var diameter: CGFloat = 170
     /// Sweeps faster while the AI is working.
     var isBusy: Bool = false
+    /// Characters, colors and motion; the start page passes the user's choice.
+    var style = LogoStyle()
 
     @State private var clock = AsciiClock()
     @State private var onScreen = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let animating = onScreen && !reduceMotion
+        // Still: one frame, then the paused timeline costs nothing.
+        let animating = onScreen && !reduceMotion && style.motion == .wave
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animating)) { tl in
             Canvas { ctx, size in
                 let t = animating ? clock.advance(tl.date, busy: isBusy) : clock.hold()
-                AxolotlRenderer.draw(&ctx, size: size, diameter: diameter, t: t)
+                AxolotlRenderer.draw(&ctx, size: size, diameter: diameter, t: t, style: style)
             }
         }
         .frame(width: diameter * 1.3, height: diameter * 1.15)
@@ -29,11 +32,60 @@ struct AsciiAxolotl: View {
     }
 }
 
+extension LogoStyle.Glyphs {
+    var title: String {
+        switch self {
+        case .classic: return "Classic"
+        case .blocks: return "Blocks"
+        case .dots: return "Dots"
+        case .binary: return "Binary"
+        case .letters: return "Letters"
+        }
+    }
+
+    /// Dim to bright, except `letters`, which spells AXOLOTL across the grid.
+    var ramp: [String] {
+        switch self {
+        case .classic: return AsciiGlyphs.ramp
+        case .blocks: return ["░", "▒", "▓", "█"]
+        case .dots: return ["·", "•", "●"]
+        case .binary: return ["0", "1"]
+        case .letters: return "AXOLOTL".map(String.init)
+        }
+    }
+}
+
+extension LogoStyle.Tint {
+    var title: String { rawValue.capitalized }
+
+    /// Body and gill colors.
+    var colors: [NSColor] {
+        switch self {
+        case .classic: return [NSColor(red: 0.96, green: 0.95, blue: 0.90, alpha: 1), // cream body
+                               NSColor(red: 0.95, green: 0.68, blue: 0.75, alpha: 1)] // pink gills
+        case .accent:
+            // Resolved to fixed components so the glyph cache key changes with the accent.
+            let accent = NSColor.controlAccentColor.usingColorSpace(.sRGB) ?? .systemBlue
+            return [accent.blended(withFraction: 0.35, of: .white) ?? accent, accent]
+        case .mono: return [NSColor(white: 0.92, alpha: 1), NSColor(white: 0.68, alpha: 1)]
+        case .pink: return [NSColor(red: 1.00, green: 0.62, blue: 0.76, alpha: 1), NSColor(red: 0.90, green: 0.36, blue: 0.62, alpha: 1)]
+        case .gold: return [NSColor(red: 1.00, green: 0.84, blue: 0.48, alpha: 1), NSColor(red: 0.93, green: 0.62, blue: 0.24, alpha: 1)]
+        }
+    }
+}
+
+extension LogoStyle.Size {
+    var title: String { rawValue.capitalized }
+    var scale: CGFloat {
+        switch self {
+        case .small: return 0.75
+        case .medium: return 1
+        case .large: return 1.25
+        }
+    }
+}
+
 enum AxolotlRenderer {
-    static let colors: [NSColor] = [
-        NSColor(red: 0.96, green: 0.95, blue: 0.90, alpha: 1), // cream body
-        NSColor(red: 0.95, green: 0.68, blue: 0.75, alpha: 1), // pink gills
-    ]
 
     /// Artwork coverage (alpha × brightness, 0...1) per glyph cell, row-major.
     struct Grid: Equatable { let cols: Int, rows: Int, cells: [Float] }
@@ -72,12 +124,12 @@ enum AxolotlRenderer {
         return g
     }
 
-    static func draw(_ ctx: inout GraphicsContext, size: CGSize, diameter: CGFloat, t: Float) {
-        let ramp = MoonRenderer.ramp
-        // Finer glyphs than the moon's (diameter / 17) so the eyes and smile survive sampling.
+    static func draw(_ ctx: inout GraphicsContext, size: CGSize, diameter: CGFloat, t: Float, style: LogoStyle = LogoStyle()) {
+        let ramp = style.glyphs.ramp
+        // Fine glyphs so the eyes and smile survive sampling.
         let fs = max(5, diameter / 24)
         let cw = fs * 0.62, ch = fs * 1.12
-        let atlas = colors.map { color in ramp.map { ctx.resolve(Image(nsImage: MoonRenderer.glyph($0, size: fs, color: color))) } }
+        let atlas = style.tint.colors.map { color in ramp.map { ctx.resolve(Image(nsImage: AsciiGlyphs.glyph($0, size: fs, color: color))) } }
         let cols = Int(size.width / cw), rows = Int(size.height / ch)
         let g = grid(cols: cols, rows: rows, cellAspect: ch / cw)
         let bob = CGFloat(sinf(t * 0.9)) * ch * 0.3
@@ -94,7 +146,8 @@ enum AxolotlRenderer {
                 let sweep = 0.5 + 0.5 * sinf(nx * 2.4 + ny * 1.3 - t * 1.1)
                 let shimmer: Float = gill ? 0.15 * sinf(t * 2.3 + ny * 6 + abs(nx) * 5) : 0
                 let lit = min(1, v * (0.72 + 0.28 * sweep + shimmer))
-                let glyph = min(ramp.count - 1, Int(lit * Float(ramp.count)))
+                let glyph = style.glyphs == .letters ? (r * cols + c) % ramp.count
+                                                     : min(ramp.count - 1, Int(lit * Float(ramp.count)))
                 ctx.opacity = Double(0.35 + 0.65 * lit)
                 let x = (CGFloat(c) + 0.5) * cw, y = (CGFloat(r) + 0.5) * ch + (gill ? bob * 1.3 : bob)
                 ctx.draw(atlas[gill ? 1 : 0][glyph], at: CGPoint(x: x, y: y), anchor: .center)

@@ -9,7 +9,6 @@ import Combine
 
 struct WallpaperView: View {
     let config: WallpaperRenderConfig
-    var page: WallpaperWeb.Page = .wallpaper
     /// Called on the main thread when the page can't use WebGPU.
     var onFallback: (() -> Void)?
 
@@ -19,7 +18,7 @@ struct WallpaperView: View {
 
     var body: some View {
         let activity = WallpaperActivity(isOnScreen: onScreen, reduceMotion: reduceMotion, lowPower: lowPower)
-        WallpaperWebViewRepresentable(config: config, mode: activity.mode, page: page, onFallback: onFallback)
+        WallpaperWebViewRepresentable(config: config, mode: activity.mode, onFallback: onFallback)
             .background(WindowVisibilityReader(isVisible: $onScreen))
             .onDisappear { onScreen = false }
             .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
@@ -33,7 +32,6 @@ struct WallpaperView: View {
 private struct WallpaperWebViewRepresentable: NSViewRepresentable {
     let config: WallpaperRenderConfig
     let mode: WallpaperActivity.Mode
-    let page: WallpaperWeb.Page
     let onFallback: (() -> Void)?
 
     func makeCoordinator() -> WallpaperBridge { WallpaperBridge() }
@@ -42,7 +40,7 @@ private struct WallpaperWebViewRepresentable: NSViewRepresentable {
         context.coordinator.onState = { state in
             if state == "fallback" { DispatchQueue.main.async { onFallback?() } }
         }
-        let webView = WallpaperWeb.makeWebView(bridge: context.coordinator, page: page)
+        let webView = WallpaperWeb.makeWebView(bridge: context.coordinator)
         context.coordinator.webView = webView
         return webView
     }
@@ -137,11 +135,7 @@ final class WallpaperBridge: NSObject, WKScriptMessageHandler, WKNavigationDeleg
 enum WallpaperWeb {
     static let scheme = "axolotl-wallpaper"
 
-    enum Page: String {
-        case wallpaper = "index.html"
-        case moon = "moon.html"
-        var url: URL { URL(string: "\(WallpaperWeb.scheme)://app/\(rawValue)")! }
-    }
+    static let pageURL = URL(string: "\(scheme)://app/index.html")!
 
     /// Blocks every network load; the page only ever needs `axolotl-wallpaper://`.
     private static var ruleList: WKContentRuleList?
@@ -161,12 +155,12 @@ enum WallpaperWeb {
         }
     }
 
-    /// One process pool and in-memory data store for every wallpaper and moon view, so they
+    /// One process pool and in-memory data store for every wallpaper view, so they
     /// share a WebContent process (and the parsed shaders) instead of one each.
     private static let processPool = WKProcessPool()
     private static let dataStore = WKWebsiteDataStore.nonPersistent()
 
-    static func makeWebView(bridge: WallpaperBridge, page: Page = .wallpaper) -> WKWebView {
+    static func makeWebView(bridge: WallpaperBridge) -> WKWebView {
         let config = WKWebViewConfiguration()
         config.processPool = processPool
         config.websiteDataStore = dataStore
@@ -188,7 +182,7 @@ enum WallpaperWeb {
             // Never load without the no-network rules; show the static fallback instead.
             guard let list, let webView else { bridge?.onState?("fallback"); return }
             config.userContentController.add(list)
-            webView.load(URLRequest(url: page.url))
+            webView.load(URLRequest(url: pageURL))
         }
         return webView
     }
@@ -216,7 +210,7 @@ final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
     static let folder: URL? = Bundle.main.resourceURL?.appendingPathComponent("WallpaperWeb", isDirectory: true)
 
     /// The only files the pages may load.
-    static let allowedFiles: Set<String> = ["index.html", "moon.html", "wallpaper.js", "moon.js", "shaders.js"]
+    static let allowedFiles: Set<String> = ["index.html", "wallpaper.js", "shaders.js"]
 
     static func fileURL(for url: URL) -> URL? {
         guard url.scheme == WallpaperWeb.scheme, url.host == "app", let folder else { return nil }
@@ -249,30 +243,4 @@ final class WallpaperSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
-}
-
-/// The start page moon drawn by a WebGPU shader. Same frame as `AsciiMoon`, transparent
-/// around the sphere so wallpapers show through; falls back to the ASCII moon.
-struct ShaderMoon: View {
-    var diameter: CGFloat = 170
-    var isBusy: Bool = false
-
-    @ObservedObject private var store = WallpaperStore.shared
-    @State private var failed = false
-
-    var body: some View {
-        if failed {
-            AsciiMoon(diameter: diameter, isBusy: isBusy)
-        } else {
-            WallpaperView(config: config, page: .moon, onFallback: { failed = true })
-                .frame(width: diameter * 1.3, height: diameter * 1.15)
-        }
-    }
-
-    private var config: WallpaperRenderConfig {
-        var config = WallpaperRenderConfig(preset: .none, style: WallpaperPreset.none.defaultStyle,
-                                           fps: store.frameRate, still: false, scale: 1)
-        config.busy = isBusy
-        return config
-    }
 }
