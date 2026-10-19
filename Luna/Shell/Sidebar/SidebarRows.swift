@@ -54,7 +54,7 @@ struct SidebarTabRow: View {
             }
             .frame(width: 16, height: 16)
             Text(displayTitle(for: tab))
-                .font(.system(size: 13))
+                .font(.system(size: ThemeStore.shared.theme.font(13)))
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer(minLength: 0)

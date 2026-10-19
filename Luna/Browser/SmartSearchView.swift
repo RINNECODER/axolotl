@@ -296,7 +296,8 @@ struct SmartSearchView: View {
         .padding(.vertical, 8)
         .background(
             LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 10, style: .continuous),
-                             material: .ultraThinMaterial, solid: Color(lunaHex: 0x232326), strokesWhenSolid: false)
+                             material: .ultraThinMaterial, solid: Color(lunaHex: 0x232326), strokesWhenSolid: false,
+                             surface: .startPage)
         )
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -501,7 +502,7 @@ struct SmartSearchView: View {
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
             .frame(maxWidth: ChatTokens.chatMaxWidth)
-            .lunaGlass(cornerRadius: 22, interactive: true)
+            .lunaGlass(cornerRadius: 22, interactive: true, surface: .startPage)
             .focusShadow(isInputFocused)
         }
         .padding(.horizontal, 32)
@@ -589,7 +590,7 @@ struct SmartSearchView: View {
             .padding(.bottom, 10)
         }
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .lunaGlass(cornerRadius: 22, interactive: true)
+        .lunaGlass(cornerRadius: 22, interactive: true, surface: .startPage)
         .focusShadow(isInputFocused)
     }
 

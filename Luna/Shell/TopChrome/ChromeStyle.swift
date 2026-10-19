@@ -6,8 +6,8 @@ import SwiftUI
 
 /// Chrome's default-theme colors.
 struct ChromePalette {
-    let frame: Color          // tab strip / title bar
-    let toolbar: Color        // active tab, toolbar, bookmarks bar
+    var frame: Color          // tab strip / title bar
+    var toolbar: Color        // active tab, toolbar, bookmarks bar
     let omnibox: Color
     let tabSeparator: Color
     let tabHover: Color
@@ -16,11 +16,21 @@ struct ChromePalette {
     let bookmarkSeparator: Color
     let icon: Color
     let title: Color          // active tab title, URL text
-    let inactiveTitle: Color
-    let star: Color
+    var inactiveTitle: Color
+    var star: Color
     let hover: Color          // toolbar button hover circle
 
-    static func `for`(_ scheme: ColorScheme) -> ChromePalette { scheme == .dark ? dark : light }
+    /// Chrome's palette with the theme's tab strip, active tab and accent colors (the Chrome theme preset is Chrome's own).
+    static func `for`(_ scheme: ColorScheme) -> ChromePalette {
+        let isDark = scheme == .dark
+        var p = isDark ? dark : light
+        let theme = ThemeStore.shared.theme
+        p.frame = Color(chromeHex: theme.pair(.toolbar).hex(dark: isDark))
+        p.toolbar = Color(chromeHex: theme.pair(.activeTab).hex(dark: isDark))
+        p.star = Color(chromeHex: theme.pair(.accent).hex(dark: isDark))
+        if theme.highContrast { p.inactiveTitle = p.title }
+        return p
+    }
 
     static let light = ChromePalette(
         frame: Color(chromeHex: 0xD6E2FB), toolbar: .white, omnibox: Color(chromeHex: 0xEEF2F9),
@@ -179,7 +189,7 @@ struct ChromeTabView: View {
         if !iconOnly {
             // Chrome fades a long title out instead of truncating it.
             Text(displayTitle(for: tab))
-                .font(.system(size: 12.25))
+                .font(.system(size: ThemeStore.shared.theme.font(12.25)))
                 .lineLimit(1)
                 .fixedSize()
                 .foregroundStyle(isActive ? palette.title : palette.inactiveTitle)

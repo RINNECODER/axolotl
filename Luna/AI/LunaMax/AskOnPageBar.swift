@@ -43,7 +43,7 @@ struct AskOnPageBar: View {
                 ScrollView {
                     Group {
                         if let answer {
-                            RichMessageView(rawText: answer, fontSize: 13, linkColor: .accentColor, onLinkTapped: { _ in })
+                            RichMessageView(rawText: answer, fontSize: 13, linkColor: LunaSurface.accent, onLinkTapped: { _ in })
                         } else if let error {
                             Text(error).font(.system(size: 12.5)).foregroundStyle(.red)
                         } else {

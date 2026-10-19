@@ -33,7 +33,7 @@ struct LinkPreviewCard: View {
             Divider()
             Group {
                 if let preview {
-                    RichMessageView(rawText: preview.summary, fontSize: 12.5, linkColor: .accentColor, onLinkTapped: { _ in })
+                    RichMessageView(rawText: preview.summary, fontSize: 12.5, linkColor: LunaSurface.accent, onLinkTapped: { _ in })
                 } else if let error {
                     Text(error).font(.system(size: 12)).foregroundStyle(.secondary)
                 } else {

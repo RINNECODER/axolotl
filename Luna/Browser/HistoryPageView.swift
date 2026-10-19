@@ -20,7 +20,7 @@ struct HistoryPageView: View {
     private let bgColor = Color(white: 0.11)
     private let textPrimary = Color(white: 0.9)
     private let textSecondary = Color(white: 0.6)
-    private let accentColor = Color.blue
+    private var accentColor: Color { LunaSurface.accent }
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()

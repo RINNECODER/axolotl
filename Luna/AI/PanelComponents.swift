@@ -213,7 +213,7 @@ private struct PopoverRow<Content: View>: View {
                 if showsCheck {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(LunaSurface.accent)
                         .opacity(isOn ? 1 : 0)
                 }
             }
@@ -235,7 +235,7 @@ struct FileDropHint: View {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
             .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
             .foregroundStyle(.secondary)
-            .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 18, style: .continuous)))
+            .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 18, style: .continuous), surface: .aiPanel))
             .overlay {
                 VStack(spacing: 6) {
                     Image(systemName: "doc.badge.plus").font(.system(size: 22, weight: .light))

@@ -142,7 +142,7 @@ struct HorizontalTabStrip: View {
                     // Where a tab dragged from another window will land.
                     if let x = zone.markerX {
                         RoundedRectangle(cornerRadius: 1)
-                            .fill(Color.accentColor)
+                            .fill(LunaSurface.accent)
                             .frame(width: 2, height: height - 8)
                             .offset(x: x - 1, y: 4)
                             .allowsHitTesting(false)
@@ -389,7 +389,7 @@ final class TabDragPreview {
             }
             .padding(.horizontal, 10)
             .frame(width: TabDragPreview.size.width, height: TabDragPreview.size.height)
-            .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 8, style: .continuous)))
+            .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 8, style: .continuous), surface: .toolbar))
         }
     }
 }
@@ -475,9 +475,9 @@ private struct StripTab: View {
     private var splitTargetMark: some View {
         if isSplitTarget {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.accentColor, lineWidth: 1.5)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.accentColor.opacity(0.12)))
-                .overlay(Image(systemName: "rectangle.split.2x1").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.accentColor))
+                .strokeBorder(LunaSurface.accent, lineWidth: 1.5)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(LunaSurface.accent.opacity(0.12)))
+                .overlay(Image(systemName: "rectangle.split.2x1").font(.system(size: 11, weight: .semibold)).foregroundStyle(LunaSurface.accent))
                 .padding(.vertical, 2)
                 .padding(.horizontal, 1)
                 .allowsHitTesting(false)
@@ -494,10 +494,10 @@ private struct StripTab: View {
             .frame(width: 16, height: 16)
             if !iconOnly {
                 Text(displayTitle(for: tab))
-                    .font(.system(size: 12))
+                    .font(.system(size: ThemeStore.shared.theme.font(12)))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .foregroundStyle(isActive ? .primary : .secondary)
+                    .foregroundStyle(isActive ? .primary : LunaSurface.secondaryText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 TabAudioButton(audio: audio)
                 Button(action: onClose) {
@@ -516,9 +516,10 @@ private struct StripTab: View {
         .padding(.horizontal, iconOnly ? 0 : 10)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
+            RoundedRectangle(cornerRadius: ThemeStore.shared.theme.radius(8), style: .continuous)
                 // Split partners on screen get a lighter fill than the focused pane.
-                .fill(.quaternary.opacity(isActive ? 1 : (isVisible ? 0.6 : (isHovered ? 0.5 : 0))))
+                .fill(isActive ? AnyShapeStyle(LunaSurface.activeTab)
+                      : AnyShapeStyle(.quaternary.opacity(isVisible ? 0.6 : (isHovered ? 0.5 : 0))))
                 .padding(.vertical, 2)
                 .padding(.horizontal, 1)
         )
@@ -575,7 +576,7 @@ private struct LiftedTab: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(
-                LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 8, style: .continuous), surface: .toolbar)
                     .padding(.vertical, 2)
                     .opacity(isLifted ? 1 : 0)
             )
