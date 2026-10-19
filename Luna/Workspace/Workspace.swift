@@ -756,7 +756,10 @@ nonisolated struct Workspace: Codable, Equatable {
             spaces[i].pinned = Self.sanitized(spaces[i].pinned, tabs: tabs, seen: &seen)
             spaces[i].today = Self.sanitized(spaces[i].today, tabs: tabs, seen: &seen)
         }
-        for id in tabs.keys where !seen.contains(id) {
+        // Dictionary order is random per launch; re-home orphans in a stable order (no creation time is stored).
+        let orphans = tabs.values.filter { !seen.contains($0.id) }
+            .sorted { ($0.lastActiveAt, $0.id.uuidString) < ($1.lastActiveAt, $1.id.uuidString) }
+        for id in orphans.map(\.id) {
             spaces[activeSpaceIndex].today.append(.tab(id))
             seen.insert(id)
         }

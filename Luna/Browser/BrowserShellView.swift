@@ -442,9 +442,9 @@ struct BrowserShellView: View {
             sessionStore.pruneSessions(keeping: validIds)
             guard !validIds.contains(sessionStore.activeProfileId) else { return }
             let deletedId = sessionStore.activeProfileId
+            resetWindowStateForProfileChange()
             sessionStore.removeSession(profileId: deletedId)
             sessionStore.switchTo(profileId: profileManager.lastActiveProfileId)
-            tabsWithPanelOpen = []
             syncAddressBarFromCurrentTab()
         }
         .onChange(of: restoreAddressBarOnEscape) { _, new in
@@ -1314,14 +1314,27 @@ struct BrowserShellView: View {
 
     private func switchToProfile(_ profile: BrowserProfile) {
         guard profile.id != sessionStore.activeProfileId else { return }
+        resetWindowStateForProfileChange()
         sessionStore.switchTo(profileId: profile.id)
+        syncAddressBarFromCurrentTab()
+    }
 
-        // Reset address bar
+    /// Window UI that belongs to the outgoing profile's tabs. Runs before the session swaps so
+    /// `web` is still the old profile's. Shared by profile switch and active-profile delete.
+    private func resetWindowStateForProfileChange() {
+        if showBrowserFindBar, let id = tabManager.currentTab { web.clearFind(in: id) }
         addressBarText = ""
         searchSuggestions = []
         urlSuggestions = []
+        showBrowserFindBar = false
+        browserFindQuery = ""
+        showTabSearch = false
+        askOnPageVisible = false
+        web.linkPreview = nil
         tabsWithPanelOpen = []
-        syncAddressBarFromCurrentTab()
+        pendingAction = nil
+        pendingAssistantText = ""
+        showActionConfirm = false
     }
 
     private func openProfileInNewWindow(_ profile: BrowserProfile) {
@@ -1693,6 +1706,9 @@ struct BrowserShellView: View {
                 tabId: currentId,
                 splitPeers: peers
             ) }
+            // Fresh panel state per tab: drafts, attachments, summary and the in-flight stream
+            // (cancelled in onDisappear) must not leak into the next tab. Messages live in ChatStore.
+            .id(currentId)
             // Docked like the sidebar: it sits on the window chrome beside the page.
             .frame(width: aiPanelWidth - 6)
         }
@@ -2115,10 +2131,27 @@ struct TitlebarConfigurator: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+    /// Configures its window when attached; a one-shot async check missed windows attached later.
+    final class WindowAttachView: NSView {
+        var onWindow: ((NSWindow) -> Void)?
+        private weak var configured: NSWindow?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, window !== configured else { return }
+            configured = window
+            // Async: this can fire during a SwiftUI update, and onWindow writes a binding.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window === window else { return }
+                self.onWindow?(window)
+            }
+        }
+    }
+
     func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            guard let window = view.window else { return }
+        let view = WindowAttachView()
+        view.onWindow = { window in
+            NotificationCenter.default.removeObserver(context.coordinator)
             self.hostWindow = window
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden

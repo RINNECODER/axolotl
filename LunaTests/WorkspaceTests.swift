@@ -466,4 +466,13 @@ final class WorkspaceTests: XCTestCase {
         XCTAssertEqual(ws.orderedTabIds(), [orphan.id])
         XCTAssertNil(ws.activeTabId)
     }
+
+    func testRepairRehomesOrphansInStableOrder() {
+        var ws = Workspace()
+        let base = Date(timeIntervalSince1970: 1_000)
+        let orphans = (0..<12).map { Tab(url: url("o\($0)"), lastActiveAt: base.addingTimeInterval(Double($0))) }
+        for t in orphans.reversed() { ws.tabs[t.id] = t }
+        ws.repair()
+        XCTAssertEqual(ws.orderedTabIds(), orphans.map(\.id))
+    }
 }
