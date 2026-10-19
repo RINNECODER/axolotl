@@ -19,6 +19,15 @@ nonisolated final class PTYSession: @unchecked Sendable {
     private var exitSource: DispatchSourceProcess?
     private let lock = NSLock()
     private var onExit: (@Sendable (Int32) -> Void)?
+    /// Writes happen here, never on the caller's thread: a child that stops reading must not stall the UI.
+    private let writeQueue = DispatchQueue(label: "luna.pty.write")
+    private var pendingWriteBytes = 0
+    private static let maxPendingWriteBytes = 1 << 20
+    /// Output yielded but not yet fed to the terminal; the reader pauses past `maxUnconsumed`.
+    private var unconsumed = 0
+    private var readPaused = false
+    private static let maxUnconsumed = 4 << 20
+    private static let resumeUnconsumed = 1 << 20
 
     /// Set once the child has been reaped. Shared with the exit handler and the SIGKILL fallback,
     /// which both outlive this object, so a signal is never sent to a recycled pid.
@@ -35,9 +44,12 @@ nonisolated final class PTYSession: @unchecked Sendable {
         self.executable = executable
         self.arguments = arguments
         self.workingDirectory = workingDirectory
-        var env = environment ?? LoginShellEnvironment.environment()
-        env["TERM"] = env["TERM"] ?? "xterm-256color"
-        env["COLORTERM"] = env["COLORTERM"] ?? "truecolor"
+        // Always a clean login environment with TERM forced to what SwiftTerm emulates; see
+        // `LoginShellEnvironment.environment` for what inheriting Luna's own env broke.
+        var env = environment.map { LoginShellEnvironment.sanitized($0) } ?? LoginShellEnvironment.terminalEnvironment()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        if (env["LANG"] ?? "").isEmpty, (env["LC_ALL"] ?? "").isEmpty { env["LANG"] = "en_US.UTF-8" }
         self.environment = env
         (output, outputContinuation) = AsyncStream.makeStream(of: Data.self, bufferingPolicy: .unbounded)
     }
@@ -100,6 +112,12 @@ nonisolated final class PTYSession: @unchecked Sendable {
             let n = Darwin.read(masterFD, &buffer, buffer.count)
             if n > 0 {
                 self.outputContinuation.yield(Data(buffer[0..<n]))
+                self.lock.lock()
+                self.unconsumed += n
+                let pause = self.unconsumed > Self.maxUnconsumed && !self.readPaused
+                if pause { self.readPaused = true }
+                self.lock.unlock()
+                if pause { read.suspend() }
             } else if n == 0 || (errno != EAGAIN && errno != EINTR) {
                 // EIO once the last slave fd closes: the child is gone.
                 read.cancel()
@@ -126,22 +144,56 @@ nonisolated final class PTYSession: @unchecked Sendable {
             self.lock.lock(); let handler = self.onExit; self.onExit = nil; self.lock.unlock()
             handler?(status)
             // Give the reader a moment to drain, then stop it.
-            queue.asyncAfter(deadline: .now() + 0.2) { self.readSource?.cancel() }
+            queue.asyncAfter(deadline: .now() + 0.2) { self.cancelReader() }
         }
         exitSource = exit
         exit.resume()
     }
 
-    /// Keystrokes / pasted text, raw (e.g. "\u{3}" for Ctrl-C).
+    /// Call after feeding `count` output bytes to the terminal; resumes a paused reader.
+    func noteConsumed(_ count: Int) {
+        lock.lock()
+        unconsumed = max(0, unconsumed - count)
+        let resume = readPaused && unconsumed < Self.resumeUnconsumed
+        if resume { readPaused = false }
+        lock.unlock()
+        if resume { readSource?.resume() }
+    }
+
+    /// A suspended source never runs its cancel handler, so resume before cancelling.
+    private func cancelReader() {
+        lock.lock()
+        let wasPaused = readPaused
+        readPaused = false
+        lock.unlock()
+        if wasPaused { readSource?.resume() }
+        readSource?.cancel()
+    }
+
+    /// Keystrokes / pasted text, raw (e.g. "\u{3}" for Ctrl-C). Returns at once; the bytes are
+    /// written in order on a background queue, and dropped if more than 1 MB is already waiting.
     func write(_ data: Data) {
-        lock.lock(); defer { lock.unlock() }
-        guard master >= 0 else { return }
-        data.withUnsafeBytes { raw in
+        lock.lock()
+        guard master >= 0, pendingWriteBytes + data.count <= Self.maxPendingWriteBytes else { lock.unlock(); return }
+        pendingWriteBytes += data.count
+        lock.unlock()
+        writeQueue.async { [weak self] in
+            guard let self else { return }
             var offset = 0
-            while offset < raw.count {
-                let n = Darwin.write(master, raw.baseAddress! + offset, raw.count - offset)
-                if n > 0 { offset += n } else if errno == EAGAIN || errno == EINTR { usleep(1000) } else { break }
+            var stalls = 0
+            data.withUnsafeBytes { raw in
+                while offset < raw.count, stalls < 3_000 {
+                    self.lock.lock()
+                    let fd = self.master
+                    let n = fd >= 0 ? Darwin.write(fd, raw.baseAddress! + offset, raw.count - offset) : -1
+                    let err = errno
+                    self.lock.unlock()
+                    if n > 0 { offset += n; stalls = 0 }
+                    else if n < 0, err == EAGAIN || err == EINTR { stalls += 1; usleep(1000) }
+                    else { break }
+                }
             }
+            self.lock.lock(); self.pendingWriteBytes -= data.count; self.lock.unlock()
         }
     }
 
@@ -176,6 +228,6 @@ nonisolated final class PTYSession: @unchecked Sendable {
     deinit {
         // The exit source is left running on purpose: cancelling it here would leave an
         // unreaped zombie if the child exits later. Its handler cancels it after reaping.
-        readSource?.cancel()
+        cancelReader()
     }
 }

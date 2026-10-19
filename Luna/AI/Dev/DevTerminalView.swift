@@ -7,7 +7,15 @@ import SwiftUI
 struct DevTerminalView: NSViewRepresentable {
     let kind: AgentCLIKind
     let projectDir: URL
+    /// Follows the panel's appearance with T3 Code's terminal colors (MIT, apps/web/src/index.css).
+    var isDark = true
     var onExit: (Int32?) -> Void = { _ in }
+
+    /// True when a Dev terminal is the window's first responder, so window-level key
+    /// monitors should pass plain keys (Esc, arrows, Return) through to it.
+    static func hasKeyboardFocus(in window: NSWindow?) -> Bool {
+        window?.firstResponder is TerminalView
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(onExit: onExit) }
 
@@ -15,14 +23,26 @@ struct DevTerminalView: NSViewRepresentable {
         let view = TerminalView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
         view.terminalDelegate = context.coordinator
         view.font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
-        view.nativeBackgroundColor = NSColor(white: 0.07, alpha: 1)
-        view.nativeForegroundColor = NSColor(white: 0.9, alpha: 1)
-        view.caretColor = NSColor(white: 0.85, alpha: 1)
+        Self.applyColors(to: view, isDark: isDark)
         context.coordinator.start(kind: kind, projectDir: projectDir, in: view)
         return view
     }
 
-    func updateNSView(_ nsView: TerminalView, context: Context) {}
+    func updateNSView(_ nsView: TerminalView, context: Context) {
+        Self.applyColors(to: nsView, isDark: isDark)
+    }
+
+    static func applyColors(to view: TerminalView, isDark: Bool) {
+        let bg = isDark ? NSColor(srgbRed: 0x11 / 255, green: 0x11 / 255, blue: 0x11 / 255, alpha: 1) : .white
+        guard view.nativeBackgroundColor != bg else { return }
+        view.nativeBackgroundColor = bg
+        view.nativeForegroundColor = isDark ? NSColor(srgbRed: 0.96, green: 0.96, blue: 0.96, alpha: 1)
+            : NSColor(srgbRed: 0x27 / 255, green: 0x27 / 255, blue: 0x2A / 255, alpha: 1)
+        view.caretColor = isDark ? NSColor(srgbRed: 180 / 255, green: 203 / 255, blue: 1, alpha: 1)
+            : NSColor(srgbRed: 0x1B / 255, green: 0x4E / 255, blue: 0xD8 / 255, alpha: 1)
+        view.selectedTextBackgroundColor = isDark ? NSColor(srgbRed: 180 / 255, green: 203 / 255, blue: 1, alpha: 0.25)
+            : NSColor(srgbRed: 0x1B / 255, green: 0x4E / 255, blue: 0xD8 / 255, alpha: 0.18)
+    }
 
     static func dismantleNSView(_ nsView: TerminalView, coordinator: Coordinator) {
         coordinator.stop()
@@ -35,8 +55,23 @@ struct DevTerminalView: NSViewRepresentable {
 
         init(onExit: @escaping (Int32?) -> Void) { self.onExit = onExit }
 
+        private var pendingLaunch: (kind: AgentCLIKind, projectDir: URL)?
+        private weak var view: TerminalView?
+
+        /// Launches once the view has its real size. Starting at the placeholder frame made
+        /// the CLI draw its first screen for ~50 columns and then reflow on the first resize,
+        /// which leaves stale lines behind in Ink / ratatui TUIs.
         func start(kind: AgentCLIKind, projectDir: URL, in view: TerminalView) {
-            let pty = PTYSession(executable: kind.executableName, workingDirectory: projectDir)
+            pendingLaunch = (kind, projectDir)
+            self.view = view
+            // Fallback if no layout pass reports a usable size.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.launchIfPending() }
+        }
+
+        private func launchIfPending() {
+            guard let (kind, projectDir) = pendingLaunch, let view else { return }
+            pendingLaunch = nil
+            let pty = PTYSession(executable: DevSettings.executable(for: kind), workingDirectory: projectDir)
             let terminal = view.getTerminal()
             do {
                 let onExit = self.onExit
@@ -56,9 +91,45 @@ struct DevTerminalView: NSViewRepresentable {
                 }
                 view?.feed(text: "\r\n[process exited]\r\n")
             }
+            #if DEBUG
+            typeSnapshotKeys(into: view)
+            #endif
         }
 
+        #if DEBUG
+        /// Screenshots / input check: `LUNA_SNAPSHOT_DEV_TERM_KEYS="down|return|wait|text:hi|return"`
+        /// is typed as real key events (TerminalView.keyDown, the keyboard path), 1.5 s apart.
+        private func typeSnapshotKeys(into view: TerminalView) {
+            guard let script = ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_DEV_TERM_KEYS"] else { return }
+            Task { @MainActor [weak view] in
+                try? await Task.sleep(for: .seconds(3))
+                for token in script.split(separator: "|").map(String.init) {
+                    guard let view else { return }
+                    let chars: String
+                    var code: UInt16 = 0
+                    switch token {
+                    case "down": chars = String(UnicodeScalar(UInt16(NSDownArrowFunctionKey))!); code = 125
+                    case "up": chars = String(UnicodeScalar(UInt16(NSUpArrowFunctionKey))!); code = 126
+                    case "return": chars = "\r"; code = 36
+                    case "wait": try? await Task.sleep(for: .seconds(4)); continue
+                    default: chars = token.hasPrefix("text:") ? String(token.dropFirst(5)) : token
+                    }
+                    for ch in (code == 0 ? chars.map(String.init) : [chars]) {
+                        if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                                                        windowNumber: view.window?.windowNumber ?? 0, context: nil,
+                                                        characters: ch, charactersIgnoringModifiers: ch,
+                                                        isARepeat: false, keyCode: code) {
+                            view.keyDown(with: event)
+                        }
+                    }
+                    try? await Task.sleep(for: .seconds(1.5))
+                }
+            }
+        }
+        #endif
+
         func stop() {
+            pendingLaunch = nil
             reader?.cancel()
             reader = nil
             pty?.terminate()
@@ -72,6 +143,11 @@ struct DevTerminalView: NSViewRepresentable {
         }
 
         func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+            if pty == nil, pendingLaunch != nil, newCols >= 20, newRows >= 5 {
+                // Let SwiftUI finish this layout pass, then launch at the settled size.
+                DispatchQueue.main.async { [weak self] in self?.launchIfPending() }
+                return
+            }
             pty?.resize(columns: UInt16(max(newCols, 1)), rows: UInt16(max(newRows, 1)))
         }
 

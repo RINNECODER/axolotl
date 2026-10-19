@@ -34,6 +34,8 @@ struct DevThreadState: Equatable {
         case approval(ApprovalCard)
         case turn(TurnFooter)
         case error(String)
+        /// Informational line (e.g. "older history not loaded").
+        case notice(String)
         case crash(status: Int32, signaled: Bool, stderrTail: String)
     }
 
@@ -94,6 +96,10 @@ struct DevThreadState: Equatable {
         case .sessionStarted(let id):
             sessionID = id
 
+        case .userMessage(let text):
+            closeStreamingText()
+            items.append(.user(text))
+
         case .textDelta(let delta):
             if case .assistant(let text, true)? = items.last {
                 items[items.count - 1] = .assistant(text: text + delta, streaming: true)
@@ -149,6 +155,10 @@ struct DevThreadState: Equatable {
 
         case .error(let message):
             items.append(.error(message))
+
+        case .historyTruncated(let skipped):
+            let mb = max(1, Int(skipped >> 20))
+            items.append(.notice("Older history not loaded (\(mb) MB before this point)."))
 
         case .exited(let exit):
             closeStreamingText()

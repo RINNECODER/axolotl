@@ -70,7 +70,7 @@ enum DebugSnapshot {
                                    ollama: OllamaClient(), historyManager: HistoryManager(profileId: UUID()),
                                    onActionProposed: { _ in }, tabId: tab)
                     .padding(10)
-                    .frame(width: 400, height: 640)
+                    .frame(width: Double(ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_PANEL_WIDTH"] ?? "") ?? 400, height: 640)
                     .background(Color(nsColor: .windowBackgroundColor))
             }
         }
@@ -118,9 +118,10 @@ enum DebugSnapshot {
             #if LUNA_DEV
             if let prompt = env["LUNA_SNAPSHOT_DEV_PROMPT"], let dir = env["LUNA_SNAPSHOT_DEV_DIR"] {
                 Task {
-                    let c = DevSessionController.shared
-                    await c.start(kind: .claudeCode, projectDir: URL(fileURLWithPath: dir), model: "haiku", resume: false)
-                    c.send(prompt)
+                    var setup = DevSettings.shared.defaultSetup
+                    setup.model = "haiku"
+                    DevWorkspace.shared.startNew(harness: .claudeCode, projectDir: URL(fileURLWithPath: dir), setup: setup)
+                    _ = DevWorkspace.shared.session?.send(prompt)
                 }
             }
             #endif
@@ -129,7 +130,8 @@ enum DebugSnapshot {
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0, delay - 1.5)) {
                 let pane = env["LUNA_SNAPSHOT_SETTINGS"].flatMap(SettingsPane.init(rawValue:)) ?? .appearance
                 let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(initialPane: pane)))
-                window.setContentSize(NSSize(width: 820, height: 600))
+                let height = env["LUNA_SNAPSHOT_SETTINGS_HEIGHT"].flatMap(Double.init) ?? 600
+                window.setContentSize(NSSize(width: 820, height: height))
                 window.isReleasedWhenClosed = false
                 window.makeKeyAndOrderFront(nil)
             }

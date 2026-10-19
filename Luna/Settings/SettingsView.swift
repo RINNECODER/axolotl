@@ -16,8 +16,8 @@ struct SettingsView: View {
 
     private var visiblePanes: [SettingsPane] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return SettingsPane.allCases }
-        return SettingsPane.allCases.filter { pane in
+        guard !q.isEmpty else { return SettingsPane.available }
+        return SettingsPane.available.filter { pane in
             pane.title.lowercased().contains(q) || pane.keywords.contains { $0.contains(q) }
         }
     }
@@ -40,6 +40,7 @@ struct SettingsView: View {
                 case .appearance: AppearanceSettingsView()
                 case .tabs: TabsSettingsView()
                 case .ai: ModelsSettingsView()
+                case .dev: DevSettingsView()
                 case .lunaMax: LunaMaxSettingsView()
                 case .personalization: PersonalizationSettingsView()
                 case .passwords: PasswordsSettingsView()
@@ -60,7 +61,12 @@ struct SettingsView: View {
 }
 
 enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
-    case profiles, appearance, tabs, passwords, extensions, ai, lunaMax, personalization, search, about
+    case profiles, appearance, tabs, passwords, extensions, ai, dev, lunaMax, personalization, search, about
+
+    /// Panes this build shows: Dev only in the unsandboxed Luna Dev build.
+    static var available: [SettingsPane] {
+        allCases.filter { $0 != .dev || (DevMode.isDevBuild && DevMode.isAvailable) }
+    }
 
     var id: String { rawValue }
 
@@ -70,6 +76,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return "Appearance"
         case .tabs: return "Tabs"
         case .ai: return "AI & Models"
+        case .dev: return "Dev"
         case .lunaMax: return "Luna Max"
         case .personalization: return "Personalization"
         case .passwords: return "Passwords"
@@ -85,6 +92,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return "paintbrush"
         case .tabs: return "square.on.square"
         case .ai: return "sparkles"
+        case .dev: return "chevron.left.forwardslash.chevron.right"
         case .lunaMax: return "wand.and.stars"
         case .personalization: return "slider.horizontal.3"
         case .passwords: return "key.fill"
@@ -101,6 +109,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return ["theme", "dark", "light", "layout", "sidebar", "compact", "dynamic", "classic",
                                   "address", "url", "frameless", "frame", "home", "font", "text size", "toolbar", "bookmarks"]
         case .tabs: return ["memory", "unload", "sleep", "hibernate", "inactive"]
+        case .dev: return ["claude code", "codex", "harness", "cli", "terminal", "agent", "sync", "approval"]
         case .ai: return ["model", "gemini", "ollama", "openai", "chatgpt", "anthropic", "claude", "api key"]
         case .extensions: return ["extension", "add-on", "plugin", "chrome web store", "ublock", "adblock"]
         case .passwords: return ["password", "login", "keychain", "autofill", "import", "touch id"]

@@ -37,8 +37,10 @@ class CLIAdapterBase {
         guard DevMode.isAvailable else {
             throw AgentCLIError.unavailable("Dev mode needs the unsandboxed Luna Dev build.")
         }
-        guard let path = LoginShellEnvironment.locate(kind.executableName) else {
-            throw AgentCLIError.notFound(kind.executableName)
+        let name = DevSettings.executable(for: kind)
+        if name.contains("/") { return URL(fileURLWithPath: name) }
+        guard let path = LoginShellEnvironment.locate(name) else {
+            throw AgentCLIError.notFound(name)
         }
         return URL(fileURLWithPath: path)
     }
