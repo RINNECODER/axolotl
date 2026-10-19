@@ -4,9 +4,9 @@ import SwiftUI
 import AppKit
 import Combine
 
-/// Settings: category sidebar, search, and grouped forms (macOS System Settings style,
-/// mirroring Helium's categories). Shown in a browser tab at `luna://settings/<pane>`;
-/// the tab's URL holds the selected pane.
+/// Settings, laid out like Chrome's chrome://settings: a search field on top that finds single settings
+/// across every pane, a pane list on the left, and the pane's cards in a centered column.
+/// Shown in a browser tab at `luna://settings/<pane>`; the tab's URL holds the selected pane.
 struct SettingsView: View {
     private let external: Binding<SettingsPane?>?
     @State private var local: SettingsPane?
@@ -18,109 +18,299 @@ struct SettingsView: View {
     }
 
     /// Standalone (debug snapshots): the view keeps its own pane.
-    init(initialPane: SettingsPane = .general) {
+    init(initialPane: SettingsPane = .general, query: String = "") {
         external = nil
         _local = State(initialValue: initialPane)
+        _query = State(initialValue: query)
     }
 
     private var selectionBinding: Binding<SettingsPane?> { external ?? $local }
     private var selection: SettingsPane? { selectionBinding.wrappedValue }
-
-    private var visiblePanes: [SettingsPane] {
-        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return SettingsPane.available }
-        return SettingsPane.available.filter { $0.matches(q) }
-    }
+    private var inTab: Bool { external != nil }
+    private var trimmedQuery: String { query.trimmingCharacters(in: .whitespaces) }
 
     @AppStorage(LiquidGlass.defaultsKey) private var liquidGlass = LiquidGlass.defaultValue
 
     var body: some View {
-        Group {
-            // A tab has no window toolbar for the split view's sidebar search: it uses the
-            // list + content layout, on glass or solid surfaces.
-            if liquidGlass && external == nil { nativeLayout } else { solidLayout }
+        VStack(spacing: 0) {
+            header
+            HStack(alignment: .top, spacing: 0) {
+                nav
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
         }
         // Sizes to the tab; no window minimums.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SettingsStyle.page)
         .background(SettingsInitialFocus())
-        .onChange(of: query) { _, _ in
-            if let selection, !visiblePanes.contains(selection) { selectionBinding.wrappedValue = visiblePanes.first }
-        }
-    }
-
-    /// System Settings style split view (Liquid Glass sidebar on macOS 26).
-    private var nativeLayout: some View {
-        NavigationSplitView {
-            List(visiblePanes, selection: selectionBinding) { pane in
-                Label(pane.title, systemImage: pane.icon)
-                    .tag(pane)
-            }
-            .searchable(text: $query, placement: .sidebar, prompt: "Search settings")
-            // After .searchable: applied inside it, the sidebar search container drops the width.
-            .navigationSplitViewColumnWidth(min: 270, ideal: 290, max: 330)
-        } detail: {
-            detail.navigationTitle((selection ?? .general).title)
-        }
-    }
-
-    /// Liquid Glass off: the same sidebar and panes on Luna's solid surfaces.
-    private var solidLayout: some View {
-        HStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass").font(.system(size: 11.5)).foregroundStyle(.secondary)
-                    TextField("Search settings", text: $query).textFieldStyle(.plain).font(.system(size: 12.5))
-                }
-                .padding(.horizontal, 8)
-                .frame(height: 26)
-                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(LunaSurface.raised))
-                .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(LunaSurface.stroke))
-                ScrollView {
-                    VStack(spacing: 2) {
-                        ForEach(visiblePanes) { pane in
-                            SolidSidebarRow(pane: pane, isSelected: (selection ?? .general) == pane) { selectionBinding.wrappedValue = pane }
-                        }
-                    }
-                }
-                .scrollIndicators(.never)
-            }
-            .padding(.horizontal, 10)
-            .padding(.top, inTab ? 14 : 38)
-            .frame(width: 240)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .background {
-                if inTab && liquidGlass { Rectangle().fill(.regularMaterial) } else { LunaSurface.sidebar }
-            }
-            Rectangle().fill(LunaSurface.stroke).frame(width: 1)
-            VStack(alignment: .leading, spacing: 0) {
-                Text((selection ?? .general).title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .padding(.horizontal, 20)
-                    .frame(height: inTab ? 46 : 38, alignment: .center)
-                detail
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        }
-        .background(inTab ? AnyShapeStyle(LunaSurface.window) : AnyShapeStyle(.clear))
         .modifier(StandaloneWindowChrome(enabled: !inTab))
     }
 
-    private var inTab: Bool { external != nil }
+    private static let navWidth: CGFloat = 248
 
-    private var detail: some View {
-            Group {
-                switch selection ?? .general {
-                case .general: GeneralSettingsView()
-                case .appearance: AppearanceSettingsView()
-                case .tabs: TabsSettingsView()
-                case .ai: ModelsSettingsView()
-                case .passwords: PasswordsImportView()
-                case .privacy: PersonalizationSettingsView()
-                case .extensions: ExtensionsSettingsView()
-                case .agents: AgentsSettingsView()
-                case .about: AboutSettingsView()
+    /// "Settings" over the nav, and the search field centered over the content column.
+    private var header: some View {
+        HStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 15))
+                    .foregroundStyle(Color.accentColor)
+                Text("Settings")
+                    .font(.system(size: 17, weight: .semibold))
+            }
+            .padding(.leading, 24)
+            .frame(width: Self.navWidth, alignment: .leading)
+            SettingsSearchField(text: $query)
+                .frame(maxWidth: SettingsStyle.columnWidth)
+                .padding(.horizontal, 28)
+                .frame(maxWidth: .infinity)
+        }
+        .frame(height: 60)
+        .padding(.top, inTab ? 4 : 30)
+    }
+
+    private var nav: some View {
+        VStack(spacing: 2) {
+            ForEach(SettingsPane.available) { pane in
+                SettingsNavRow(pane: pane, isSelected: trimmedQuery.isEmpty && (selection ?? .general) == pane) {
+                    query = ""
+                    selectionBinding.wrappedValue = pane
                 }
             }
+        }
+        .padding(liquidGlass ? 8 : 0)
+        .background {
+            if liquidGlass {
+                Color.clear.lunaGlass(cornerRadius: 16)
+            }
+        }
+        .padding(.leading, liquidGlass ? 12 : 8)
+        .padding(.trailing, 12)
+        .padding(.top, 6)
+        .frame(width: Self.navWidth, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    @ViewBuilder private var content: some View {
+        if !trimmedQuery.isEmpty {
+            SettingsSearchResults(query: trimmedQuery) { pane in
+                query = ""
+                selectionBinding.wrappedValue = pane
+            }
+        } else {
+            let pane = selection ?? .general
+            SettingsPage(pane.title) { SettingsPaneContent(pane: pane) }
+                .id(pane)
+        }
+    }
+}
+
+/// One pane's cards.
+struct SettingsPaneContent: View {
+    let pane: SettingsPane
+
+    var body: some View {
+        switch pane {
+        case .general: GeneralSettingsView()
+        case .appearance: AppearanceSettingsView()
+        case .tabs: TabsSettingsView()
+        case .ai: ModelsSettingsView()
+        case .passwords: PasswordsImportView()
+        case .privacy: PersonalizationSettingsView()
+        case .extensions: ExtensionsSettingsView()
+        case .agents: AgentsSettingsView()
+        case .about: AboutSettingsView()
+        }
+    }
+}
+
+/// Chrome's "Search settings" field: a rounded pill with a magnifier and a clear button.
+private struct SettingsSearchField: View {
+    @Binding var text: String
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField("Search settings", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13.5))
+                .focused($focused)
+                .onExitCommand { text = "" }
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 38)
+        .background(Capsule(style: .continuous).fill(focused ? SettingsStyle.card : SettingsStyle.field))
+        .overlay(Capsule(style: .continuous)
+            .strokeBorder(focused ? Color.accentColor.opacity(0.9) : Color.clear, lineWidth: 1.5))
+        .contentShape(Capsule())
+        .onTapGesture { focused = true }
+    }
+}
+
+/// A pane in the left nav: icon and title; the selected pane gets an accent-tinted pill.
+private struct SettingsNavRow: View {
+    let pane: SettingsPane
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: pane.icon)
+                    .font(.system(size: 13.5, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .frame(width: 20)
+                Text(pane.title)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .frame(height: 34)
+            .background(Capsule(style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.14) : (hovering ? LunaSurface.hover : .clear)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .accessibilityLabel(pane.title)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+// MARK: - Search
+
+/// A setting the search field can find: its pane, label and description, and its registry key when
+/// it has one (then the result is the live control itself).
+struct SettingsSearchItem: Hashable {
+    let pane: SettingsPane
+    let title: String
+    var subtitle: String?
+    var registryKey: String?
+
+    func matches(_ query: String) -> Bool {
+        title.lowercased().contains(query) || (subtitle?.lowercased().contains(query) ?? false)
+    }
+}
+
+extension SettingsPane {
+    /// Every searchable row in this pane: its registry settings, then the other rows.
+    var searchItems: [SettingsSearchItem] {
+        registryKeys.compactMap { key in
+            CustomizationRegistry.setting(key).map {
+                SettingsSearchItem(pane: self, title: $0.title, subtitle: $0.help, registryKey: key)
+            }
+        } + otherRows.map { SettingsSearchItem(pane: self, title: $0.0, subtitle: $0.1) }
+    }
+
+    /// Rows that aren't registry settings (labels as shown in the pane).
+    private var otherRows: [(String, String?)] {
+        switch self {
+        case .general: return [("Default browser", "Make Luna open your links."), ("Profiles", "Rename, recolor, add and delete profiles."),
+                               ("Add Profile", nil), ("Welcome", "Show the welcome tour again.")]
+        case .appearance: return [("Layout template", "Luna or Chrome look in one click."),
+                                  ("Tab layout", nil), ("Wallpaper", "Start page wallpaper and moon."),
+                                  ("Moon style", nil), ("Frame rate", nil), ("Remove all shortcuts", "Start page shortcuts.")]
+        case .tabs: return []
+        case .ai: return [("Model", "Which AI model Luna uses."), ("API keys", "Keys for cloud model providers."),
+                          ("Ollama", "Local models on this Mac."), ("Luna Max", "Ask on page, link previews and tidy features."),
+                          ("Computer use", nil), ("Text size", "AI panel text size.")]
+        case .passwords: return [("Passwords", "Saved logins in the Luna vault."), ("iCloud Keychain sync", nil),
+                                 ("Import", "Bring bookmarks, history and passwords from another browser."),
+                                 ("Import passwords from CSV", nil)]
+        case .privacy: return [("Keep a usage record", "Counts the Luna features and shortcuts you use each day, on this Mac only."),
+                               ("Keep data for", nil), ("View usage data", nil),
+                               ("Cookies and site data", "Clear cookies and site data."),
+                               ("Clear browsing data", "Clear history for a time range.")]
+        case .extensions: return [("Extensions", "Installed extensions."), ("Chrome Web Store", "Add extensions.")]
+        case .agents: return [("Let agents drive Luna", "An MCP server for Claude Code, Codex and other agents, on this Mac only."),
+                              ("Port", nil), ("Don't ask before agents act", nil), ("Regenerate token", nil),
+                              ("Enable Developer Tools", "Adds Inspect Element to the page's context menu."),
+                              ("Recent AI changes", "Changes your AI agent made, with Undo.")]
+        case .about: return [("Version", nil), ("License", nil), ("Source code on GitHub", nil)]
+        }
+    }
+}
+
+/// Search results: the matching rows of every pane, grouped by pane in cards.
+private struct SettingsSearchResults: View {
+    let query: String
+    let open: (SettingsPane) -> Void
+
+    private struct ResultGroup: Identifiable {
+        let pane: SettingsPane
+        let items: [SettingsSearchItem]
+        var id: SettingsPane { pane }
+    }
+
+    private var groups: [ResultGroup] {
+        let q = query.lowercased()
+        return SettingsPane.available.compactMap { pane in
+            let items = pane.searchItems.filter { $0.matches(q) }
+            if !items.isEmpty { return ResultGroup(pane: pane, items: items) }
+            // The pane matches by name or keyword but no single row does: offer the pane.
+            return pane.matches(q) ? ResultGroup(pane: pane, items: []) : nil
+        }
+    }
+
+    var body: some View {
+        let groups = groups
+        SettingsPage("Search results") {
+            if groups.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 28, weight: .light))
+                        .foregroundStyle(.secondary)
+                    Text("No settings match “\(query)”")
+                        .font(.system(size: 14, weight: .medium))
+                    Text("Try another word, like “theme”, “passwords” or “model”.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 60)
+            }
+            ForEach(groups) { group in
+                SettingsCard(group.pane.title) {
+                    ForEach(group.items, id: \.self) { item in
+                        if let key = item.registryKey {
+                            RegistryControl(key: key)
+                        } else {
+                            SettingsLinkRow(item.title, subtitle: item.subtitle) { open(group.pane) }
+                        }
+                    }
+                    SettingsLinkRow("All \(group.pane.title) settings", icon: group.pane.icon) { open(group.pane) }
+                }
+            }
+        }
+    }
+}
+
+/// The live control for a registry setting, by its kind.
+struct RegistryControl: View {
+    let key: String
+
+    var body: some View {
+        switch CustomizationRegistry.setting(key)?.kind {
+        case .bool: RegistryToggle(key)
+        case .choice: RegistryPicker(key)
+        case .intChoice: RegistryIntPicker(key)
+        default: EmptyView()
+        }
     }
 }
 
@@ -176,37 +366,6 @@ private struct StandaloneWindowChrome: ViewModifier {
         } else {
             content
         }
-    }
-}
-
-/// A settings sidebar row on the solid layout.
-private struct SolidSidebarRow: View {
-    let pane: SettingsPane
-    let isSelected: Bool
-    let action: () -> Void
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: pane.icon)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(isSelected ? Color.white : Color.accentColor)
-                    .frame(width: 18)
-                Text(pane.title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(isSelected ? Color.white : Color.primary)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(isSelected ? Color.accentColor : (hovering ? LunaSurface.hover : .clear)))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering = $0 }
-        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -325,30 +484,21 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
 
 private struct GeneralSettingsView: View {
     var body: some View {
-        Form {
-            DefaultBrowserSection()
+        DefaultBrowserSection()
 
-            Section {
-                RegistryPicker("search.engine")
-                RegistryToggle("search.suggestions")
-            } header: {
-                Text("Search")
-            }
+        SettingsCard("Search engine") {
+            RegistryPicker("search.engine")
+            RegistryToggle("search.suggestions")
+        }
 
-            ProfileSettingsSections()
+        ProfileSettingsSections()
 
-            Section {
-                LabeledContent("Welcome") {
-                    Button("Show Welcome Again") {
-                        // Settings is a tab, so the welcome sheet shows over this window.
-                        OnboardingState.showAgain()
-                    }
-                }
-            } footer: {
-                Text("Walks you through Luna's layouts, AI and import again.").foregroundStyle(.secondary)
+        SettingsCard("On startup") {
+            SettingsLinkRow("Show Welcome Again", subtitle: "Walks you through Luna's layouts, AI and import again.") {
+                // Settings is a tab, so the welcome sheet shows over this window.
+                OnboardingState.showAgain()
             }
         }
-        .formStyle(.grouped)
     }
 }
 
@@ -358,21 +508,20 @@ struct DefaultBrowserSection: View {
     @State private var error: String?
 
     var body: some View {
-        Section {
-            LabeledContent {
+        SettingsCard("Default browser") {
+            SettingsRow("Default browser", subtitle: isDefault ? "Luna opens your links." : "Another browser opens your links.",
+                        icon: isDefault ? "checkmark.seal.fill" : "globe") {
                 if !isDefault {
-                    Button("Make Luna Default") {
+                    Button("Make Default") {
                         Task {
                             do { try await setting.makeDefault(); error = nil } catch { self.error = error.localizedDescription }
                             isDefault = setting.isDefault
                         }
                     }
+                    .accessibilityLabel("Make Luna Default")
                 }
-            } label: {
-                Text("Default browser")
-                Text(isDefault ? "Luna opens your links." : "Another browser opens your links.")
             }
-            if let error { Text(error).font(.callout).foregroundStyle(.red) }
+            if let error { SettingsNoteRow(error, isError: true) }
         }
         .onAppear { isDefault = setting.isDefault }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -401,18 +550,10 @@ private struct PasswordsImportView: View {
     @ObservedObject private var router = SettingsRouter.shared
 
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $router.passwordsTab) {
-                ForEach(PasswordsPaneTab.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            .padding(.top, 12)
-            switch router.passwordsTab {
-            case .passwords: PasswordsSettingsView()
-            case .importData: BrowserImportView()
-            }
+        SettingsTabBar(selection: $router.passwordsTab, tabs: PasswordsPaneTab.allCases.map { ($0, $0.title) })
+        switch router.passwordsTab {
+        case .passwords: PasswordsSettingsView()
+        case .importData: BrowserImportView()
         }
     }
 }
@@ -435,18 +576,14 @@ private struct AppearanceSettingsView: View {
     private var onTemplate: Bool { (LayoutTemplate(rawValue: templateRaw) ?? .luna) != .luna }
 
     var body: some View {
-        Form {
-            Section {
-                LayoutTemplatePicker()
-            } header: {
-                Text("Layout template")
-            } footer: {
-                Text("A template changes several settings below at once; you can undo it in Agents → Recent AI changes.")
-                    .foregroundStyle(.secondary)
+        Group {
+            SettingsCard("Layout template",
+                         footer: "A template changes several settings below at once; you can undo it in Agents → Recent AI changes.") {
+                SettingsContentRow { LayoutTemplatePicker() }
             }
 
-            Section {
-                LunaPicker(RegistrySettings.setting("tabs.layout").title, subtitle: layout.wrappedValue.summary,
+            SettingsCard("Customize") {
+                SettingsMenuRow(RegistrySettings.setting("tabs.layout").title, subtitle: layout.wrappedValue.summary,
                            selection: layout, options: BrowserLayout.allCases.map { .init($0, $0.title) })
                 if layout.wrappedValue == .sidebar {
                     RegistryToggle("toolbar.visible")
@@ -460,11 +597,11 @@ private struct AppearanceSettingsView: View {
                 }
                 RegistryToggle("addressBar.minimalURL")
                 RegistryToggle("addressBar.loadingProgress")
-            } header: {
-                Text("Customize")
             }
 
-            Section {
+            SettingsCard("Window", footer: onTemplate
+                         ? "Changing anything under Customize switches the template to Custom and keeps your changes."
+                         : "These are your Custom layout. Choose a template above to try another look.") {
                 RegistryToggle("chrome.roundedFrame")
                 RegistryToggle("chrome.autoHide")
                 if autoHide && layout.wrappedValue != .sidebar {
@@ -474,35 +611,30 @@ private struct AppearanceSettingsView: View {
                 if autoHide || layout.wrappedValue == .sidebar {
                     RegistryToggle("chrome.hideWindowButtons")
                 }
-            } footer: {
-                Text(onTemplate
-                     ? "Changing anything under Customize switches the template to Custom and keeps your changes."
-                     : "These are your Custom layout. Choose a template above to try another look.")
-                    .foregroundStyle(.secondary)
             }
 
-            Section {
+            SettingsCard("Theme") {
                 RegistryPicker("appearance.theme")
                 RegistryToggle("appearance.liquidGlass")
-            } header: {
-                Text("Theme")
             }
 
             WallpaperSettingsSection()
 
-            Section {
+            SettingsCard("Start page") {
                 RegistryToggle("startPage.showShortcuts")
-                Button("Remove All Shortcuts…") { confirmRemoveShortcuts = true }
-                    .disabled(shortcutStore.shortcuts.isEmpty)
-            } header: {
-                Text("Start page")
+                SettingsRow("Shortcuts", subtitle: shortcutStore.shortcuts.isEmpty
+                            ? "No shortcuts on the start page."
+                            : "\(shortcutStore.shortcuts.count) on the start page.") {
+                    Button("Remove All…", role: .destructive) { confirmRemoveShortcuts = true }
+                        .disabled(shortcutStore.shortcuts.isEmpty)
+                        .accessibilityLabel("Remove All Shortcuts…")
+                }
             }
             .confirmationDialog("Remove all \(shortcutStore.shortcuts.count) shortcuts?",
                                 isPresented: $confirmRemoveShortcuts) {
                 Button("Remove All", role: .destructive) { shortcutStore.removeAll() }
             }
         }
-        .formStyle(.grouped)
         // The profile name field would otherwise take initial focus (selected text) when the pane opens.
         .onAppear { DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) } }
     }
@@ -512,17 +644,9 @@ private struct AppearanceSettingsView: View {
 
 private struct TabsSettingsView: View {
     var body: some View {
-        Form {
-            Section {
-                RegistryIntPicker("tabs.unloadAfterMinutes")
-            } header: {
-                Text("Tabs")
-            } footer: {
-                Text("Sidebar visibility, auto-hide and the tab layout are in Appearance → Customize.")
-                    .foregroundStyle(.secondary)
-            }
+        SettingsCard("Tabs", footer: "Sidebar visibility, auto-hide and the tab layout are in Appearance → Customize.") {
+            RegistryIntPicker("tabs.unloadAfterMinutes")
         }
-        .formStyle(.grouped)
     }
 }
 
@@ -537,8 +661,8 @@ private struct AboutSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
+        SettingsCard {
+            SettingsContentRow {
                 HStack(spacing: 14) {
                     Image(nsImage: NSApp.applicationIconImage)
                         .resizable()
@@ -549,11 +673,12 @@ private struct AboutSettingsView: View {
                     }
                 }
                 .padding(.vertical, 4)
-                LabeledContent("License", value: "MIT")
-                Link("Source code on GitHub", destination: URL(string: "https://github.com/Rahul4301/Luna")!)
+            }
+            SettingsRow("License") { Text("MIT").foregroundStyle(.secondary) }
+            SettingsLinkRow("Source code on GitHub", external: true) {
+                NSWorkspace.shared.open(URL(string: "https://github.com/Rahul4301/Luna")!)
             }
         }
-        .formStyle(.grouped)
     }
 }
 

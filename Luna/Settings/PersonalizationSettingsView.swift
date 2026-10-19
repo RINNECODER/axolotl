@@ -15,48 +15,35 @@ struct PersonalizationSettingsView: View {
     @ObservedObject private var profileManager = ProfileManager.shared
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(isOn: $enabled) {
-                    Text("Keep a usage record")
-                    Text("Counts the Luna features and shortcuts you use each day, on this Mac only. Your AI agent can read it, with your history, to set Luna up the way you use it.")
+        Group {
+            SettingsCard("Personalization", footer: "Off by default, and nothing is recorded while it's off. Agents change Luna only through its typed settings and tab tools — never code — and you approve each change.") {
+                SettingsToggleRow("Keep a usage record",
+                                  subtitle: "Counts the Luna features and shortcuts you use each day, on this Mac only. Your AI agent can read it, with your history, to set Luna up the way you use it.",
+                                  isOn: $enabled)
+                SettingsMenuRow("Keep data for", selection: $retention,
+                                options: [.init(30, "30 days"), .init(90, "90 days"), .init(365, "1 year")])
+                    .disabled(!enabled)
+                SettingsRow("Recorded", subtitle: usage.isEmpty ? "Nothing yet" : "\(usage.days.count) \(usage.days.count == 1 ? "day" : "days")") {
+                    Button("View Data…") { showData = true }
+                    Button("Delete All…", role: .destructive) { confirmDelete = true }
+                        .disabled(usage.isEmpty)
                 }
-                LunaPicker("Keep data for", selection: $retention,
-                           options: [.init(30, "30 days"), .init(90, "90 days"), .init(365, "1 year")])
-                .disabled(!enabled)
-                LabeledContent("Recorded") {
-                    HStack(spacing: 8) {
-                        Text(usage.isEmpty ? "Nothing yet" : "\(usage.days.count) \(usage.days.count == 1 ? "day" : "days")")
-                            .foregroundStyle(.secondary)
-                        Button("View Data…") { showData = true }
-                        Button("Delete All…", role: .destructive) { confirmDelete = true }
-                            .disabled(usage.isEmpty)
-                    }
-                }
-            } header: {
-                Text("Personalization")
-            } footer: {
-                Text("Off by default, and nothing is recorded while it's off. Agents change Luna only through its typed settings and tab tools — never code — and you approve each change.")
-                    .foregroundStyle(.secondary)
             }
 
-            Section {
+            SettingsCard("Browsing data") {
                 if profileManager.profiles.count > 1 {
-                    LunaPicker("Profile", selection: $dataProfileId,
-                               options: profileManager.profiles.map { .init($0.id, $0.name) })
+                    SettingsMenuRow("Profile", selection: $dataProfileId,
+                                    options: profileManager.profiles.map { .init($0.id, $0.name) })
                 }
-                LabeledContent("Cookies and site data") {
+                SettingsRow("Cookies and site data", subtitle: "Signs you out of websites in this profile.", icon: "externaldrive") {
                     Button("Clear…", role: .destructive) { confirmClearSiteData = true }
                 }
-                LabeledContent("History") {
-                    Button("Clear browsing data…", role: .destructive) { showClearHistory = true }
+                SettingsLinkRow("Clear browsing data", subtitle: "Clear history for a time range.", icon: "clock.arrow.circlepath") {
+                    showClearHistory = true
                 }
-                if let siteDataStatus { Text(siteDataStatus).font(.callout).foregroundStyle(.secondary) }
-            } header: {
-                Text("Browsing data")
+                if let siteDataStatus { SettingsNoteRow(siteDataStatus) }
             }
         }
-        .formStyle(.grouped)
         .onChange(of: retention) { _, _ in usage.prune() }
         .sheet(isPresented: $showData) { UsageDataSheet(usage: usage) }
         .sheet(isPresented: $showClearHistory) {

@@ -1,28 +1,21 @@
 import SwiftUI
 
-/// Settings → General → Profiles: rename, recolor, add and delete profiles. Sections for a Settings form.
+/// Settings → General → Profiles: rename, recolor, add and delete profiles. A settings card.
 struct ProfileSettingsSections: View {
     @ObservedObject private var profileManager = ProfileManager.shared
     @State private var pendingDelete: BrowserProfile?
 
     var body: some View {
-        Group {
-            Section {
-                ForEach(profileManager.profiles) { profile in
-                    ProfileRow(
-                        profile: profile,
-                        canDelete: profileManager.profiles.count > 1,
-                        onDelete: { pendingDelete = profile }
-                    )
-                }
-            } header: {
-                Text("Profiles")
-            } footer: {
-                Text("Each profile keeps its own cookies, logins, history, tabs and AI chats, like a separate browser.")
-                    .foregroundStyle(.secondary)
+        SettingsCard("Profiles",
+                     footer: "Each profile keeps its own cookies, logins, history, tabs and AI chats, like a separate browser.") {
+            ForEach(profileManager.profiles) { profile in
+                ProfileRow(
+                    profile: profile,
+                    canDelete: profileManager.profiles.count > 1,
+                    onDelete: { pendingDelete = profile }
+                )
             }
-
-            Section {
+            SettingsRow("Add a profile", subtitle: "A separate browser with its own data.") {
                 Button("Add Profile…") {
                     _ = ProfileActions.createProfile(manager: profileManager)
                 }
@@ -59,18 +52,18 @@ private struct ProfileRow: View {
             TextField("Name", text: $name, prompt: Text("Name"))
                 .labelsHidden()
                 .textFieldStyle(.plain)
+                .font(.system(size: 13))
                 .multilineTextAlignment(.leading)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .onSubmit(commitName)
                 .onAppear { name = profile.name }
                 .onChange(of: profile.name) { _, new in name = new }
             ProfileIconPicker(profile: profile)
-            LunaPicker("Color", selection: Binding(
+            SettingsDropdown(title: "Color", selection: Binding(
                 get: { profile.colorId },
                 set: { profileManager.recolor(profileId: profile.id, colorId: $0) }
-            ), options: ProfileColor.presets.map { .init($0.id, $0.id.capitalized, image: ProfileAvatar.swatch($0)) })
-            .labelsHidden()
-            .fixedSize()
+            ), options: ProfileColor.presets.map { .init($0.id, $0.id.capitalized, image: ProfileAvatar.swatch($0)) },
+               minWidth: 110)
             Button(role: .destructive, action: onDelete) {
                 Image(systemName: "trash")
             }
@@ -78,6 +71,7 @@ private struct ProfileRow: View {
             .disabled(!canDelete)
             .help(canDelete ? "Delete Profile" : "Luna needs at least one profile")
         }
+        .settingsRowPadding()
         .onDisappear(perform: commitName)
         .alert("Can't rename profile", isPresented: Binding(get: { nameError != nil }, set: { if !$0 { nameError = nil } })) {
             Button("OK", role: .cancel) {}

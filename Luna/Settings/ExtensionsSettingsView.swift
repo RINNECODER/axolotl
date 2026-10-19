@@ -12,65 +12,65 @@ struct ExtensionsSettingsView: View {
     @State private var pendingRemove: ExtensionLibrary.Record?
 
     var body: some View {
-        Form {
-            Section {
-                HStack {
-                    TextField("Chrome Web Store link", text: $storeLink,
-                              prompt: Text("https://chromewebstore.google.com/detail/…"))
-                        .onSubmit(installFromStore)
-                    Button("Install", action: installFromStore)
-                        .disabled(busy || ExtensionLibrary.storeID(in: storeLink) == nil)
+        Group {
+            SettingsCard("Add", footer: "Luna runs Chrome, Firefox and Safari web extensions (Manifest V2 and V3) with WebKit. Some Chrome-only features may not work, and extensions that need a companion app, like iCloud Passwords, can't connect.") {
+                SettingsContentRow {
+                    HStack(spacing: 10) {
+                        TextField("Chrome Web Store link", text: $storeLink,
+                                  prompt: Text(verbatim: "https://chromewebstore.google.com/detail/…"))
+                            .textFieldStyle(SettingsTextFieldStyle())
+                            .onSubmit(installFromStore)
+                        Button("Install", action: installFromStore)
+                            .buttonStyle(.settingsProminent)
+                            .disabled(busy || ExtensionLibrary.storeID(in: storeLink) == nil)
+                    }
                 }
-                Button("Install from File or Folder…") { choosingFile = true }
-                    .disabled(busy)
+                SettingsRow("Install from file or folder", subtitle: "A .crx, .xpi, .zip or an unpacked extension folder.") {
+                    Button("Choose…") { choosingFile = true }
+                        .disabled(busy)
+                        .accessibilityLabel("Install from File or Folder…")
+                }
                 if busy {
-                    HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Installing…").foregroundStyle(.secondary) }
+                    SettingsContentRow {
+                        HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Installing…").foregroundStyle(.secondary) }
+                    }
                 }
-                if let status { Text(status).font(.callout) }
-                Text("Luna runs Chrome, Firefox and Safari web extensions (Manifest V2 and V3) with WebKit. Some Chrome-only features may not work, and extensions that need a companion app, like iCloud Passwords, can't connect.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } header: {
-                Text("Add")
+                if let status { SettingsNoteRow(status) }
             }
 
-            Section {
+            SettingsCard("Installed", footer: "uBlock Origin Lite by Raymond Hill blocks ads and trackers. It's bundled with Luna under the GPL-3.0 license (source: github.com/uBlockOrigin/uBOL-home).") {
                 if library.records.isEmpty {
-                    Text("No extensions installed.").foregroundStyle(.secondary)
+                    SettingsNoteRow("No extensions installed.")
                 }
                 ForEach(library.records) { record in
-                    HStack(spacing: 10) {
+                    HStack(spacing: 12) {
                         ExtensionIcon(directory: library.directory(for: record))
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(record.name)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(record.name).font(.system(size: 13))
                             Text(record.builtInID != nil ? "Version \(record.version) · Built into Luna" : "Version \(record.version)")
-                                .font(.callout).foregroundStyle(.secondary)
+                                .font(.system(size: 11.5)).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Toggle("Enabled", isOn: Binding(get: { record.enabled }, set: { library.setEnabled(record, $0) }))
-                            .labelsHidden()
-                            .toggleStyle(.switch)
                         Button(role: .destructive) { pendingRemove = record } label: { Image(systemName: "trash") }
                             .buttonStyle(.borderless)
                             .help("Remove")
                             .accessibilityLabel("Remove extension")
+                        Toggle("Enabled", isOn: Binding(get: { record.enabled }, set: { library.setEnabled(record, $0) }))
+                            .labelsHidden()
+                            .toggleStyle(SettingsSwitchToggleStyle())
                     }
+                    .settingsRowPadding()
                 }
                 if !(UserDefaults.standard.stringArray(forKey: ExtensionLibrary.removedBuiltInsKey) ?? []).isEmpty {
-                    Button("Restore Built-in Extensions") {
-                        UserDefaults.standard.removeObject(forKey: ExtensionLibrary.removedBuiltInsKey)
-                        library.installBuiltIns()
+                    SettingsRow("Built-in extensions", subtitle: "Bring back the extensions Luna ships with.") {
+                        Button("Restore Built-in Extensions") {
+                            UserDefaults.standard.removeObject(forKey: ExtensionLibrary.removedBuiltInsKey)
+                            library.installBuiltIns()
+                        }
                     }
                 }
-            } header: {
-                Text("Installed")
-            } footer: {
-                Text("uBlock Origin Lite by Raymond Hill blocks ads and trackers. It's bundled with Luna under the GPL-3.0 license (source: github.com/uBlockOrigin/uBOL-home).")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
         .fileImporter(isPresented: $choosingFile,
                       allowedContentTypes: [.folder, .zip, UTType(filenameExtension: "crx") ?? .data, UTType(filenameExtension: "xpi") ?? .data]) { result in
             guard case .success(let url) = result else { return }

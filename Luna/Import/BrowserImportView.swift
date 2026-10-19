@@ -170,61 +170,23 @@ struct BrowserImportView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Form {
-                Section {
-                    BrowserCardGrid(browsers: model.browsers, selected: model.onePasswordSelected ? nil : model.selectedKind,
-                                    onePasswordSelected: model.onePasswordSelected,
-                                    onSelect: { model.select($0) },
-                                    onSelectOnePassword: { model.select(nil); model.onePasswordSelected = true })
-                    if model.browsers.isEmpty {
-                        Text("No other browsers found. You can still import a bookmarks file exported from any browser.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Import from")
-                } footer: {
-                    if model.isFixtureMode {
-                        Text("Debug: reading synthetic fixtures; importing into a throwaway profile.")
-                            .font(.caption).foregroundStyle(.orange)
-                    }
-                }
-
-                if model.onePasswordSelected {
-                    OnePasswordImportSection(lunaProfileId: model.targetProfile(lunaProfileId), isFixtureMode: model.isFixtureMode)
-                } else if let browser = model.selected {
-                    selectedSection(browser)
-                }
-
-                Section {
-                    Button("Choose Bookmarks File…") { pickingHTML = true }
-                    Text("Any browser can export bookmarks as an HTML file (Safari: File → Export → Bookmarks…). Pick that file to import it.")
-                        .font(.callout).foregroundStyle(.secondary)
-                } header: {
-                    Text("Bookmarks file")
-                }
-
-                if !model.isFixtureMode {
-                    Section {
-                        Picker("Import into", selection: $lunaProfileId) {
-                            ForEach(profileManager.profiles) { p in
-                                Label { Text(p.name) } icon: { Image(nsImage: ProfileAvatar.image(for: p, size: 16)) }.tag(p.id)
-                            }
-                        }
-                    } footer: {
-                        Text("Bookmarks appear as a pinned folder in the sidebar. History shows up in History and address bar suggestions.")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .formStyle(.grouped)
-
             if let onDone {
+                // A sheet: its own scrolling page and a Done button.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 22) { cards }
+                        .padding(24)
+                }
+                .background(SettingsStyle.page)
+                .settingsControlStyles()
                 Divider()
                 HStack {
                     Spacer()
                     Button("Done", action: onDone).keyboardShortcut(.defaultAction)
                 }
                 .padding(12)
+            } else {
+                // Embedded in a settings page, which scrolls.
+                VStack(alignment: .leading, spacing: 22) { cards }
             }
         }
         .onAppear {
@@ -249,62 +211,95 @@ struct BrowserImportView: View {
     }
 
     @ViewBuilder
+    private var cards: some View {
+        SettingsCard("Import from", footer: model.isFixtureMode
+                     ? "Debug: reading synthetic fixtures; importing into a throwaway profile." : nil) {
+            SettingsContentRow {
+                BrowserCardGrid(browsers: model.browsers, selected: model.onePasswordSelected ? nil : model.selectedKind,
+                                onePasswordSelected: model.onePasswordSelected,
+                                onSelect: { model.select($0) },
+                                onSelectOnePassword: { model.select(nil); model.onePasswordSelected = true })
+            }
+            if model.browsers.isEmpty {
+                SettingsNoteRow("No other browsers found. You can still import a bookmarks file exported from any browser.")
+            }
+        }
+
+        if model.onePasswordSelected {
+            OnePasswordImportSection(lunaProfileId: model.targetProfile(lunaProfileId), isFixtureMode: model.isFixtureMode)
+        } else if let browser = model.selected {
+            selectedSection(browser)
+        }
+
+        SettingsCard("Bookmarks file") {
+            SettingsRow("Bookmarks file", subtitle: "Any browser can export bookmarks as an HTML file (Safari: File → Export → Bookmarks…). Pick that file to import it.") {
+                Button("Choose Bookmarks File…") { pickingHTML = true }
+            }
+        }
+
+        if !model.isFixtureMode {
+            SettingsCard(footer: "Bookmarks appear as a pinned folder in the sidebar. History shows up in History and address bar suggestions.") {
+                SettingsMenuRow("Import into", selection: $lunaProfileId, options: profileManager.profiles.map {
+                    .init($0.id, $0.name, image: ProfileAvatar.image(for: $0, size: 16))
+                })
+            }
+        }
+    }
+
+    @ViewBuilder
     private func selectedSection(_ browser: DetectedBrowser) -> some View {
         let access = model.hasAccess(browser)
-        Section {
+        SettingsCard(browser.kind.displayName) {
             if browser.kind == .safari && !access {
-                Text("macOS protects Safari's data, so Luna can only read it with Full Disk Access (System Settings → Privacy & Security). The easier way: in Safari choose File → Export → Bookmarks…, then use Choose Bookmarks File below.")
-                    .font(.callout).foregroundStyle(.secondary)
-                Button("Try Safari Folder Access…") { model.requestAccess() }
+                SettingsRow("Safari's data is protected", subtitle: "macOS protects Safari's data, so Luna can only read it with Full Disk Access (System Settings → Privacy & Security). The easier way: in Safari choose File → Export → Bookmarks…, then use Choose Bookmarks File below.") {
+                    Button("Try Safari Folder Access…") { model.requestAccess() }
+                }
             } else if !access {
-                Text("Luna is sandboxed, so macOS asks you once to let it read \(browser.kind.displayName)'s data folder. The folder is preselected; just click Allow Access.")
-                    .font(.callout).foregroundStyle(.secondary)
-                Button("Allow Access…") { model.requestAccess() }
-                    .buttonStyle(.borderedProminent)
+                SettingsRow("Allow access", subtitle: "Luna is sandboxed, so macOS asks you once to let it read \(browser.kind.displayName)'s data folder. The folder is preselected; just click Allow Access.") {
+                    Button("Allow Access…") { model.requestAccess() }
+                        .buttonStyle(.settingsProminent)
+                }
             } else {
                 if browser.profiles.count > 1 {
-                    Picker("Profile", selection: $model.profileId) {
-                        ForEach(browser.profiles) { Text($0.name).tag($0.id) }
-                    }
+                    SettingsMenuRow("Profile", selection: $model.profileId,
+                                    options: browser.profiles.map { .init($0.id, $0.name) })
                 }
-                Toggle("Bookmarks", isOn: binding(.bookmarks))
+                SettingsToggleRow("Bookmarks", isOn: binding(.bookmarks))
                 if browser.kind != .safari {
-                    Toggle("History", isOn: binding(.history))
+                    SettingsToggleRow("History", isOn: binding(.history))
                 }
-                Toggle("Keep in sync", isOn: $model.keepInSync)
-                    .help("Re-import new bookmarks and history each time Luna starts.")
-                HStack {
-                    Button("Import") { model.runImport(into: lunaProfileId) }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(model.running || model.types.subtracting([.passwords]).isEmpty || browser.profiles.isEmpty)
-                    if model.running { ProgressView().controlSize(.small).padding(.leading, 6) }
-                    Spacer()
+                SettingsToggleRow("Keep in sync", subtitle: "Re-import new bookmarks and history each time Luna starts.",
+                                  isOn: $model.keepInSync)
+                SettingsContentRow {
+                    HStack {
+                        Spacer()
+                        if model.running { ProgressView().controlSize(.small).padding(.trailing, 6) }
+                        Button("Import") { model.runImport(into: lunaProfileId) }
+                            .buttonStyle(.settingsProminent)
+                            .disabled(model.running || model.types.subtracting([.passwords]).isEmpty || browser.profiles.isEmpty)
+                    }
                 }
             }
             if let summary = model.summary {
-                Label(summary, systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                SettingsContentRow {
+                    Label(summary, systemImage: "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.green)
+                }
             }
             if let error = model.error {
-                Text(error).font(.callout).foregroundStyle(.red)
+                SettingsNoteRow(error, isError: true)
             }
-        } header: {
-            Text(browser.kind.displayName)
         }
         .onChange(of: model.selectedKind) { _, _ in model.keepInSync = model.syncEnabled(lunaProfileId) }
         .onChange(of: model.keepInSync) { _, on in model.setSync(on, lunaProfileId) }
         .onAppear { model.keepInSync = model.syncEnabled(lunaProfileId) }
 
-        Section {
-            Text(browser.kind.passwordExportSteps)
-                .font(.callout).foregroundStyle(.secondary)
-            Button("Choose Passwords CSV…") { pickingCSV = true }
-            if let passwordStatus { Text(passwordStatus).font(.callout) }
-        } header: {
-            Text("Passwords")
-        } footer: {
-            Text("Delete the CSV after importing; it isn't encrypted.")
-                .font(.caption).foregroundStyle(.secondary)
+        SettingsCard("Passwords", footer: "Delete the CSV after importing; it isn't encrypted.") {
+            SettingsRow("Passwords CSV", subtitle: browser.kind.passwordExportSteps) {
+                Button("Choose Passwords CSV…") { pickingCSV = true }
+            }
+            if let passwordStatus { SettingsNoteRow(passwordStatus) }
         }
     }
 

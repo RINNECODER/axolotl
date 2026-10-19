@@ -5,14 +5,11 @@ import SwiftUI
 /// features, computer use and grabbed keys.
 struct ModelsSettingsView: View {
     var body: some View {
-        Form {
-            AIProviderSections()
-            AIPanelSection()
-            LunaMaxSections()
-            ComputerUseSection()
-            GrabbedKeysSection()
-        }
-        .formStyle(.grouped)
+        AIProviderSections()
+        AIPanelSection()
+        LunaMaxSections()
+        ComputerUseSection()
+        GrabbedKeysSection()
     }
 }
 
@@ -26,12 +23,9 @@ struct AIProviderSections: View {
 
     var body: some View {
         Group {
-            Section {
-                LunaPicker("Provider", selection: provider,
-                           options: AIProvider.allCases.map { .init($0, $0.displayName) })
-                Text(provider.wrappedValue.detail)
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+            SettingsCard("Provider") {
+                SettingsMenuRow("Provider", subtitle: provider.wrappedValue.detail, selection: provider,
+                                options: AIProvider.allCases.map { .init($0, $0.displayName) })
             }
 
             switch provider.wrappedValue {
@@ -53,42 +47,39 @@ private struct ChatGPTSection: View {
     @State private var error: String?
 
     var body: some View {
-        Section("ChatGPT account") {
+        SettingsCard("ChatGPT account", footer: "Requires ChatGPT Plus or Pro. Requests count against your plan, up to a weekly limit you set in ChatGPT. Luna never sees your password or your ChatGPT conversations.") {
             if let creds = auth.credentials {
-                LabeledContent("Signed in as") {
-                    Text(creds.email.isEmpty ? (creds.name ?? "ChatGPT user") : creds.email)
-                }
-                Button("Sign Out", role: .destructive) {
-                    Task {
-                        let revoked = await auth.signOut()
-                        error = revoked ? nil : "Signed out on this Mac. OpenAI didn't confirm revoking access; you can disconnect Luna in ChatGPT settings."
+                SettingsRow("Signed in as", subtitle: creds.email.isEmpty ? (creds.name ?? "ChatGPT user") : creds.email,
+                            icon: "person.crop.circle") {
+                    Button("Sign Out", role: .destructive) {
+                        Task {
+                            let revoked = await auth.signOut()
+                            error = revoked ? nil : "Signed out on this Mac. OpenAI didn't confirm revoking access; you can disconnect Luna in ChatGPT settings."
+                        }
                     }
                 }
             } else if auth.isSigningIn {
-                HStack(spacing: 8) {
+                SettingsRow("Finish signing in in your browser…") {
                     ProgressView().controlSize(.small)
-                    Text("Finish signing in in your browser…").foregroundStyle(.secondary)
-                    Spacer()
                     Button("Cancel") { auth.cancelSignIn() }
                 }
             } else {
-                Button("Sign in with ChatGPT") {
-                    error = nil
-                    Task {
-                        do { try await auth.signIn() } catch { self.error = error.localizedDescription }
+                SettingsRow("ChatGPT", subtitle: "Use your ChatGPT plan in Luna.") {
+                    Button("Sign in with ChatGPT") {
+                        error = nil
+                        Task {
+                            do { try await auth.signIn() } catch { self.error = error.localizedDescription }
+                        }
                     }
+                    .buttonStyle(.settingsProminent)
                 }
-                .buttonStyle(.borderedProminent)
             }
             if let error {
-                Text(error).font(.callout).foregroundStyle(.red)
+                SettingsNoteRow(error, isError: true)
             }
-            Text("Requires ChatGPT Plus or Pro. Requests count against your plan, up to a weekly limit you set in ChatGPT. Luna never sees your password or your ChatGPT conversations.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
         if auth.isSignedIn {
-            Section("Model") {
+            SettingsCard("Model") {
                 ModelPicker(selection: $model) {
                     try await ModelCatalog.load(.chatgpt)
                 }
@@ -103,14 +94,13 @@ private struct AnthropicSection: View {
     @AppStorage(ModelPrefs.anthropicModel) private var model = ModelPrefs.defaultAnthropicModel
 
     var body: some View {
-        Section("Anthropic API key") {
+        SettingsCard("Anthropic API key", footer: "Anthropic doesn't offer sign-in for other apps, so Luna uses an API key. Usage is billed to your Console account.") {
             APIKeyField(account: .anthropicKey, placeholder: "sk-ant-…")
-            Link("Get an API key from the Claude Console", destination: URL(string: "https://console.anthropic.com/settings/keys")!)
-            Text("Anthropic doesn't offer sign-in for other apps, so Luna uses an API key. Usage is billed to your Console account.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+            SettingsLinkRow("Get an API key from the Claude Console", external: true) {
+                NSWorkspace.shared.open(URL(string: "https://console.anthropic.com/settings/keys")!)
+            }
         }
-        Section("Model") {
+        SettingsCard("Model") {
             ModelPicker(selection: $model) {
                 try await ModelCatalog.load(.anthropic)
             }
@@ -122,11 +112,13 @@ private struct OpenAISection: View {
     @AppStorage(ModelPrefs.openaiModel) private var model = ""
 
     var body: some View {
-        Section("OpenAI API key") {
+        SettingsCard("OpenAI API key") {
             APIKeyField(account: .openAIKey, placeholder: "sk-…")
-            Link("Get an API key from the OpenAI platform", destination: URL(string: "https://platform.openai.com/api-keys")!)
+            SettingsLinkRow("Get an API key from the OpenAI platform", external: true) {
+                NSWorkspace.shared.open(URL(string: "https://platform.openai.com/api-keys")!)
+            }
         }
-        Section("Model") {
+        SettingsCard("Model") {
             ModelPicker(selection: $model) {
                 try await ModelCatalog.load(.openai)
             }
@@ -136,9 +128,11 @@ private struct OpenAISection: View {
 
 private struct GeminiSection: View {
     var body: some View {
-        Section("Gemini API key") {
+        SettingsCard("Gemini API key") {
             APIKeyField(account: .geminiKey, placeholder: "AIza…")
-            Link("Get an API key from Google AI Studio", destination: URL(string: "https://aistudio.google.com/apikey")!)
+            SettingsLinkRow("Get an API key from Google AI Studio", external: true) {
+                NSWorkspace.shared.open(URL(string: "https://aistudio.google.com/apikey")!)
+            }
         }
     }
 }
@@ -148,7 +142,7 @@ private struct OllamaSection: View {
     @AppStorage(ModelPrefs.ollamaModel) private var model = ""
 
     var body: some View {
-        Section("Ollama") {
+        SettingsCard("Ollama") {
             OllamaServerPicker(baseURL: $baseURL)
             ModelPicker(selection: $model) {
                 try await ModelCatalog.load(.ollama)
@@ -169,7 +163,7 @@ private struct OllamaServerPicker: View {
 
     var body: some View {
         let servers = detected + (detected.contains(baseURL) || baseURL.isEmpty ? [] : [baseURL])
-        LunaPicker("Server", subtitle: searched && detected.isEmpty ? "No running Ollama found on this Mac. Start Ollama, or choose Custom…" : nil,
+        SettingsMenuRow("Server", subtitle: searched && detected.isEmpty ? "No running Ollama found on this Mac. Start Ollama, or choose Custom…" : nil,
                    selection: Binding(get: { editingCustom ? Self.customTag : baseURL },
                                       set: { value in
                                           if value == Self.customTag { draft = baseURL; editingCustom = true }
@@ -181,11 +175,14 @@ private struct OllamaServerPicker: View {
                 searched = true
             }
         if editingCustom {
-            HStack {
-                TextField("Server URL", text: $draft, prompt: Text(OllamaDiscovery.defaultURL))
-                    .autocorrectionDisabled()
-                    .onSubmit(applyCustom)
-                Button("Use", action: applyCustom).disabled(URL(string: draft)?.host == nil)
+            SettingsContentRow {
+                HStack {
+                    TextField("Server URL", text: $draft, prompt: Text(OllamaDiscovery.defaultURL))
+                        .textFieldStyle(SettingsTextFieldStyle())
+                        .autocorrectionDisabled()
+                        .onSubmit(applyCustom)
+                    Button("Use", action: applyCustom).disabled(URL(string: draft)?.host == nil)
+                }
             }
         }
     }
@@ -232,8 +229,8 @@ private struct AIPanelSection: View {
     @AppStorage("luma_ai_panel_font_size") private var fontSize: Int = 13
 
     var body: some View {
-        Section("AI panel") {
-            LabeledContent(RegistrySettings.setting("aiPanel.fontSize").title) {
+        SettingsCard("AI panel") {
+            SettingsRow(RegistrySettings.setting("aiPanel.fontSize").title) {
                 HStack {
                     Slider(value: Binding(get: { Double(fontSize) }, set: { fontSize = Int($0.rounded()) }),
                            in: 10...24, step: 1)
@@ -251,20 +248,13 @@ private struct AIPanelSection: View {
 /// Luna Max: AI features in the browser itself.
 private struct LunaMaxSections: View {
     var body: some View {
-        Section {
+        SettingsCard("Luna Max") {
             RegistryToggle("lunaMax.askOnPage")
             RegistryToggle("lunaMax.linkPreviews")
-        } header: {
-            Text("Luna Max")
         }
-        Section {
+        SettingsCard("Luna Max: automatic", footer: "Automatic features send tab titles or file names to your AI provider. Tidy Today is always in the ✦ button on the sidebar's Today divider.") {
             RegistryToggle("lunaMax.tidyTitles")
             RegistryToggle("lunaMax.tidyDownloads")
-        } header: {
-            Text("Luna Max: automatic")
-        } footer: {
-            Text("Automatic features send tab titles or file names to your AI provider. Tidy Today is always in the ✦ button on the sidebar's Today divider.")
-                .foregroundStyle(.secondary)
         }
     }
 }
@@ -277,7 +267,7 @@ private struct ComputerUseSection: View {
     @AppStorage(JevClient.modelDefaultsKey) private var model = JevClient.defaultModel
 
     var body: some View {
-        Section("Computer use (Jev)") {
+        SettingsCard("Computer use (Jev)", footer: "Choose Agent in the AI panel composer (or type /agent and a goal) to let Luna operate the current tab. With a TypeSafe key, Jev picks each step; without one, your chat model does and also writes any typed values.") {
             APIKeyField(account: .typesafeKey, placeholder: "TypeSafe API key")
             ModelPicker(selection: $model) {
                 guard let key = KeychainManager.shared.string(for: .typesafeKey), !key.isEmpty else {
@@ -285,9 +275,6 @@ private struct ComputerUseSection: View {
                 }
                 return try await JevClient.listModels(apiKey: key)
             }
-            Text("Choose Agent in the AI panel composer (or type /agent and a goal) to let Luna operate the current tab. With a TypeSafe key, Jev picks each step; without one, your chat model does and also writes any typed values.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
     }
 }
@@ -300,21 +287,13 @@ private struct GrabbedKeysSection: View {
     @State private var copied: String?
 
     var body: some View {
-        Section("API keys grabbed by Luna") {
+        SettingsCard("API keys grabbed by Luna", footer: "Saved in Keychain Access under “\(SecretVault.defaultService)”. The agent and outside agents never see the values.") {
             if items.isEmpty {
-                Text("None yet. Choose Grab key in the AI panel composer and pick a service.")
-                    .font(.callout).foregroundStyle(.secondary)
+                SettingsNoteRow("None yet. Choose Grab key in the AI panel composer and pick a service.")
             }
             ForEach(items) { item in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(item.account)
-                        if let created = item.created {
-                            Text(created.formatted(date: .abbreviated, time: .shortened))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                    Spacer()
+                SettingsRow(item.account, subtitle: item.created?.formatted(date: .abbreviated, time: .shortened),
+                            icon: "key") {
                     if copied == item.account { Text("Copied").font(.caption).foregroundStyle(.secondary) }
                     Button("Copy") { if SecretVault.shared.copy(account: item.account) { copied = item.account } }
                     Button("Delete", role: .destructive) {
@@ -323,9 +302,7 @@ private struct GrabbedKeysSection: View {
                     }
                 }
             }
-            Toggle("Clear the clipboard \(Int(SecretVault.autoClearSeconds)) s after copying a key", isOn: $autoClear)
-            Text("Saved in Keychain Access under “\(SecretVault.defaultService)”. The agent and outside agents never see the values.")
-                .font(.callout).foregroundStyle(.secondary)
+            SettingsToggleRow("Clear the clipboard \(Int(SecretVault.autoClearSeconds)) s after copying a key", isOn: $autoClear)
         }
         .onAppear(perform: reload)
     }
@@ -347,18 +324,17 @@ struct APIKeyField: View {
     var body: some View {
         Group {
             if hasKey {
-                LabeledContent("API key") {
-                    HStack {
-                        Text("Saved in Keychain").foregroundStyle(.secondary)
-                        Button("Remove", role: .destructive) {
-                            try? KeychainManager.shared.delete(account)
-                            hasKey = false
-                        }
+                SettingsRow("API key", subtitle: "Saved in Keychain", icon: "checkmark.seal.fill") {
+                    Button("Remove", role: .destructive) {
+                        try? KeychainManager.shared.delete(account)
+                        hasKey = false
                     }
                 }
             } else {
-                HStack {
+                SettingsRow("API key") {
                     SecureField("API key", text: $input, prompt: Text(placeholder))
+                        .textFieldStyle(SettingsTextFieldStyle())
+                        .frame(width: 260)
                     Button("Save") {
                         let key = input.trimmingCharacters(in: .whitespacesAndNewlines)
                         do {
@@ -373,7 +349,7 @@ struct APIKeyField: View {
                     .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
-            if let status { Text(status).font(.callout).foregroundStyle(.red) }
+            if let status { SettingsNoteRow(status, isError: true) }
         }
         .onAppear { hasKey = KeychainManager.shared.data(for: account) != nil }
     }
@@ -395,10 +371,10 @@ private struct ModelPicker: View {
     }
 
     var body: some View {
-        HStack {
-            LunaPicker("Model", selection: $selection,
-                       options: (selection.isEmpty ? [.init("", "Choose a model")] : [])
-                           + options.map { .init($0.id, $0.name) })
+        SettingsRow("Model") {
+            SettingsDropdown(title: "Model", selection: $selection,
+                             options: (selection.isEmpty ? [.init("", "Choose a model")] : [])
+                                 + options.map { .init($0.id, $0.name) })
             Button {
                 Task { await refresh() }
             } label: {
@@ -411,7 +387,7 @@ private struct ModelPicker: View {
         }
         .task { await refresh() }
         if let error {
-            Text(error).font(.callout).foregroundStyle(.secondary)
+            SettingsNoteRow(error)
         }
     }
 

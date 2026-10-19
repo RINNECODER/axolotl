@@ -13,7 +13,10 @@ struct WallpaperSettingsSection: View {
     private let columns = [GridItem(.adaptive(minimum: 104, maximum: 132), spacing: 12)]
 
     var body: some View {
-        Section {
+        SettingsCard("Wallpaper", footer: store.preset != .none
+                     ? "Wallpapers draw only while a start page is on screen, and hold still with Reduce Motion or Low Power Mode."
+                     : nil) {
+            SettingsContentRow {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                 ForEach(WallpaperPreset.allCases) { preset in
                     WallpaperTile(preset: preset,
@@ -26,24 +29,13 @@ struct WallpaperSettingsSection: View {
             }
             .padding(.vertical, 4)
             .background(alignment: .topLeading) { if !staticPreviews { thumbnails.host } }
-
-            Picker(selection: $store.moonStyle) {
-                ForEach(MoonStyle.allCases) { Text($0.title).tag($0) }
-            } label: {
-                Text("Moon style")
-                Text("Shader draws a softly lit moon with the GPU.")
             }
+
+            SettingsMenuRow("Moon style", subtitle: "Shader draws a softly lit moon with the GPU.",
+                            selection: $store.moonStyle, options: MoonStyle.allCases.map { .init($0, $0.title) })
 
             if store.preset != .none {
                 styleControls(for: store.preset)
-            }
-        } header: {
-            Text("Wallpaper")
-        } footer: {
-            if store.preset != .none {
-                Text("Wallpapers draw only while a start page is on screen, and hold still with Reduce Motion or Low Power Mode.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
         .onAppear { if !staticPreviews { thumbnails.render(store: store) } }
@@ -61,7 +53,7 @@ struct WallpaperSettingsSection: View {
         let style = Binding(get: { store.style(for: preset) },
                             set: { store.setStyle($0, for: preset) })
 
-        LabeledContent("Palette") {
+        SettingsRow("Palette") {
             HStack(spacing: 8) {
                 ForEach(WallpaperPalette.all) { palette in
                     SwatchButton(colors: [palette.base, palette.mid, palette.high],
@@ -72,7 +64,7 @@ struct WallpaperSettingsSection: View {
                 }
             }
         }
-        LabeledContent("Accent") {
+        SettingsRow("Accent") {
             HStack(spacing: 8) {
                 ForEach(WallpaperAccent.all) { accent in
                     SwatchButton(colors: [accent.hex], name: accent.name,
@@ -89,21 +81,18 @@ struct WallpaperSettingsSection: View {
         sliderRow("Dim", value: style.dim, in: WallpaperStyle.dimRange,
                   label: { "\(Int(($0 * 100).rounded()))%" })
 
-        Toggle(isOn: $store.showMoon) {
-            Text("Show moon on top")
-            Text("Keep the moon above the greeting while a wallpaper is on.")
+        SettingsToggleRow("Show moon on top", subtitle: "Keep the moon above the greeting while a wallpaper is on.",
+                          isOn: $store.showMoon)
+        SettingsMenuRow("Frame rate", selection: $store.frameRate, options: [.init(30, "30 fps"), .init(60, "60 fps")])
+        SettingsRow("Reset \(preset.title)", subtitle: "Back to this wallpaper's default look.") {
+            Button("Reset") { store.resetStyle(for: preset) }
+                .disabled(store.style(for: preset) == preset.defaultStyle)
         }
-        Picker("Frame rate", selection: $store.frameRate) {
-            Text("30 fps").tag(30)
-            Text("60 fps").tag(60)
-        }
-        Button("Reset \(preset.title)") { store.resetStyle(for: preset) }
-            .disabled(store.style(for: preset) == preset.defaultStyle)
     }
 
     private func sliderRow(_ title: String, value: Binding<Double>, in range: ClosedRange<Double>,
                            label: @escaping (Double) -> String) -> some View {
-        LabeledContent(title) {
+        SettingsRow(title) {
             HStack {
                 Slider(value: value, in: range)
                     .frame(width: 200)

@@ -16,65 +16,48 @@ struct DevSettingsView: View {
     private var supported: [AgentCLIKind] { AgentCLIKind.allCases }
 
     var body: some View {
-        Form {
+        Group {
             ConnectAgentsSection()
             DeveloperToolsSection()
             RecentAIChangesSection()
-            Section {
-                if harnesses.isEmpty {
-                    HStack(spacing: 8) {
-                        if scanning { ProgressView().controlSize(.small) }
-                        Text(scanning ? "Looking for coding-agent CLIs…" : "No coding-agent CLIs found on your PATH.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                ForEach(harnesses) { harnessRow($0) }
-                if let pathError {
-                    Text(pathError).font(.callout).foregroundStyle(.red)
-                }
-            } header: {
-                HStack {
-                    Text("Harnesses")
-                    Spacer()
+            SettingsCard("Harnesses", footer: "Dev mode runs these CLIs on this Mac with your own login. Unsupported harnesses are listed so you know Luna found them.") {
+                SettingsRow(scanning ? "Looking for coding-agent CLIs…"
+                            : harnesses.isEmpty ? "No coding-agent CLIs found on your PATH." : "Coding-agent CLIs on this Mac") {
+                    if scanning { ProgressView().controlSize(.small) }
                     Button {
                         Task { await scan(refresh: true) }
                     } label: {
                         Label("Refresh", systemImage: "arrow.clockwise")
                     }
-                    .buttonStyle(.borderless)
-                    .controlSize(.small)
                     .disabled(scanning)
                 }
-            } footer: {
-                Text("Dev mode runs these CLIs on this Mac with your own login. Unsupported harnesses are listed so you know Luna found them.")
-                    .foregroundStyle(.secondary)
+                ForEach(harnesses) { harnessRow($0) }
+                if let pathError {
+                    SettingsNoteRow(pathError, isError: true)
+                }
             }
 
-            Section {
-                LabeledContent("Accent") {
+            SettingsCard("Dev chat appearance") {
+                SettingsRow("Accent") {
                     HStack(spacing: 8) {
                         ForEach(DevAccent.allCases, id: \.self) { accent in
                             accentSwatch(accent)
                         }
                     }
                 }
-                LunaSegmentedPicker("Density", selection: $settings.density,
+                SettingsSegmentedRow("Density", selection: $settings.density,
                                     options: DevDensity.allCases.map { .init($0, $0.rawValue.capitalized) })
-                LunaSegmentedPicker("Text size", selection: $settings.fontScale,
+                SettingsSegmentedRow("Text size", selection: $settings.fontScale,
                                     options: DevFontScale.allCases.map { .init($0, $0 == .small ? "S" : $0 == .medium ? "M" : "L") })
-                LunaSegmentedPicker("Timeline style", selection: $settings.timelineStyle,
+                SettingsSegmentedRow("Timeline style", selection: $settings.timelineStyle,
                                     options: DevTimelineStyle.allCases.map { .init($0, $0.rawValue.capitalized) })
-                Toggle(isOn: $settings.showToolDetails) {
-                    Text("Show tool details")
-                    Text("Show tool inputs and outputs in work rows.")
-                }
-            } header: {
-                Text("Dev chat appearance")
+                SettingsToggleRow("Show tool details", subtitle: "Show tool inputs and outputs in work rows.",
+                                  isOn: $settings.showToolDetails)
             }
 
-            Section {
+            SettingsCard("Projects", footer: "Projects come from your Claude Code and Codex sessions. Add folders to also find git repos in them.") {
                 if settings.projectSearchRoots.isEmpty {
-                    Text("No search folders added.").foregroundStyle(.secondary)
+                    SettingsNoteRow("No search folders added.")
                 }
                 ForEach(settings.projectSearchRoots, id: \.self) { root in
                     HStack {
@@ -91,7 +74,9 @@ struct DevSettingsView: View {
                         .help("Stop searching this folder")
                         .accessibilityLabel("Remove \((root as NSString).abbreviatingWithTildeInPath)")
                     }
+                    .settingsRowPadding(vertical: 8, minHeight: 40)
                 }
+                SettingsContentRow {
                 HStack(spacing: 8) {
                     Button("Add folder…") {
                         for path in pickFolders(multiple: true) { addSearchRoot(path) }
@@ -101,32 +86,24 @@ struct DevSettingsView: View {
                             .controlSize(.small)
                     }
                 }
-                Text("Projects come from your Claude Code and Codex sessions. Add folders to also find git repos in them.")
-                    .font(.caption).foregroundStyle(.secondary)
+                }
                 if settings.hiddenProjects.isEmpty {
-                    Text("No hidden projects. Hide one from the project menu.")
-                        .font(.caption).foregroundStyle(.secondary)
+                    SettingsNoteRow("No hidden projects. Hide one from the project menu.")
                 } else {
-                    LabeledContent("Hidden projects") { EmptyView() }
+                    SettingsRow("Hidden projects")
                     ForEach(settings.hiddenProjects.sorted(), id: \.self) { path in
-                        HStack {
-                            Text((path as NSString).abbreviatingWithTildeInPath)
-                                .lineLimit(1).truncationMode(.middle).help(path)
-                            Spacer()
-                            Button("Unhide") { settings.unhideProject(path) }.controlSize(.small)
+                        SettingsRow((path as NSString).abbreviatingWithTildeInPath) {
+                            Button("Unhide") { settings.unhideProject(path) }
                         }
+                        .help(path)
                     }
                 }
-            } header: {
-                Text("Projects")
             }
 
-            Section {
-                Toggle(isOn: $settings.skipHome) {
-                    Text("Skip home")
-                    Text("Open Dev straight into your last session, or a new one with the default setup.")
-                }
-                LabeledContent("Harness") {
+            SettingsCard("Home & default setup") {
+                SettingsToggleRow("Skip home", subtitle: "Open Dev straight into your last session, or a new one with the default setup.",
+                                  isOn: $settings.skipHome)
+                SettingsRow("Harness") {
                     dropdown(id: "setup-harness", items: installedHarnessItems,
                              selected: settings.defaultSetup.harness.harnessID.rawValue,
                              label: settings.defaultSetup.harness.displayName) { item in
@@ -138,9 +115,9 @@ struct DevSettingsView: View {
                         }
                     }
                 }
-                LabeledContent("Model") { setupModelDropdown }
+                SettingsRow("Model") { setupModelDropdown }
                 if let efforts = setupEfforts {
-                    LabeledContent("Effort") {
+                    SettingsRow("Effort") {
                         dropdown(id: "setup-effort",
                                  items: [DevDropdownItem(id: "", title: "Default")]
                                     + efforts.map { DevDropdownItem(id: $0, title: $0.capitalized) },
@@ -150,9 +127,9 @@ struct DevSettingsView: View {
                         }
                     }
                 }
-                LunaSegmentedPicker("Approval", selection: $settings.defaultSetup.approvalBehavior,
-                                    options: DevApprovalBehavior.allCases.map { .init($0, $0.displayName) })
-                LabeledContent("Project") {
+                SettingsSegmentedRow("Approval", selection: $settings.defaultSetup.approvalBehavior,
+                                     options: DevApprovalBehavior.allCases.map { .init($0, $0.displayName) })
+                SettingsRow("Project") {
                     HStack(spacing: 8) {
                         LunaSegmentedPicker("Project", selection: specificProjectBinding,
                                             options: [.init(false, "Last used"), .init(true, "Specific folder")])
@@ -168,27 +145,21 @@ struct DevSettingsView: View {
                         }
                     }
                 }
-            } header: {
-                Text("Home & default setup")
             }
 
-            Section {
+            SettingsCard("Default model per harness") {
                 ForEach(supported, id: \.self) { kind in
-                    LabeledContent {
+                    SettingsRow("Default \(kind.displayName) model", subtitle: modelCaption(kind)) {
                         modelDropdown(kind)
-                    } label: {
-                        Text("Default \(kind.displayName) model")
-                        Text(modelCaption(kind))
                     }
                 }
-            } header: {
-                Text("Default model per harness")
             }
 
-            Section {
-                LunaSegmentedPicker("Approvals", subtitle: approvalCaption, selection: $settings.approvalBehavior,
+            SettingsCard("Behavior") {
+                SettingsSegmentedRow("Approvals", subtitle: approvalCaption, selection: $settings.approvalBehavior,
                                     options: DevApprovalBehavior.allCases.map { .init($0, $0.displayName) })
                 if settings.approvalBehavior == .fullAuto {
+                    SettingsContentRow {
                     Label {
                         Text("Full auto runs every command and edit without asking: Claude Code uses bypassPermissions and Codex runs with no sandbox (danger-full-access). Only use it in projects you can afford to lose.")
                     } icon: {
@@ -198,31 +169,22 @@ struct DevSettingsView: View {
                     .padding(8)
                     .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
                     .accessibilityLabel("Warning: Full auto runs commands and edits without asking.")
+                    }
                 }
-                Toggle(isOn: $settings.autoWireBrowserTools) {
-                    Text("Luna browser tools")
-                    Text("Let sessions read and drive your tabs through Luna's MCP bridge, when it is on.")
-                }
-                Toggle(isOn: $settings.showTerminalByDefault) {
-                    Text("Open in Terminal view")
-                    Text("Show the raw CLI instead of the chat when Luna opens the Dev panel.")
-                }
-            } header: {
-                Text("Behavior")
+                SettingsToggleRow("Luna browser tools",
+                                  subtitle: "Let sessions read and drive your tabs through Luna's MCP bridge, when it is on.",
+                                  isOn: $settings.autoWireBrowserTools)
+                SettingsToggleRow("Open in Terminal view",
+                                  subtitle: "Show the raw CLI instead of the chat when Luna opens the Dev panel.",
+                                  isOn: $settings.showTerminalByDefault)
             }
 
-            Section {
-                Toggle(isOn: $settings.liveSyncEnabled) {
-                    Text("Live session sync")
-                    Text("Lists the Claude Code and Codex sessions you started in a terminal for the same project. A session that a terminal is still writing opens read-only, as a mirror; Take over continues it in Luna. If both keep writing, their histories diverge.")
-                }
-            } header: {
-                Text("Experimental")
+            SettingsCard("Experimental") {
+                SettingsToggleRow("Live session sync",
+                                  subtitle: "Lists the Claude Code and Codex sessions you started in a terminal for the same project. A session that a terminal is still writing opens read-only, as a mirror; Take over continues it in Luna. If both keep writing, their histories diverge.",
+                                  isOn: $settings.liveSyncEnabled)
             }
         }
-        .formStyle(.grouped)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .contentMargins(.bottom, 20, for: .scrollContent)
         .tint(p.primary)
         .task { await scan(refresh: false) }
     }
@@ -349,6 +311,7 @@ struct DevSettingsView: View {
                 }
             }
         }
+        .settingsRowPadding()
         .accessibilityElement(children: .contain)
     }
 

@@ -8,12 +8,9 @@ struct AgentsSettingsView: View {
         if DevMode.isDevBuild && DevMode.isAvailable {
             DevSettingsView()
         } else {
-            Form {
-                ConnectAgentsSection()
-                DeveloperToolsSection()
-                RecentAIChangesSection()
-            }
-            .formStyle(.grouped)
+            ConnectAgentsSection()
+            DeveloperToolsSection()
+            RecentAIChangesSection()
         }
     }
 }
@@ -23,16 +20,13 @@ struct DeveloperToolsSection: View {
     @AppStorage(WebViewWrapper.developerToolsKey) private var enabled = false
 
     var body: some View {
-        Section {
-            Toggle(isOn: $enabled) {
-                Text("Enable Developer Tools")
-                Text("Adds Inspect Element to the page's context menu. Applies to tabs opened after you turn it on.")
-            }
+        SettingsCard("Developer") {
+            SettingsToggleRow("Enable Developer Tools",
+                              subtitle: "Adds Inspect Element to the page's context menu. Applies to tabs opened after you turn it on.",
+                              isOn: $enabled)
             .onChange(of: enabled) { _, _ in
                 NotificationCenter.default.post(name: WebViewWrapper.developerToolsChangedNotification, object: nil)
             }
-        } header: {
-            Text("Developer")
         }
     }
 }
@@ -43,10 +37,9 @@ struct RecentAIChangesSection: View {
     @State private var undoError: String?
 
     var body: some View {
-        Section {
+        SettingsCard("Recent AI changes") {
             if log.entries.isEmpty {
-                Text("Changes your AI agent makes appear here, with Undo.")
-                    .foregroundStyle(.secondary)
+                SettingsNoteRow("Changes your AI agent makes appear here, with Undo.")
             } else {
                 ForEach(log.entries) { entry in
                     ChangeRow(entry: entry) {
@@ -54,8 +47,6 @@ struct RecentAIChangesSection: View {
                     }
                 }
             }
-        } header: {
-            Text("Recent AI changes")
         }
         .alert("Couldn't undo", isPresented: Binding(get: { undoError != nil }, set: { if !$0 { undoError = nil } })) {
             Button("OK", role: .cancel) {}
@@ -73,7 +64,7 @@ private struct ChangeRow: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(entry.lines.prefix(2), id: \.self) { line in
-                    Text(line.text).strikethrough(entry.undone).lineLimit(1)
+                    Text(line.text).font(.system(size: 13)).strikethrough(entry.undone).lineLimit(1)
                 }
                 if entry.lines.count > 2 {
                     Text("and \(entry.lines.count - 2) more").foregroundStyle(.secondary)
@@ -89,6 +80,7 @@ private struct ChangeRow: View {
                 Button("Undo", action: onUndo)
             }
         }
+        .settingsRowPadding()
         .accessibilityElement(children: .combine)
     }
 }
@@ -104,15 +96,12 @@ struct ConnectAgentsSection: View {
     @State private var confirmRegenerate = false
 
     var body: some View {
-        Section("Connect agents") {
-            Toggle(isOn: $enabled) {
-                Text("Let agents drive Luna")
-                Text("An MCP server for Claude Code, Codex and other agents, on this Mac only.")
-            }
+        SettingsCard("Connect agents", footer: "Outside agents get the same tools as /agent: tabs, navigate, snapshot, click, type, select, scroll, read, run_task and grab_api_key. Luna listens on 127.0.0.1 only and asks before an agent navigates, types, clicks or runs a task, once per agent session. For Codex, paste the config into ~/.codex/config.toml and set LUNA_MCP_TOKEN with the token export.") {
+            SettingsToggleRow("Let agents drive Luna",
+                              subtitle: "An MCP server for Claude Code, Codex and other agents, on this Mac only.", isOn: $enabled)
                 .onChange(of: enabled) { _, _ in bridge.applySettings() }
-            LabeledContent("Port") {
+            SettingsRow("Port", subtitle: String(port)) {
                 HStack(spacing: 8) {
-                    Text(String(port)).monospacedDigit().foregroundStyle(.secondary)
                     Button("Change…") { choosingPort = true }
                         .popover(isPresented: $choosingPort, arrowEdge: .bottom) {
                             MCPPortChooser(current: port) { chosen in
@@ -124,23 +113,20 @@ struct ConnectAgentsSection: View {
                         }
                 }
             }
-            LabeledContent("Status") { Text(statusText).foregroundStyle(statusIsError ? .red : .secondary) }
-            Toggle(isOn: $trusted) {
-                Text("Don't ask before agents act")
-                Text("Trusted: agents navigate, type, click and run tasks without asking.")
+            SettingsRow("Status") { Text(statusText).font(.system(size: 12)).foregroundStyle(statusIsError ? .red : .secondary) }
+            SettingsToggleRow("Don't ask before agents act",
+                              subtitle: "Trusted: agents navigate, type, click and run tasks without asking.", isOn: $trusted)
+            SettingsRow("Connect an agent", subtitle: copied.map { "Copied \($0)." } ?? "Copy a command or config for your agent.") {
+                Button("Claude Code") { copy(bridge.claudeCommand, "Claude Code command") }
+                    .accessibilityLabel("Copy Claude Code command")
+                Button("Codex config") { copy(bridge.codexConfig, "Codex config") }
+                    .accessibilityLabel("Copy Codex config")
+                Button("Token export") { copy(bridge.codexTokenExport, "token export") }
+                    .accessibilityLabel("Copy token export")
             }
-            HStack {
-                Button("Copy Claude Code command") { copy(bridge.claudeCommand, "Claude Code command") }
-                Button("Copy Codex config") { copy(bridge.codexConfig, "Codex config") }
-                Button("Copy token export") { copy(bridge.codexTokenExport, "token export") }
-            }
-            HStack {
+            SettingsRow("Token", subtitle: "Connected agents stop working until you give them a new one.") {
                 Button("Regenerate token", role: .destructive) { confirmRegenerate = true }
-                if let copied { Text("Copied \(copied).").font(.callout).foregroundStyle(.secondary) }
             }
-            Text("Outside agents get the same tools as /agent: tabs, navigate, snapshot, click, type, select, scroll, read, run_task and grab_api_key. Luna listens on 127.0.0.1 only and asks before an agent navigates, types, clicks or runs a task, once per agent session. For Codex, paste the config into ~/.codex/config.toml and set LUNA_MCP_TOKEN with the token export.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
         }
         .confirmationDialog("Regenerate the token?", isPresented: $confirmRegenerate) {
             Button("Regenerate", role: .destructive) {

@@ -22,46 +22,47 @@ struct PasswordsSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                LunaPicker("Profile", selection: $profileId, options: profileManager.profiles.map {
+        Group {
+            SettingsCard(footer: "Luna offers to save logins when you sign in and to fill them next time. They're stored in your Keychain, separately for each profile.") {
+                SettingsMenuRow("Profile", selection: $profileId, options: profileManager.profiles.map {
                     .init($0.id, $0.name, image: ProfileAvatar.image(for: $0, size: 16))
                 })
-                Text("Luna offers to save logins when you sign in and to fill them next time. They're stored in your Keychain, separately for each profile.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             }
 
-            Section {
-                Toggle("Sync passwords with iCloud Keychain", isOn: Binding(get: { iCloudSync }, set: setICloudSync))
-                if iCloudSync {
-                    if PasswordVault.shared.hasDuplicateName(profile: profileId) {
-                        Text("Another profile has the same name, so this profile's logins stay on this Mac. Rename one to sync.")
-                            .font(.callout).foregroundStyle(.orange)
-                    } else {
-                        Text("Logins sync with profiles named “\(profileManager.profile(for: profileId).name)” on your other Macs.")
-                            .font(.callout).foregroundStyle(.secondary)
+            SettingsCard("iCloud", footer: "Logins Luna saves for this profile sync to your other Macs signed in to the same Apple Account. Luna can't read passwords saved by Safari or the Passwords app, even with sync on; use Import below to bring those in.") {
+                SettingsToggleRow("Sync passwords with iCloud Keychain", subtitle: iCloudSyncNote,
+                                  isOn: Binding(get: { iCloudSync }, set: setICloudSync))
+                if iCloudSync && PasswordVault.shared.hasDuplicateName(profile: profileId) {
+                    SettingsContentRow {
+                        Label("Another profile has the same name, so this profile's logins stay on this Mac. Rename one to sync.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 11.5)).foregroundStyle(.orange)
                     }
                 }
-                Text("Logins Luna saves for this profile sync to your other Macs signed in to the same Apple Account. Luna can't read passwords saved by Safari or the Passwords app, even with sync on; use Import below to bring those in.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
             }
 
             if unlocked {
-                Section {
-                    TextField("Search", text: $query, prompt: Text("Search logins"))
+                SettingsCard("Saved logins") {
+                    SettingsRow("\(credentials.count) saved login\(credentials.count == 1 ? "" : "s")", icon: "key.fill") {
+                        TextField("Search", text: $query, prompt: Text("Search logins"))
+                            .textFieldStyle(SettingsTextFieldStyle())
+                            .frame(width: 200)
+                        Button("Lock") {
+                            PasswordVault.shared.lock()
+                            unlocked = false
+                            revealed = [:]
+                        }
+                    }
                     if filtered.isEmpty {
-                        Text(credentials.isEmpty ? "No saved logins yet." : "No matching logins.")
-                            .foregroundStyle(.secondary)
+                        SettingsNoteRow(credentials.isEmpty ? "No saved logins yet." : "No matching logins.")
                     }
                     ForEach(filtered) { cred in
                         HStack(spacing: 10) {
                             FaviconView(url: URL(string: "https://\(cred.host)")!).scaleEffect(0.8).frame(width: 16, height: 16)
                             VStack(alignment: .leading, spacing: 1) {
-                                Text(cred.host).lineLimit(1)
+                                Text(cred.host).font(.system(size: 13)).lineLimit(1)
                                 Text(cred.username.isEmpty ? "(no username)" : cred.username)
-                                    .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                                    .font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
                             }
                             Spacer()
                             Text(revealed[cred.id] ?? "••••••••")
@@ -84,52 +85,46 @@ struct PasswordsSettingsView: View {
                                 .help("Delete")
                                 .accessibilityLabel("Delete login")
                         }
-                    }
-                } header: {
-                    HStack {
-                        Text("\(credentials.count) saved login\(credentials.count == 1 ? "" : "s")")
-                        Spacer()
-                        Button("Lock") {
-                            PasswordVault.shared.lock()
-                            unlocked = false
-                            revealed = [:]
-                        }
-                        .controlSize(.small)
+                        .settingsRowPadding(vertical: 8, minHeight: 44)
                     }
                 }
             } else {
-                Section {
-                    Button("Unlock Passwords…") {
-                        Task {
-                            unlocked = await PasswordVault.shared.unlock(reason: "view your saved passwords")
-                            reload()
+                SettingsCard("Saved logins") {
+                    SettingsRow("Passwords are locked", subtitle: "Unlock with Touch ID or your Mac password to see them.",
+                                icon: "lock.fill") {
+                        Button("Unlock Passwords…") {
+                            Task {
+                                unlocked = await PasswordVault.shared.unlock(reason: "view your saved passwords")
+                                reload()
+                            }
                         }
+                        .buttonStyle(.settingsProminent)
                     }
-                    .buttonStyle(.borderedProminent)
                 }
             }
 
-            Section {
-                Button("Import from Apple Passwords…") { importing = true }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Passwords saved in Safari or the Passwords app belong to Apple and can't be read by other browsers. To copy them into Luna:")
-                    Text("1. Open the Passwords app.")
-                    Text("2. Choose File → Export All Passwords to File…, and save the CSV.")
-                    Text("3. Click Import from Apple Passwords… above and pick that file.")
-                    Text("4. Move the CSV to the Trash and empty it; it isn't encrypted.")
+            SettingsCard("Apple Passwords", footer: "For Chrome, Firefox and 1Password, use the Import tab.") {
+                SettingsRow("Import from Apple Passwords", subtitle: "A CSV exported from the Passwords app.") {
+                    Button("Import…") { importing = true }
+                        .accessibilityLabel("Import from Apple Passwords…")
                 }
-                .font(.callout)
-                .foregroundStyle(.secondary)
+                SettingsContentRow {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Passwords saved in Safari or the Passwords app belong to Apple and can't be read by other browsers. To copy them into Luna:")
+                        Text("1. Open the Passwords app.")
+                        Text("2. Choose File → Export All Passwords to File…, and save the CSV.")
+                        Text("3. Click Import from Apple Passwords… above and pick that file.")
+                        Text("4. Move the CSV to the Trash and empty it; it isn't encrypted.")
+                    }
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
                 if let status {
-                    Text(status).font(.callout)
+                    SettingsNoteRow(status)
                 }
-            } header: {
-                Text("Apple Passwords")
-            } footer: {
-                Text("For Chrome, Firefox and 1Password, use the Import tab.").foregroundStyle(.secondary)
             }
         }
-        .formStyle(.grouped)
         .onAppear(perform: reload)
         .onChange(of: profileId) { _, _ in
             revealed = [:]
@@ -147,6 +142,11 @@ struct PasswordsSettingsView: View {
                 reload()
             }
         }
+    }
+
+    private var iCloudSyncNote: String? {
+        guard iCloudSync, !PasswordVault.shared.hasDuplicateName(profile: profileId) else { return nil }
+        return "Logins sync with profiles named “\(profileManager.profile(for: profileId).name)” on your other Macs."
     }
 
     private func reload() {

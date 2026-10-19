@@ -17,28 +17,24 @@ struct OnePasswordImportSection: View {
         .compactMap { $0 }
 
     var body: some View {
-        Section {
-            Text("In 1Password, choose File → Export, pick the account, then choose 1PUX (recommended) or CSV and save it. Pick that file here.")
-                .font(.callout).foregroundStyle(.secondary)
-            Button("Choose 1Password Export…") { picking = true }
-                .buttonStyle(.borderedProminent)
-            if let status {
-                Label(status, systemImage: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(failed ? .red : .green)
+        SettingsCard("1Password", footer: "Luna stores each login's website, username and password. Notes and one-time codes stay in 1Password. For live autofill, 1Password's Universal Autofill (⌘\\) also works in Luna.") {
+            SettingsRow("1Password export",
+                        subtitle: "In 1Password, choose File → Export, pick the account, then choose 1PUX (recommended) or CSV and save it. Pick that file here.") {
+                Button("Choose 1Password Export…") { picking = true }
+                    .buttonStyle(.settingsProminent)
             }
-            if let exportFile {
-                HStack {
-                    Text("The export contains your passwords unencrypted.")
-                        .font(.callout).foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Delete the Export File") { trash(exportFile) }
+            if let status {
+                SettingsContentRow {
+                    Label(status, systemImage: failed ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(failed ? .red : .green)
                 }
             }
-        } header: {
-            Text("1Password")
-        } footer: {
-            Text(verbatim: "Luna stores each login's website, username and password. Notes and one-time codes stay in 1Password. For live autofill, 1Password's Universal Autofill (⌘\\) also works in Luna.")
-                .font(.caption).foregroundStyle(.secondary)
+            if let exportFile {
+                SettingsRow("The export contains your passwords unencrypted.") {
+                    Button("Delete the Export File", role: .destructive) { trash(exportFile) }
+                }
+            }
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: Self.types) { result in
             if case .success(let url) = result { importFile(url) }
