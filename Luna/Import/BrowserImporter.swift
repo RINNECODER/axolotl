@@ -68,13 +68,17 @@ enum BrowserImporter {
 
     nonisolated struct ReadResult: Sendable {
         var bookmarks: [ImportedBookmark]?
-        var visits: [ImportedVisit]?
+        /// Visits handed to the history sink (nil when history wasn't read), and how many it added.
+        var visitsRead: Int?
+        var visitsAdded = 0
+        var newestVisit: Date?
         var errors: [String] = []
     }
 
     /// - Parameter dataFolder: the browser's data folder (already accessible).
     nonisolated static func read(kind: BrowserKind, dataFolder: URL, profile: SourceProfile,
-                                 types: Set<ImportDataType>, since: Date?) -> ReadResult {
+                                 types: Set<ImportDataType>, since: Date?,
+                                 addVisits: ([ImportedVisit]) -> Int = { _ in 0 }) -> ReadResult {
         var result = ReadResult()
         let folder = profile.id.isEmpty ? dataFolder : dataFolder.appendingPathComponent(profile.id, isDirectory: true)
         if types.contains(.bookmarks) {
@@ -89,10 +93,17 @@ enum BrowserImporter {
             }
         }
         if types.contains(.history), kind.engine != .safari {
+            result.visitsRead = 0
+            // Each batch is stored as it's read, so a huge history never sits in memory at once.
+            func sink(_ batch: [ImportedVisit]) {
+                result.visitsRead! += batch.count
+                result.visitsAdded += addVisits(batch)
+                if let newest = batch.map(\.date).max() { result.newestVisit = max(newest, result.newestVisit ?? newest) }
+            }
             do {
                 switch kind.engine {
-                case .chromium: result.visits = try ChromiumImporter.history(profileFolder: folder, since: since)
-                case .firefox: result.visits = try FirefoxImporter.history(profileFolder: folder, since: since)
+                case .chromium: try ChromiumImporter.history(profileFolder: folder, since: since, onBatch: sink)
+                case .firefox: try FirefoxImporter.history(profileFolder: folder, since: since, onBatch: sink)
                 case .safari: break
                 }
             } catch {
@@ -138,8 +149,10 @@ enum BrowserImporter {
                     incremental: Bool = false) async -> Summary {
         var source = source(kind, profile, lunaProfileId)
         let since = incremental ? source.lastVisit : nil
+        let history = ProfileStoreRegistry.stores(for: lunaProfileId).history
         let read = await Task.detached(priority: .userInitiated) {
-            BrowserImporter.read(kind: kind, dataFolder: dataFolder, profile: profile, types: types, since: since)
+            BrowserImporter.read(kind: kind, dataFolder: dataFolder, profile: profile, types: types, since: since,
+                                 addVisits: history.importVisits)
         }.value
         var summary = Summary(errors: read.errors)
         if let bookmarks = read.bookmarks {
@@ -150,11 +163,9 @@ enum BrowserImporter {
             summary.bookmarks = r.added
             if let id = r.folderId { source.folderId = id }
         }
-        if let visits = read.visits {
-            let history = ProfileStoreRegistry.stores(for: lunaProfileId).history
-            summary.history = history.importVisits(visits)
-            history.flush()
-            if let newest = visits.map(\.date).max() { source.lastVisit = max(newest, source.lastVisit ?? newest) }
+        if read.visitsRead != nil {
+            summary.history = read.visitsAdded
+            if let newest = read.newestVisit { source.lastVisit = max(newest, source.lastVisit ?? newest) }
         }
         if let keepInSync { source.keepInSync = keepInSync }
         save(source)

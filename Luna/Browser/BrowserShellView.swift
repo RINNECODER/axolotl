@@ -1264,7 +1264,12 @@ struct BrowserShellView: View {
             return
         }
         let task = DispatchWorkItem {
-            urlSuggestions = urlSuggestionRows(for: trimmed)
+            Task {
+                let rows = await urlSuggestionRows(for: trimmed)
+                // A newer keystroke or closed dropdown makes this answer stale.
+                guard addressBarFocused, addressBarText.trimmingCharacters(in: .whitespacesAndNewlines) == trimmed else { return }
+                urlSuggestions = rows
+            }
             fetchSearchSuggestions(for: trimmed)
         }
         suggestionDebounceTask = task
@@ -1272,15 +1277,16 @@ struct BrowserShellView: View {
     }
 
     /// Bookmarks, history and open tabs matching the query (open tabs offer "Switch to tab").
-    private func urlSuggestionRows(for query: String) -> [AddressSuggestion] {
+    private func urlSuggestionRows(for query: String) async -> [AddressSuggestion] {
         let ws = session.workspace
         let openTabs = ws.orderedTabIds.compactMap { id -> (id: UUID, title: String, url: URL)? in
             guard id != tabManager.currentTab, let tab = ws.tab(id), let url = tab.url, isSafeBrowserURL(url) else { return nil }
             return (id, tab.customTitle ?? tab.title, url)
         }
+        let history = await historyManager.urlAutocompleteSuggestions(prefix: query, limit: 5)
         return AddressSuggestions.merge(query: query,
                                         bookmarks: bookmarks.bookmarks,
-                                        history: historyManager.urlAutocompleteSuggestions(prefix: query, limit: 5),
+                                        history: history,
                                         openTabs: openTabs)
     }
 

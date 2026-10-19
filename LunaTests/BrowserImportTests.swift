@@ -42,6 +42,13 @@ final class BrowserImportTests: XCTestCase {
         }
     }
 
+    /// Gathers an importer's history batches into one array.
+    private func collect(_ read: (([ImportedVisit]) -> Void) throws -> Void) rethrows -> [ImportedVisit] {
+        var all: [ImportedVisit] = []
+        try read { all += $0 }
+        return all
+    }
+
     private func titles(_ items: [ImportedBookmark]) -> [String] {
         items.map {
             switch $0 {
@@ -117,11 +124,11 @@ final class BrowserImportTests: XCTestCase {
             INSERT INTO urls VALUES (1,'https://a.example.com/','A',2,\(t2)), (2,'chrome://settings','Settings',1,\(t2));
             INSERT INTO visits VALUES (1,1,\(t1)), (2,1,\(t2)), (3,2,\(t2));
             """)
-        let visits = try ChromiumImporter.history(profileFolder: profile)
+        let visits = try collect { try ChromiumImporter.history(profileFolder: profile, onBatch: $0) }
         XCTAssertEqual(visits.map(\.date.timeIntervalSince1970), [1_700_000_100, 1_700_000_000])
         XCTAssertEqual(visits.first?.title, "A")
 
-        let newer = try ChromiumImporter.history(profileFolder: profile, since: Date(timeIntervalSince1970: 1_700_000_050))
+        let newer = try collect { try ChromiumImporter.history(profileFolder: profile, since: Date(timeIntervalSince1970: 1_700_000_050), onBatch: $0) }
         XCTAssertEqual(newer.count, 1, "incremental sync only reads newer visits")
     }
 
@@ -150,7 +157,7 @@ final class BrowserImportTests: XCTestCase {
         let bookmarks = try FirefoxImporter.bookmarks(profileFolder: profile)
         XCTAssertEqual(titles(bookmarks), ["Mozilla", "Reading/", "Other Bookmarks/"],
                        "toolbar items top level; menu with only a place: query is dropped")
-        let visits = try FirefoxImporter.history(profileFolder: profile)
+        let visits = try collect { try FirefoxImporter.history(profileFolder: profile, onBatch: $0) }
         XCTAssertEqual(visits.map(\.url), ["https://news.example.com/", "https://mozilla.org/"])
         XCTAssertEqual(visits.last?.date, Date(timeIntervalSince1970: 1_700_000_000))
     }
@@ -270,7 +277,7 @@ final class BrowserImportTests: XCTestCase {
         let r = BrowserImporter.read(kind: .brave, dataFolder: data, profile: SourceProfile(id: "Profile 1", name: "Work"),
                                      types: [.bookmarks, .history], since: nil)
         XCTAssertEqual(r.bookmarks.map(titles), ["P1"])
-        XCTAssertEqual(r.visits, [], "missing History file is just empty")
+        XCTAssertEqual(r.visitsRead, 0, "missing History file is just empty")
         XCTAssertEqual(r.errors, [])
         XCTAssertEqual(BrowserImporter.folderName(.brave, SourceProfile(id: "Profile 1", name: "Work"), profileCount: 2),
                        "Imported from Brave (Work)")
@@ -390,7 +397,26 @@ final class BrowserImportTests: XCTestCase {
             INSERT INTO urls VALUES (1,'https://a.example.com/','A'), (2,'chrome://settings','Settings');
             INSERT INTO visits VALUES (1,1,\(t1)), (2,2,\(t2));
             """)
-        XCTAssertEqual(try ChromiumImporter.history(profileFolder: profile, limit: 1).map(\.url), ["https://a.example.com/"])
+        XCTAssertEqual(try collect { try ChromiumImporter.history(profileFolder: profile, limit: 1, onBatch: $0) }.map(\.url), ["https://a.example.com/"])
+    }
+
+    func testChromiumHistoryPagesInBatchesAcrossEqualTimestamps() throws {
+        let profile = try dir("Chrome/Paged")
+        let t = ChromiumImporter.chromiumTime(from: Date(timeIntervalSince1970: 1_700_000_000))
+        // 7 visits, three sharing one timestamp, so the keyset cursor must break ties by id.
+        let visits = (1...7).map { "(\($0),1,\(t + Int64($0 <= 3 ? 0 : $0)))" }.joined(separator: ",")
+        try sqlite(profile.appendingPathComponent("History"), """
+            CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT);
+            CREATE TABLE visits(id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER);
+            INSERT INTO urls VALUES (1,'https://a.example.com/','A');
+            INSERT INTO visits VALUES \(visits);
+            """)
+        var sizes: [Int] = []
+        try ChromiumImporter.history(profileFolder: profile, batchSize: 2) { sizes.append($0.count) }
+        XCTAssertEqual(sizes, [2, 2, 2, 1])
+        var capped: [Int] = []
+        try ChromiumImporter.history(profileFolder: profile, limit: 5, batchSize: 2) { capped.append($0.count) }
+        XCTAssertEqual(capped, [2, 2, 1])
     }
 
     func testKeepInSyncSkipsBookmarksAlreadyImportedOnce() {

@@ -34,17 +34,18 @@ struct HistoryPageView: View {
         return f
     }()
 
-    /// Recomputes URL history (page visits), optionally filtered by search, and its date grouping.
-    private func recomputeResults() {
-        let raw: [HistoryEvent]
-        if searchQuery.isEmpty {
-            raw = historyManager.getHistory(for: .allTime).filter { $0.type == .pageVisit }
-        } else {
-            raw = historyManager.searchHistory(query: searchQuery).filter { $0.type == .pageVisit }
-        }
+    /// How many visits the page loads; "Show more" raises it so 100k-visit histories load in pages.
+    @State private var limit = 500
+    @State private var reloadToken = 0
+    @State private var hasMore = false
+
+    /// Loads URL history (page visits) from the store, optionally filtered by search, and its date grouping.
+    private func recomputeResults() async {
+        let raw = await historyManager.visits(matching: searchQuery, limit: limit)
+        guard !Task.isCancelled else { return }
+        hasMore = raw.count == limit
         // Reloads and redirects log the same URL back to back; show one row per run (newest first).
-        let sorted = raw.sorted { $0.timestamp > $1.timestamp }
-        let all = sorted.enumerated().filter { i, e in !(i > 0 && sorted[i - 1].url == e.url) }.map(\.element)
+        let all = raw.enumerated().filter { i, e in !(i > 0 && raw[i - 1].url == e.url) }.map(\.element)
         filteredEvents = all
 
         let calendar = Calendar.current
@@ -119,6 +120,13 @@ struct HistoryPageView: View {
                                 }
                             }
                         }
+                        if hasMore {
+                            Button("Show more") { limit += 500 }
+                                .buttonStyle(.plain)
+                                .foregroundColor(accentColor)
+                                .padding(.horizontal, 20)
+                                .padding(.top, 16)
+                        }
                     }
                     .padding(.bottom, 20)
                 }
@@ -126,11 +134,12 @@ struct HistoryPageView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(bgColor)
-        .onAppear { recomputeResults() }
-        .onChange(of: searchQuery) { _, _ in recomputeResults() }
-        // Receive on main so the recompute runs after the manager's change is applied.
+        // A new query, page size or history change cancels the previous load.
+        .task(id: "\(reloadToken)|\(limit)|\(searchQuery)") { await recomputeResults() }
+        .onChange(of: searchQuery) { _, _ in limit = 500 }
+        // Receive on main so the reload runs after the manager's change is applied (and its store write is queued).
         .onReceive(historyManager.objectWillChange.receive(on: DispatchQueue.main)) { _ in
-            recomputeResults()
+            reloadToken += 1
         }
         .alert("Clear History", isPresented: $showClearConfirmation) {
             Button("Cancel", role: .cancel) { }
