@@ -185,7 +185,7 @@ struct SidebarOutline: NSViewRepresentable {
                     case .tab(let id): out.append("\(depth)t\(id)")
                     case .split(let g): out.append("\(depth)s\(g.id)\(g.panes)")
                     case .folder(let f):
-                        out.append("\(depth)f\(f.id)\(f.isExpanded)")
+                        out.append("\(depth)f\(f.id)\(f.isExpanded)\(f.name)\(f.color ?? "")")
                         walk(f.children, depth + 1, &out)
                     }
                 }
@@ -493,7 +493,7 @@ struct SidebarOutline: NSViewRepresentable {
                               closeAction: { [actions] in actions.close(id) },
                               closeSymbol: pinned ? "minus" : "xmark")
                 case .folder(let f):
-                    cell.show(AnyView(SidebarFolderRow(name: f.name, isExpanded: f.isExpanded)), closeAction: nil)
+                    cell.show(AnyView(SidebarFolderRow(name: f.name, isExpanded: f.isExpanded, color: f.color.flatMap(TabGroupColor.init(rawValue:)))), closeAction: nil)
                 case .split(let g):
                     let panes = g.panes.compactMap { snapshot.tabs[$0] }
                     cell.show(AnyView(SidebarSplitRow(panes: panes, faviconURLs: snapshot.faviconURLs,
@@ -562,7 +562,21 @@ struct SidebarOutline: NSViewRepresentable {
                         store.renameFolder(f.id, to: name)
                     }
                 })
+                let colors = NSMenu()
+                for c in TabGroupColor.allCases {
+                    let item = MenuAction(c.rawValue.capitalized) { store.setTabGroupColor(f.id, c) }
+                    item.state = f.color == c.rawValue ? .on : .off
+                    colors.addItem(item)
+                }
+                let colorItem = NSMenuItem(title: "Group Color", action: nil, keyEquivalent: "")
+                colorItem.submenu = colors
+                menu.addItem(colorItem)
                 menu.addItem(MenuAction("Ungroup") { store.ungroupFolder(f.id) })
+                menu.addItem(MenuAction("Close Group") { [actions] in
+                    let tabs = f.tabIds
+                    store.ungroupFolder(f.id)
+                    tabs.forEach(actions.close)
+                })
             case .split(let g):
                 menu.addItem(MenuAction("Separate Split View") { store.dissolveSplit(g.id) })
                 if let active = snapshot.activeTabId, !g.panes.contains(active), g.panes.count < SplitGroup.maxPanes,

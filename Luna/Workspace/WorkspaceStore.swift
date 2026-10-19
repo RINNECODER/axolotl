@@ -273,6 +273,27 @@ final class WorkspaceStore: ObservableObject {
         perform("Ungroup Folder") { $0.ungroupFolder(id) }
     }
 
+    // MARK: Tab groups (Chrome) — groups are the folders above, with a color.
+
+    @discardableResult
+    func addToNewTabGroup(_ tabId: UUID) -> UUID? {
+        var id: UUID?
+        perform("New Tab Group") { id = $0.addToNewTabGroup(tabId) }
+        return id
+    }
+
+    func addToTabGroup(_ tabId: UUID, group: UUID) {
+        perform("Add to Group") { _ = $0.addToTabGroup(tabId, group: group) }
+    }
+
+    func removeFromTabGroup(_ tabId: UUID) {
+        perform("Remove from Group") { $0.removeFromTabGroup(tabId) }
+    }
+
+    func setTabGroupColor(_ id: UUID, _ color: TabGroupColor) {
+        perform("Group Color") { $0.updateFolder(id) { $0.color = color.rawValue } }
+    }
+
     @discardableResult
     func split(_ tabIds: [UUID], axis: SplitAxis = .horizontal) -> UUID? {
         var id: UUID?

@@ -228,6 +228,26 @@ final class PersonalizationTests: XCTestCase {
 
     // MARK: Tabs and bookmarks
 
+    func testTabsGroupMakesAColoredTabGroup() async throws {
+        let store = context.workspace!
+        let ids = ["a", "b", "c"].map { store.newTab(url: URL(string: "https://\($0).example.com/")!) }
+        let pair: JSONValue = .array([.string(ids[0].uuidString), .string(ids[1].uuidString)])
+        let bad = try await toolbox.call("tabs_group", arguments: ["tab_ids": pair, "name": "X", "color": "chartreuse"])
+        XCTAssertTrue(bad.isError, bad.text)
+        let made = try await toolbox.call("tabs_group", arguments: ["tab_ids": pair, "name": "Work", "color": "green"])
+        XCTAssertFalse(made.isError, made.text)
+        let group = try XCTUnwrap(store.workspace.tabGroup(containing: ids[1]))
+        XCTAssertEqual(group.name, "Work")
+        XCTAssertEqual(group.groupColor, .green)
+        XCTAssertEqual(group.tabIds, [ids[0], ids[1]])
+        // No color given: the next unused one, like a group made from the tab menu.
+        store.removeFromTabGroup(ids[1])
+        let next = try await toolbox.call("tabs_group", arguments: ["tab_ids": .array([.string(ids[1].uuidString), .string(ids[2].uuidString)]),
+                                                                    "name": "Read"])
+        XCTAssertFalse(next.isError, next.text)
+        XCTAssertEqual(store.workspace.tabGroup(containing: ids[2])?.groupColor, .grey)
+    }
+
     func testGroupReorderAndBookmarkUndoExactly() async throws {
         let store = context.workspace!
         let ids = ["a", "b", "c", "d"].map { store.newTab(url: URL(string: "https://\($0).example.com/")!) }

@@ -101,10 +101,12 @@ enum PersonalizationTools {
 
     static let tabsGroup = LunaTool(
         name: "tabs_group",
-        description: "Put tabs into a new sidebar folder named `name`, where the first tab is. Returns a change id for undo_change. " + guardrail,
+        description: "Put tabs into a new tab group (a sidebar folder; a colored group chip in the tab strip) named `name`, where the first tab is. Returns a change id for undo_change. " + guardrail,
         params: [LunaToolParam(name: "tab_ids", kind: .array, description: "Tab ids from tabs_list (2 or more)",
                                items: .object(["type": "string"])),
-                 LunaToolParam(name: "name", kind: .string, description: "Folder name")],
+                 LunaToolParam(name: "name", kind: .string, description: "Group name"),
+                 LunaToolParam(name: "color", kind: .string, description: "Group color (default: the next unused one)",
+                               required: false, allowed: TabGroupColor.allCases.map(\.rawValue))],
         mutates: true, targetsTab: false, confirmsEveryCall: true,
         preview: { call in
             "New folder “\(call.string("name") ?? "")”: " + titles(call, ids(call, "tab_ids")).joined(separator: ", ")
@@ -114,6 +116,7 @@ enum PersonalizationTools {
         let tabIds = try uuids(call, "tab_ids")
         guard tabIds.count >= 2 else { throw LunaToolError.invalidArguments("tabs_group: give at least 2 tabs.") }
         let name = (call.string("name") ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let color = call.string("color").flatMap(TabGroupColor.init(rawValue:))
         var places: [TabPlace] = []
         var splits: [TabPlace] = []
         var groups: [SplitGroup] = []
@@ -135,7 +138,7 @@ enum PersonalizationTools {
             }
             tabIds.forEach { _ = ws.detachTabFromAnySplit($0) }
             guard let first = ws.location(ofNode: tabIds[0]) else { return }
-            folder = ws.createFolder(name: name, containing: tabIds, at: first)
+            folder = ws.createFolder(name: name, containing: tabIds, at: first, color: color ?? ws.nextGroupColor())
         }
         if let problem { throw problem }
         guard let folder else { throw LunaToolError.unavailable("Couldn't create the folder.") }

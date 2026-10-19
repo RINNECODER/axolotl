@@ -36,13 +36,28 @@ nonisolated struct Folder: Identifiable, Codable, Equatable {
     var name: String
     var isExpanded: Bool
     var children: [SidebarNode]
+    /// Chrome tab-group color (a `TabGroupColor` raw value). Kept as a string so an
+    /// unknown value from a newer build can't fail decoding the whole workspace.
+    var color: String?
 
-    init(id: UUID = UUID(), name: String, isExpanded: Bool = true, children: [SidebarNode] = []) {
+    init(id: UUID = UUID(), name: String, isExpanded: Bool = true, children: [SidebarNode] = [],
+         color: TabGroupColor? = nil) {
         self.id = id
         self.name = name
         self.isExpanded = isExpanded
         self.children = children
+        self.color = color?.rawValue
     }
+
+    var tabIds: [UUID] { children.flatMap(\.tabIds) }
+
+    /// Every folder is also a Chrome tab group; one without a color is grey.
+    var groupColor: TabGroupColor { color.flatMap(TabGroupColor.init(rawValue:)) ?? .grey }
+}
+
+/// Chrome's nine tab-group colors, in its picker order.
+nonisolated enum TabGroupColor: String, Codable, CaseIterable {
+    case grey, blue, red, yellow, green, pink, purple, cyan, orange
 }
 
 nonisolated enum SplitAxis: String, Codable, Equatable {
@@ -433,7 +448,8 @@ nonisolated struct Workspace: Codable, Equatable {
     // MARK: Folders
 
     @discardableResult
-    mutating func createFolder(name: String, containing nodeIds: [UUID], at loc: NodeLocation) -> UUID {
+    mutating func createFolder(name: String, containing nodeIds: [UUID], at loc: NodeLocation,
+                               color: TabGroupColor? = nil) -> UUID {
         var children: [SidebarNode] = []
         var dest = loc
         for id in nodeIds {
@@ -443,9 +459,61 @@ nonisolated struct Workspace: Codable, Equatable {
             }
             if let n = detachNode(id) { children.append(n) }
         }
-        let folder = Folder(name: name, children: children)
+        let folder = Folder(name: name, children: children, color: color)
         insertNode(.folder(folder), at: dest)
         return folder.id
+    }
+
+    // MARK: Tab groups (Chrome)
+
+    /// The active space's tab groups: its top-level Today folders, as the strip shows them.
+    var tabGroups: [Folder] {
+        activeSpace.today.compactMap { if case .folder(let f) = $0 { return f } else { return nil } }
+    }
+
+    /// The tab group (top-level Today folder of the active space) a tab sits in, at any depth.
+    func tabGroup(containing tabId: UUID) -> Folder? {
+        tabGroups.first { $0.tabIds.contains(tabId) }
+    }
+
+    /// Chrome picks the first color no group in the space uses yet.
+    func nextGroupColor() -> TabGroupColor {
+        let used = Set(tabGroups.map(\.groupColor))
+        return TabGroupColor.allCases.first { !used.contains($0) } ?? .grey
+    }
+
+    /// Wraps a Today tab in a new, unnamed group where it is. Nil for favorites and pinned tabs.
+    @discardableResult
+    mutating func addToNewTabGroup(_ tabId: UUID) -> UUID? {
+        guard tabs[tabId] != nil, section(containing: tabId) == .today else { return nil }
+        if let g = tabGroup(containing: tabId), g.tabIds.count == 1 { return g.id }
+        let color = nextGroupColor()
+        _ = detachTabFromAnySplit(tabId)
+        removeFromTabGroup(tabId)
+        guard let loc = location(ofNode: tabId) else { return nil }
+        return createFolder(name: "", containing: [tabId], at: loc, color: color)
+    }
+
+    /// Moves a Today tab to the end of a group in the same space.
+    @discardableResult
+    mutating func addToTabGroup(_ tabId: UUID, group groupId: UUID) -> Bool {
+        guard tabs[tabId] != nil, section(containing: tabId) == .today,
+              tabGroup(containing: tabId)?.id != groupId,
+              let gloc = location(ofNode: groupId), gloc.parentFolderId == nil, gloc.section == .today,
+              case .folder? = node(withId: groupId) else { return false }
+        _ = detachTabFromAnySplit(tabId)
+        guard case .folder(let g)? = node(withId: groupId) else { return false }
+        return placeNode(tabId, at: NodeLocation(spaceId: gloc.spaceId, section: .today, parentFolderId: groupId,
+                                                 index: g.children.count))
+    }
+
+    /// Takes a tab out of its group, just after the group (Chrome); an emptied group goes away.
+    mutating func removeFromTabGroup(_ tabId: UUID) {
+        guard let g = tabGroup(containing: tabId), let gloc = location(ofNode: g.id) else { return }
+        _ = detachTabFromAnySplit(tabId)
+        _ = placeNode(tabId, at: NodeLocation(spaceId: gloc.spaceId, section: .today, parentFolderId: nil,
+                                              index: gloc.index + 1))
+        if case .folder(let f)? = node(withId: g.id), f.tabIds.isEmpty { ungroupFolder(g.id) }
     }
 
     mutating func updateFolder(_ id: UUID, _ change: (inout Folder) -> Void) {
@@ -826,6 +894,7 @@ nonisolated struct Workspace: Codable, Equatable {
                 return (tabs[id] != nil && seen.insert(id).inserted) ? node : nil
             case .folder(var f):
                 f.children = sanitized(f.children, tabs: tabs, seen: &seen)
+                if let c = f.color, TabGroupColor(rawValue: c) == nil { f.color = nil }
                 return .folder(f)
             case .split(var g):
                 g.panes = g.panes.filter { tabs[$0] != nil && seen.insert($0).inserted }

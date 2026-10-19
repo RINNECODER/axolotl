@@ -54,21 +54,32 @@ struct HorizontalTabStrip: View {
 
     var body: some View {
         let ws = store.workspace
-        let ids = ws.orderedTabIds()
+        let groupOf = Dictionary(ws.tabGroups.flatMap { g in g.tabIds.map { ($0, g) } }, uniquingKeysWith: { a, _ in a })
+        // A collapsed group hides its tabs behind the chip (the active tab stays, as in Chrome).
+        let ids = ws.orderedTabIds().filter { id in groupOf[id].map { $0.isExpanded || ws.activeTabId == id } ?? true }
+        let chipIds = ws.tabGroups.compactMap(\.tabIds.first)
         let persistent = Set(ws.favorites + ws.activeSpace.pinned.flatMap(\.tabIds))
         GeometryReader { geo in
             let iconCount = ids.filter { persistent.contains($0) }.count
             let titled = ids.count - iconCount
             let iconWidth = chromeStyle ? ChromeMetrics.pinnedTabPitch : Self.iconTabWidth
-            let available = geo.size.width - CGFloat(iconCount) * iconWidth - (chromeStyle ? ChromeMetrics.newTabButtonWidth : 34)
+            let chipsWidth = ws.tabGroups.reduce(CGFloat(0)) { $0 + TabGroupChip.width(for: $1.name) }
+            let available = geo.size.width - CGFloat(iconCount) * iconWidth - chipsWidth
+                - (chromeStyle ? ChromeMetrics.newTabButtonWidth : 34)
             let width = chromeStyle ? ChromeMetrics.tabPitch(available: available, count: titled)
                 : titled > 0 ? min(Self.maxTabWidth, max(Self.minTabWidth, available / CGFloat(titled))) : 0
             let minWidth = chromeStyle ? ChromeMetrics.minTabPitch : Self.minTabWidth
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
-                    ForEach(Array(ids.enumerated()), id: \.element) { index, id in
-                        if let tab = ws.tabs[id] {
+                    ForEach(Array(ws.orderedTabIds().enumerated()), id: \.element) { _, id in
+                      HStack(spacing: 0) {
+                        if chipIds.contains(id), let group = groupOf[id] {
+                            TabGroupChip(group: group, height: height,
+                                         onToggle: { store.setFolderExpanded(group.id, !group.isExpanded) },
+                                         menu: { TabGroupChip.menu(for: group, store: store, close: onClose) })
+                        }
+                        if let tab = ws.tabs[id], let index = ids.firstIndex(of: id) {
                             let iconOnly = persistent.contains(id)
                             let tabWidth = iconOnly ? iconWidth : width
                             let split = ws.splitGroup(containing: id)
@@ -116,9 +127,16 @@ struct HorizontalTabStrip: View {
                                     frames[id] = $0
                                     zone.frames[id] = $0
                                 }
-                                // Chrome's active tab flares over its neighbours.
-                                .zIndex(drag?.id == id ? 1 : (chromeStyle && ws.activeTabId == id ? 0.5 : 0))
+                                .overlay(alignment: .bottom) {
+                                    if let group = groupOf[id] {
+                                        Rectangle().fill(group.groupColor.swatch).frame(height: 2).allowsHitTesting(false)
+                                    }
+                                }
+                                .onDisappear { frames[id] = nil; zone.frames[id] = nil }
                         }
+                      }
+                      // Chrome's active tab flares over its neighbours.
+                      .zIndex(drag?.id == id ? 1 : (chromeStyle && ws.activeTabId == id ? 0.5 : 0))
                     }
                     if chromeStyle {
                         ChromeNewTabButton(showsSeparator: ids.last != nil && ids.last != ws.activeTabId, action: onNewTab)
@@ -674,3 +692,88 @@ private struct LiftedTab: ViewModifier {
     }
 }
 
+
+// MARK: - Tab groups
+
+extension TabGroupColor {
+    /// Chrome's group colors.
+    var swatch: Color {
+        switch self {
+        case .grey: return Color(red: 0.37, green: 0.39, blue: 0.41)
+        case .blue: return Color(red: 0.10, green: 0.45, blue: 0.91)
+        case .red: return Color(red: 0.85, green: 0.19, blue: 0.15)
+        case .yellow: return Color(red: 0.98, green: 0.67, blue: 0.0)
+        case .green: return Color(red: 0.12, green: 0.56, blue: 0.24)
+        case .pink: return Color(red: 0.82, green: 0.09, blue: 0.52)
+        case .purple: return Color(red: 0.58, green: 0.20, blue: 0.90)
+        case .cyan: return Color(red: 0.0, green: 0.48, blue: 0.51)
+        case .orange: return Color(red: 0.98, green: 0.56, blue: 0.24)
+        }
+    }
+}
+
+/// Chrome's group chip: a colored pill (a dot when unnamed) before the group's tabs;
+/// click collapses or expands the group.
+struct TabGroupChip: View {
+    let group: Folder
+    let height: CGFloat
+    let onToggle: () -> Void
+    let menu: () -> [LunaMenuEntry]
+
+    static func width(for name: String) -> CGFloat {
+        name.isEmpty ? 28 : min(140, 24 + CGFloat(name.count) * 7)
+    }
+
+    var body: some View {
+        let color = group.groupColor.swatch
+        Button(action: onToggle) {
+            Group {
+                if group.name.isEmpty {
+                    Circle().fill(color).frame(width: 10, height: 10)
+                } else {
+                    Text(group.name)
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .frame(height: 20)
+                        .background(Capsule().fill(color))
+                }
+            }
+            .frame(width: Self.width(for: group.name), height: height)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottom) {
+            // The underline starts under the chip and runs on under the group's tabs.
+            if group.isExpanded { Rectangle().fill(color).frame(height: 2).padding(.leading, 6) }
+        }
+        .accessibilityLabel(TabContextMenu.groupTitle(group.name) + " tab group")
+        .accessibilityValue(group.isExpanded ? "Expanded" : "Collapsed")
+        .help(group.isExpanded ? "Collapse group" : "Expand group")
+        .lunaContextMenu { menu() }
+    }
+
+    /// Chrome's group menu: rename, color, ungroup, close group.
+    static func menu(for group: Folder, store: WorkspaceStore, close: @escaping (UUID) -> Void) -> [LunaMenuEntry] {
+        [
+            .button("Rename Group…", icon: "pencil") {
+                if let name = TextPrompt.name(title: "Name This Group", initial: group.name) { store.renameFolder(group.id, to: name) }
+            },
+            .submenu("Color", icon: "paintpalette", TabGroupColor.allCases.map { c in
+                .button(c.rawValue.capitalized, checked: c == group.groupColor) { store.setTabGroupColor(group.id, c) }
+            }),
+            .divider("group.1"),
+            .button("New Tab in Group", icon: "plus") {
+                let id = store.newTab(url: nil)
+                store.addToTabGroup(id, group: group.id)
+            },
+            .button("Ungroup", icon: "square.dashed") { store.ungroupFolder(group.id) },
+            .button("Close Group", icon: "xmark", destructive: true) {
+                let tabs = group.tabIds
+                store.ungroupFolder(group.id)
+                tabs.forEach(close)
+            },
+        ]
+    }
+}

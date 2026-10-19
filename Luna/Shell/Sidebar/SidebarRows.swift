@@ -71,14 +71,16 @@ struct SidebarTabRow: View {
 struct SidebarFolderRow: View {
     let name: String
     let isExpanded: Bool
+    /// A folder is also a Chrome tab group: a colored folder shows its group color.
+    var color: TabGroupColor? = nil
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: isExpanded ? "folder" : "folder.fill")
                 .font(.system(size: 13))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(color.map { AnyShapeStyle($0.swatch) } ?? AnyShapeStyle(.secondary))
                 .frame(width: 16)
-            Text(name)
+            Text(color != nil ? TabContextMenu.groupTitle(name) : name)
                 .font(.system(size: 13, weight: .medium))
                 .lineLimit(1)
             Spacer(minLength: 0)

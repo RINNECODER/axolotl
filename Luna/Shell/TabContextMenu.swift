@@ -9,6 +9,9 @@ enum TabContextMenu {
         /// Pinned and favorite tabs reset to their saved page instead of closing (Arc).
         case close(reset: Bool)
         case closeOthers, closeToRight
+        /// Chrome's tab groups: new group, "Add Tab to Group ›" (its children name groups), remove.
+        case addToNewGroup, addToGroupMenu, removeFromGroup
+        case addToGroup(UUID, name: String)
 
         var title: String {
             switch self {
@@ -22,6 +25,10 @@ enum TabContextMenu {
             case .close(let reset): return reset ? "Reset Tab" : "Close Tab"
             case .closeOthers: return "Close Other Tabs"
             case .closeToRight: return "Close Tabs to the Right"
+            case .addToNewGroup: return "Add Tab to New Group"
+            case .addToGroupMenu: return "Add Tab to Group"
+            case .removeFromGroup: return "Remove from Group"
+            case .addToGroup(_, let name): return TabContextMenu.groupTitle(name)
             }
         }
 
@@ -35,7 +42,8 @@ enum TabContextMenu {
             case .mute: return "speaker.slash"
             case .unmute: return "speaker.wave.2"
             case .close: return "xmark"
-            case .closeOthers, .closeToRight: return nil
+            case .addToNewGroup, .addToGroupMenu: return "square.grid.2x2"
+            case .closeOthers, .closeToRight, .removeFromGroup, .addToGroup: return nil
             }
         }
 
@@ -82,7 +90,32 @@ enum TabContextMenu {
 
     struct Item {
         let command: Command
+        var children: [Item] = []
         let action: () -> Void
+
+        init(command: Command, children: [Item] = [], action: @escaping () -> Void) {
+            self.command = command
+            self.children = children
+            self.action = action
+        }
+    }
+
+    nonisolated static func groupTitle(_ name: String) -> String { name.isEmpty ? "Unnamed group" : name }
+
+    /// Chrome's group section: only Today tabs group (favorites and pinned tabs don't).
+    static func groupItems(for tabId: UUID, store: WorkspaceStore) -> [Item] {
+        let ws = store.workspace
+        guard ws.section(containing: tabId) == .today else { return [] }
+        let current = ws.tabGroup(containing: tabId)
+        var items = [Item(command: .addToNewGroup) { store.addToNewTabGroup(tabId) }]
+        let others = ws.tabGroups.filter { $0.id != current?.id }
+        if !others.isEmpty {
+            items.append(Item(command: .addToGroupMenu, children: others.map { g in
+                Item(command: .addToGroup(g.id, name: g.name)) { store.addToTabGroup(tabId, group: g.id) }
+            }) {})
+        }
+        if current != nil { items.append(Item(command: .removeFromGroup) { store.removeFromTabGroup(tabId) }) }
+        return items
     }
 
     /// The live menu for a tab. `close` goes through the shell so web views and chat state are cleaned up.
@@ -95,7 +128,7 @@ enum TabContextMenu {
         let hasPage = url.map { $0.absoluteString != "about:blank" && !InternalPage.isInternal($0) } ?? false
         let hasSite = web.flatMap { WebViewWrapper.siteKey($0.webViewIfLoaded(for: tabId)?.url) } != nil
         let isMuted = web?.isMuted(tabId) ?? false
-        return sections(for: tabId, order: order, persistent: persistent, hasPage: hasPage, hasSite: hasSite, isMuted: isMuted)
+        var result = sections(for: tabId, order: order, persistent: persistent, hasPage: hasPage, hasSite: hasSite, isMuted: isMuted)
             .map { section in
                 section.map { command in
                     Item(command: command) {
@@ -103,6 +136,9 @@ enum TabContextMenu {
                     }
                 }
             }
+        let groups = groupItems(for: tabId, store: store)
+        if !groups.isEmpty { result.insert(groups, at: 1) }
+        return result
     }
 
     private static func perform(_ command: Command, on tabId: UUID, store: WorkspaceStore, web: WebViewWrapper?,
@@ -129,6 +165,8 @@ enum TabContextMenu {
             web?.setMuted(command == .mute, tab: tabId)
         case .close, .closeOthers, .closeToRight:
             tabsToClose(command, from: tabId, order: order, persistent: persistent).forEach(close)
+        case .addToNewGroup, .addToGroupMenu, .removeFromGroup, .addToGroup:
+            break // built by groupItems
         }
     }
 
@@ -139,13 +177,24 @@ enum TabContextMenu {
         var entries = leading
         for (i, section) in sections.enumerated() {
             if !entries.isEmpty { entries.append(.divider("tab.\(i)")) }
-            entries += section.map { .button($0.command.title, icon: $0.command.icon, shortcut: $0.command.shortcut, action: $0.action) }
+            entries += section.map(lunaEntry)
         }
         return entries
     }
 
+    private static func lunaEntry(_ item: Item) -> LunaMenuEntry {
+        if !item.children.isEmpty { return .submenu(item.command.title, icon: item.command.icon, item.children.map(lunaEntry)) }
+        return .button(item.command.title, icon: item.command.icon, shortcut: item.command.shortcut, action: item.action)
+    }
+
     /// For the sidebar's NSMenu.
     static func addItems(_ section: [Item], to menu: NSMenu) {
-        for item in section { menu.addItem(MenuAction(item.command.title, handler: item.action)) }
+        for item in section {
+            if item.children.isEmpty { menu.addItem(MenuAction(item.command.title, handler: item.action)); continue }
+            let parent = NSMenuItem(title: item.command.title, action: nil, keyEquivalent: "")
+            parent.submenu = NSMenu()
+            addItems(item.children, to: parent.submenu!)
+            menu.addItem(parent)
+        }
     }
 }
