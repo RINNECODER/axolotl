@@ -606,7 +606,7 @@ struct CommandSurfaceView: View {
     }
 
     private var agentModelLabel: String {
-        KeyGrabber.defaultPolicy() is JevPolicy ? JevClient.configuredModel : LLMService.shared.modelName
+        ComputerUseAgent.defaultPolicy() is JevPolicy ? JevClient.configuredModel : LLMService.shared.modelName
     }
 
     /// ↑ in an empty composer puts the last message you sent back in it.

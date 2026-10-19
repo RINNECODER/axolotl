@@ -39,13 +39,6 @@ final class CommandRouter {
         return nil
     }
     
-    /// Parses JSON data into an LLMResponse.
-    /// Returns nil if decoding fails (fail closed per AGENTS.md).
-    func parseLLMResponse(_ data: Data) -> LLMResponse? {
-        let decoder = JSONDecoder()
-        return try? decoder.decode(LLMResponse.self, from: data)
-    }
-    
     /// Executes a browser action by mapping it to TabManager calls.
     /// Per AGENTS.md: Fail closed - if payload missing required fields, return error.
     /// Returns success message or error.

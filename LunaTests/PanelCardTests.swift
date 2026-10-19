@@ -61,7 +61,7 @@ final class PanelCardTests: XCTestCase {
         let service = KeyService.registry.first { $0.id == "openai" }!
         var card = GrabCard(service: service, keyName: "luna-1", model: "jev")
         card.run.apply(decided("CLICK", target: "3", label: "Create key", confidence: 0.8))
-        let saved = SecretVault.Saved(handle: "h1", keychainItem: "Luna API Keys / openai/luna-1", account: "openai/luna-1")
+        let saved = SecretVault.Saved(keychainItem: "Luna API Keys / openai/luna-1", account: "openai/luna-1")
         card.finish(GrabResult(status: .saved, service: "OpenAI", keyName: "luna-1", saved: saved, message: "Saved."))
         XCTAssertEqual(card.status, .saved)
         XCTAssertEqual(card.keychainItem, "Luna API Keys / openai/luna-1")

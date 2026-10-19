@@ -14,13 +14,13 @@ nonisolated enum LoginShellEnvironment {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var cachedPATH: String?
 
-    /// PATH from `zsh -lic`, resolved once and cached; the fallback list if the shell fails.
+    /// PATH from the login shell's environment, resolved once and cached; the fallback list if the shell fails.
     static func path() -> String {
         lock.lock()
         if let cachedPATH { lock.unlock(); return cachedPATH }
         lock.unlock()
         // The shell runs outside the lock so other callers are not blocked behind it.
-        let resolved = merged(shellPATH: runLoginShell(), home: NSHomeDirectory())
+        let resolved = merged(shellPATH: shellEnvironment()?["PATH"], home: NSHomeDirectory())
         lock.lock(); defer { lock.unlock() }
         if let cachedPATH { return cachedPATH }
         cachedPATH = resolved
@@ -100,14 +100,19 @@ nonisolated enum LoginShellEnvironment {
 
     nonisolated(unsafe) private static var cachedShellEnvironment: [String: String]??
 
-    /// The login shell's environment (cached), else this process's.
-    private static func baseEnvironment() -> [String: String] {
+    /// The login shell's environment, captured once (nil if the shell failed).
+    private static func shellEnvironment() -> [String: String]? {
         lock.lock()
-        if case .some(let cached) = cachedShellEnvironment { lock.unlock(); return cached ?? ProcessInfo.processInfo.environment }
+        if case .some(let cached) = cachedShellEnvironment { lock.unlock(); return cached }
         lock.unlock()
         let captured = runLoginShellEnvironment()
         lock.lock(); cachedShellEnvironment = .some(captured); lock.unlock()
-        return captured ?? ProcessInfo.processInfo.environment
+        return captured
+    }
+
+    /// The login shell's environment (cached), else this process's.
+    private static func baseEnvironment() -> [String: String] {
+        shellEnvironment() ?? ProcessInfo.processInfo.environment
     }
 
     /// Minimal seed for the login shell: launchd-provided basics only, so nothing from the
@@ -148,14 +153,6 @@ nonisolated enum LoginShellEnvironment {
         return nil
     }
 
-    /// Pulls PATH out of shell output that may also contain rc-file noise.
-    static func parse(_ output: String) -> String? {
-        guard let start = output.range(of: startMarker),
-              let end = output.range(of: endMarker, range: start.upperBound..<output.endIndex) else { return nil }
-        let value = output[start.upperBound..<end.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
-    }
-
     /// Shell PATH first (user's order wins), then any fallback dirs it lacks; `~` expanded.
     static func merged(shellPATH: String?, home: String) -> String {
         var seen = Set<String>()
@@ -165,12 +162,6 @@ nonisolated enum LoginShellEnvironment {
             if seen.insert(dir).inserted { out.append(dir) }
         }
         return out.joined(separator: ":")
-    }
-
-    static func runLoginShell(shell: String = "/bin/zsh", timeout: TimeInterval = 5) -> String? {
-        guard let data = runShell(shell: shell, script: "printf '\(startMarker)%s\(endMarker)' \"$PATH\"",
-                                  environment: cleanSeed(), timeout: timeout) else { return nil }
-        return parse(String(decoding: data, as: UTF8.self))
     }
 
     /// Runs `script` in an interactive login shell; stdout, or nil on failure / timeout.
