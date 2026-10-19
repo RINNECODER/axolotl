@@ -89,14 +89,9 @@ final class BrowserImportModel: ObservableObject {
         if !hasAccess(b) {
             guard askAccess else { return }
             requestAccess()
+            guard hasAccess(b) else { return }
         }
-        let folder: URL
-        if isFixtureMode {
-            folder = b.dataFolder
-        } else {
-            guard let url = BrowserAccess.resolve(b.kind) else { return }
-            folder = url
-        }
+        let folder = b.dataFolder
         scanning = true
         let kind = b.kind, fixture = isFixtureMode
         Task {

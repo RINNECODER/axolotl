@@ -41,13 +41,19 @@ nonisolated struct SandboxContainerMigration {
 
     func run() {
         guard !defaults.bool(forKey: Self.doneKey) else { return }
-        if FileManager.default.fileExists(atPath: container.path) {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: container.path) {
             importDefaults()
+            var complete = true
             for item in Self.libraryItems(bundleID: bundleID) {
-                LegacyLunaMigration.copyMissing(container.appendingPathComponent(item.old), to: library.appendingPathComponent(item.new))
+                let from = container.appendingPathComponent(item.old), to = library.appendingPathComponent(item.new)
+                LegacyLunaMigration.copyMissing(from, to: to)
+                // A failed copy (disk full) retries next launch; copying only fills in what's missing.
+                if fileManager.fileExists(atPath: from.path), !fileManager.fileExists(atPath: to.path) { complete = false }
             }
             // The sandboxed app already copied any Luna install into its container, so that copy wins.
             defaults.set(true, forKey: LegacyLunaMigration.doneKey)
+            guard complete else { return }
         }
         defaults.set(true, forKey: Self.doneKey)
     }
