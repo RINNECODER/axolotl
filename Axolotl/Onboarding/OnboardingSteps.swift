@@ -106,7 +106,7 @@ struct OnboardingAIStep: View {
         } header: {
             Text("Computer use (Jev) — optional")
         } footer: {
-            Text("With a TypeSafe key, Jev picks each step when Axolotl operates a tab for you. Without one, your chat model does.")
+            Text("With a TypeSafe key, Jev picks each step when Axolotl operates a tab for you. An OpenRouter key also works (Jev router); otherwise your chat model does.")
                 .foregroundStyle(.secondary)
         }
     }

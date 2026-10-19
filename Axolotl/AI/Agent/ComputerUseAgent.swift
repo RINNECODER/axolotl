@@ -29,10 +29,23 @@ final class ComputerUseAgent {
         ComputerUseAgent(driver: driver, policy: defaultPolicy(), maxSteps: maxSteps)
     }
 
-    /// Jev when a TypeSafe key is set, else the chat model.
-    static func defaultPolicy() -> AgentPolicy {
-        if let key = KeychainManager.shared.string(for: .typesafeKey), !key.isEmpty {
+    /// Jev when a TypeSafe key is set; else TypeSafe's Jev router through an OpenRouter key; else the chat model.
+    static func defaultPolicy(typesafeKey: String? = KeychainManager.shared.string(for: .typesafeKey),
+                              openRouterKey: String? = KeychainManager.shared.string(for: .openRouterKey)) -> AgentPolicy {
+        if let key = typesafeKey, !key.isEmpty {
             return JevPolicy(client: JevClient(apiKey: key))
+        }
+        if let key = openRouterKey, !key.isEmpty {
+            // Chat completions, not Jev's typed choice API: same JSON step protocol as LLMPolicy, no probabilities.
+            let client = OpenRouterClient(apiKey: { key })
+            return LLMPolicy(complete: { request in
+                try await LLMService.collect { onToken, onDone in
+                    Task { @MainActor in
+                        do { try await client.stream(model: OpenRouterClient.jevModel, request: request, onToken: onToken); onDone(.success(())) }
+                        catch { if !Task.isCancelled { onDone(.failure(error)) } }
+                    }
+                }
+            }, modelName: OpenRouterClient.jevModel)
         }
         return LLMPolicy()
     }
