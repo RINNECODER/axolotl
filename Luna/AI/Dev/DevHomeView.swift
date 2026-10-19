@@ -345,11 +345,14 @@ struct DevSessionRow: View {
         return parts.joined(separator: " · ")
     }
 
-    /// "claude-haiku-4-5-20251001" → "haiku-4-5".
+    /// "claude-haiku-4-5-20251001" → "Haiku 4.5"; other ids are shown as-is.
     static func shortModel(_ id: String) -> String {
-        var s = id.replacingOccurrences(of: "claude-", with: "")
+        guard id.hasPrefix("claude-") else { return id }
+        var s = String(id.dropFirst("claude-".count))
         if let r = s.range(of: #"-\d{8}$"#, options: .regularExpression) { s.removeSubrange(r) }
-        return s
+        let parts = s.split(separator: "-")
+        guard let family = parts.first, parts.count > 1, parts.dropFirst().allSatisfy({ $0.allSatisfy(\.isNumber) }) else { return s }
+        return family.capitalized + " " + parts.dropFirst().joined(separator: ".")
     }
 
     static func liveText(_ location: SessionLocation?) -> String? {

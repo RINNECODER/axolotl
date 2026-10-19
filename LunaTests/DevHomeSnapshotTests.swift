@@ -29,13 +29,13 @@ final class DevHomeSnapshotTests: XCTestCase {
         }
         let workspace = DevWorkspace()
         workspace.seedForSnapshots(
-            projects: [project("luna", branch: "main", ago: 600, count: 14), project("apex-vintage", branch: "dev", ago: 7_200, count: 3)],
+            projects: [project("luna", branch: "main", ago: 600, count: 14), project("web-shop", branch: "dev", ago: 7_200, count: 3)],
             recent: [
                 session("Fix resumed chat scrolling to the top", "luna", .claudeCode, ago: 240, model: "claude-opus-5-5"),
                 session("Compact the Dev home start flow", "luna", .claudeCode, ago: 3_000, model: "claude-sonnet-5"),
-                session("Add print-on-demand product sync", "apex-vintage", .codex, ago: 9_000, model: "gpt-6.1-sol"),
-                session("Tune the ternary finetune schedule", "bonsai-research", .codex, ago: 90_000, model: "gpt-6.1-sol"),
-                session("Kickoff return clock rules", "coach-football", .claudeCode, ago: 200_000, model: "claude-haiku-5-5"),
+                session("Add product sync", "web-shop", .codex, ago: 9_000, model: "gpt-6.1-sol"),
+                session("Tune the training schedule", "ml-notes", .codex, ago: 90_000, model: "gpt-6.1-sol"),
+                session("Fix the game clock", "game-proto", .claudeCode, ago: 200_000, model: "claude-haiku-5-5"),
                 session("Should not show (sixth)", "luna", .claudeCode, ago: 400_000, model: "claude-haiku-5-5"),
             ])
         workspace.flow.choose(project: "/tmp/luna-fixture/luna")

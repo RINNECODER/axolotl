@@ -62,4 +62,10 @@ final class DevChatScrollTests: XCTestCase {
         _ = follow.update(from: geometry, to: down)
         XCTAssertTrue(follow.following)
     }
+
+    func testRecentRowsShowFriendlyModelNames() {
+        XCTAssertEqual(DevSessionRow.shortModel("claude-opus-5-5"), "Opus 5.5")
+        XCTAssertEqual(DevSessionRow.shortModel("claude-haiku-4-5-20251001"), "Haiku 4.5")
+        XCTAssertEqual(DevSessionRow.shortModel("gpt-6.1-sol"), "gpt-6.1-sol")
+    }
 }
