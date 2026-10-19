@@ -15,6 +15,12 @@ nonisolated final class FakeKeychain: KeychainBackend, @unchecked Sendable {
         kSecValueData as String, kSecUseDataProtectionKeychain as String, kSecAttrSynchronizable as String,
     ]
 
+    private static let primaryKeys: Set<String> = [
+        kSecClass as String, kSecAttrService as String, kSecAttrAccount as String, kSecAttrServer as String,
+        kSecAttrSecurityDomain as String, kSecAttrProtocol as String, kSecAttrAccessGroup as String,
+        kSecUseDataProtectionKeychain as String, kSecAttrSynchronizable as String,
+    ]
+
     private func isDataProtection(_ d: [String: Any]) -> Bool { d[kSecUseDataProtectionKeychain as String] as? Bool ?? false }
 
     private func matches(_ item: [String: Any], _ query: [String: Any]) -> Bool {
@@ -34,8 +40,8 @@ nonisolated final class FakeKeychain: KeychainBackend, @unchecked Sendable {
     func add(_ attributes: [String: Any]) -> OSStatus {
         calls.append(("add", attributes))
         if failAdd?(attributes) == true { return errSecIO }
-        var probe = attributes
-        probe.removeValue(forKey: kSecValueData as String)
+        // Duplicates are judged on the primary key only, like the real Keychain.
+        let probe = attributes.filter { Self.primaryKeys.contains($0.key) }
         if items.contains(where: { matches($0, probe) }) { return errSecDuplicateItem }
         items.append(attributes)
         return errSecSuccess
@@ -115,6 +121,16 @@ final class KeychainStoreTests: XCTestCase {
         for call in fake.calls { assertScoped(call.query, call.op) }
     }
 
+    func testReplacingAKeyUpdatesInPlaceAndNeverDeletesFirst() throws {
+        let keys = KeychainManager(store: store)
+        try keys.store("sk-old", for: .openAIKey)
+        fake.failAdd = { _ in true }
+        try keys.store("sk-new", for: .openAIKey)
+        XCTAssertEqual(keys.string(for: .openAIKey), "sk-new")
+        XCTAssertFalse(fake.calls.contains { $0.op == "delete" }, "old value never removed before the new one is written")
+        XCTAssertThrowsError(try keys.store("x", for: .anthropicKey), "a failed first write still reports")
+    }
+
     func testAPIKeysStayOnDeviceAndLoginsSync() throws {
         try KeychainManager(store: store).store("sk-test", for: .anthropicKey)
         try PasswordVault(store: store, defaults: defaults).save(host: "example.com", username: "me", password: "pw", profile: UUID())
@@ -150,11 +166,11 @@ final class KeychainStoreTests: XCTestCase {
     // MARK: Migration
 
     private func seedLegacy(profile: UUID) {
-        _ = store.legacyAdd([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.luma.browser",
-                             kSecAttrAccount as String: "openai-api-key", kSecValueData as String: Data("sk-old".utf8)])
-        _ = store.legacyAdd([kSecClass as String: kSecClassInternetPassword, kSecAttrCreator as String: PasswordVault.creator,
+        _ = fake.add(store.legacyScoped([kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "com.luma.browser",
+                             kSecAttrAccount as String: "openai-api-key", kSecValueData as String: Data("sk-old".utf8)]))
+        _ = fake.add(store.legacyScoped([kSecClass as String: kSecClassInternetPassword, kSecAttrCreator as String: PasswordVault.creator,
                              kSecAttrSecurityDomain as String: profile.uuidString, kSecAttrServer as String: "example.com",
-                             kSecAttrAccount as String: "me", kSecValueData as String: Data("pw".utf8)])
+                             kSecAttrAccount as String: "me", kSecValueData as String: Data("pw".utf8)]))
     }
 
     private func migrator() -> KeychainMigrator {

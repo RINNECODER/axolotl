@@ -110,11 +110,6 @@ nonisolated final class KeychainStore: @unchecked Sendable {
         backend.delete(legacyScoped(query))
     }
 
-    /// Only for tests that need a legacy item to migrate.
-    func legacyAdd(_ attributes: [String: Any]) -> OSStatus {
-        backend.add(legacyScoped(attributes))
-    }
-
     // MARK: Access group
 
     /// The first `keychain-access-groups` entry from Luna's own signature
