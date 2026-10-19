@@ -846,7 +846,8 @@ struct BrowserShellView: View {
                 tidyTitle: { session.tidyTitle($0) },
                 tidyToday: { session.tidyToday() },
                 tearOff: { tearOff($0, at: $1) },
-                bookmarkPage: isCurrentTabStartOrAIChat ? nil : { bookmarkCurrentPage() }
+                bookmarkPage: isCurrentTabStartOrAIChat ? nil : { bookmarkCurrentPage() },
+                web: web
             ),
             onToggleSidebar: toggleSidebar,
             extensions: session.extensions,
@@ -960,6 +961,9 @@ struct BrowserShellView: View {
                         WebViewContainer(webView: web.ensureWebView(for: currentId))
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .id(currentId)
+                        if let pageError = web.pageErrorByTab[currentId] {
+                            PageErrorView(error: pageError) { web.reloadAfterError(in: currentId) }
+                        }
                         if isFocused && isFirstLoad {
                             ProgressView()
                                 .scaleEffect(0.8)
@@ -2080,6 +2084,7 @@ struct TitlebarConfigurator: NSViewRepresentable {
             TitlebarDragOwnership.claim(window)
 
             context.coordinator.isFullScreen = window.styleMask.contains(.fullScreen)
+            if context.coordinator.isFullScreen { Coordinator.setFullScreenTitlebarHidden(true, in: window) }
 
             NotificationCenter.default.addObserver(
                 context.coordinator,
@@ -2091,6 +2096,12 @@ struct TitlebarConfigurator: NSViewRepresentable {
                 context.coordinator,
                 selector: #selector(Coordinator.didExitFullScreen),
                 name: NSWindow.didExitFullScreenNotification,
+                object: window
+            )
+            NotificationCenter.default.addObserver(
+                context.coordinator,
+                selector: #selector(Coordinator.willExitFullScreen),
+                name: NSWindow.willExitFullScreenNotification,
                 object: window
             )
         }
@@ -2120,10 +2131,27 @@ struct TitlebarConfigurator: NSViewRepresentable {
         }
 
         @objc func didEnterFullScreen(_ note: Notification) {
+            if let window = note.object as? NSWindow { Self.setFullScreenTitlebarHidden(true, in: window) }
             DispatchQueue.main.async { self.isFullScreen = true }
         }
 
+        @objc func willExitFullScreen(_ note: Notification) {
+            if let window = note.object as? NSWindow { Self.setFullScreenTitlebarHidden(false, in: window) }
+        }
+
+        /// In full screen macOS slides the window's titlebar down over the content when the
+        /// pointer reaches the top: an opaque strip with the window buttons that covers Luna's
+        /// tab row. Luna draws its own tab row, so the titlebar stays hidden in full screen and
+        /// the top edge reveals only the menu bar, as in Chrome. Restored before leaving full screen.
+        static func setFullScreenTitlebarHidden(_ hidden: Bool, in window: NSWindow) {
+            // close button → NSTitlebarView → NSTitlebarContainerView
+            guard let container = window.standardWindowButton(.closeButton)?.superview?.superview,
+                  container !== window.contentView else { return }
+            container.isHidden = hidden
+        }
+
         @objc func didExitFullScreen(_ note: Notification) {
+            if let window = note.object as? NSWindow { Self.setFullScreenTitlebarHidden(false, in: window) }
             DispatchQueue.main.async { self.isFullScreen = false }
         }
     }
