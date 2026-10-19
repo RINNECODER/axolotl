@@ -88,6 +88,29 @@ final class LegacyLunaMigrationTests: XCTestCase {
         XCTAssertEqual(read("HTTPStorages/com.axolotl.browser/x", in: newLib), "mine", "never overwrites")
     }
 
+    func testFillsInMissingFilesOfAnExistingFolderOnly() throws {
+        // A test run or tool may have created Axolotl's folder before its first real launch.
+        try write("axolotl", "Application Support/Axolotl/Extensions/extensions.json", in: newLib)
+        try write("db", "Application Support/Axolotl/Extensions/x.sqlite", in: newLib)
+        try write("luna", "Application Support/Luna/Extensions/extensions.json", in: oldLib)
+        try write("old-db", "Application Support/Luna/Extensions/x.sqlite", in: oldLib)
+        try write("old-wal", "Application Support/Luna/Extensions/x.sqlite-wal", in: oldLib)
+        try write(#"{"u":"luna://settings"}"#, "Application Support/Luna/Profiles/P/workspace.json", in: oldLib)
+        try write("site", "WebKit/WebsiteData/Default/X/c", in: oldLib)
+        try write("own", "WebKit/WebsiteData/Default/Y/c", in: newLib)
+
+        var sandboxed = migration()
+        sandboxed.sandboxed = true
+        sandboxed.run()
+
+        XCTAssertEqual(read("Application Support/Axolotl/Extensions/extensions.json", in: newLib), "axolotl")
+        XCTAssertEqual(read("Application Support/Axolotl/Extensions/x.sqlite", in: newLib), "db")
+        XCTAssertNil(read("Application Support/Axolotl/Extensions/x.sqlite-wal", in: newLib), "no WAL onto another database")
+        XCTAssertEqual(read("Application Support/Axolotl/Profiles/P/workspace.json", in: newLib), #"{"u":"axolotl://settings"}"#)
+        XCTAssertEqual(read("WebKit/WebsiteData/Default/X/c", in: newLib), "site", "sandbox: WebKit has no bundle id folder")
+        XCTAssertEqual(read("WebKit/WebsiteData/Default/Y/c", in: newLib), "own")
+    }
+
     func testRewritesInternalURLsInHistory() throws {
         let dir = root.appendingPathComponent("hist")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

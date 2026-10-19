@@ -44,9 +44,11 @@ nonisolated struct LegacyLunaMigration {
     static let legacyCreator: UInt32 = 0x4C75_6E61 // "Luna"
 
     /// Data folders and files under `Library`, old → new (Caches are rebuilt, so skipped).
-    static func libraryItems(oldID: String, newID: String) -> [(old: String, new: String)] {
+    /// WebKit keeps its data (per-profile `WKWebsiteDataStore(forIdentifier:)` stores under
+    /// WebsiteData/Default) in `WebKit/<bundle id>`, or straight in `WebKit` inside a sandbox container.
+    static func libraryItems(oldID: String, newID: String, sandboxed: Bool) -> [(old: String, new: String)] {
         [("Application Support/Luna", "Application Support/Axolotl"),
-         ("WebKit/\(oldID)", "WebKit/\(newID)"),
+         sandboxed ? ("WebKit", "WebKit") : ("WebKit/\(oldID)", "WebKit/\(newID)"),
          ("HTTPStorages/\(oldID)", "HTTPStorages/\(newID)"),
          ("HTTPStorages/\(oldID).binarycookies", "HTTPStorages/\(newID).binarycookies")]
     }
@@ -63,6 +65,7 @@ nonisolated struct LegacyLunaMigration {
     let keychain: KeychainBackend
     /// Keychain access groups ("TEAMID.com.luna.browser" → "TEAMID.com.axolotl.browser"); nil skips the Keychain.
     let keychainGroups: (old: String, new: String)?
+    var sandboxed = false
     let fileManager = FileManager.default
 
     /// The live app's locations. The sandboxed app reads Luna's container through a
@@ -72,8 +75,8 @@ nonisolated struct LegacyLunaMigration {
         let oldID = newID.replacingOccurrences(of: "com.axolotl.", with: "com.luna.")
         let newLibrary = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
         var oldLibrary = newLibrary
-        if ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil,
-           let home = getpwuid(getuid())?.pointee.pw_dir {
+        let sandboxed = ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+        if sandboxed, let home = getpwuid(getuid())?.pointee.pw_dir {
             oldLibrary = URL(fileURLWithPath: String(cString: home))
                 .appendingPathComponent("Library/Containers/\(oldID)/Data/Library", isDirectory: true)
         }
@@ -82,7 +85,8 @@ nonisolated struct LegacyLunaMigration {
             return (String(group.dropLast(newID.count)) + oldID, group)
         }
         return LegacyLunaMigration(oldID: oldID, newID: newID, oldLibrary: oldLibrary, newLibrary: newLibrary,
-                                   defaults: .standard, keychain: SystemKeychainBackend(), keychainGroups: groups)
+                                   defaults: .standard, keychain: SystemKeychainBackend(), keychainGroups: groups,
+                                   sandboxed: sandboxed)
     }
 
     /// Call first thing at launch. Never in unit tests (they run inside the app).
@@ -96,11 +100,9 @@ nonisolated struct LegacyLunaMigration {
     func run() {
         guard !defaults.bool(forKey: Self.doneKey) else { return }
         migrateDefaults()
-        for item in Self.libraryItems(oldID: oldID, newID: newID) {
-            let to = newLibrary.appendingPathComponent(item.new)
-            if copyIfAbsent(oldLibrary.appendingPathComponent(item.old), to: to), item.new.hasPrefix("Application Support/") {
-                rewriteStoredURLs(in: to)
-            }
+        for item in Self.libraryItems(oldID: oldID, newID: newID, sandboxed: sandboxed) {
+            let copied = copyMissing(oldLibrary.appendingPathComponent(item.old), to: newLibrary.appendingPathComponent(item.new))
+            if item.new.hasPrefix("Application Support/") { copied.forEach(rewriteStoredURLs) }
         }
         if let keychainGroups { migrateKeychain(from: keychainGroups.old, to: keychainGroups.new) }
         defaults.set(true, forKey: Self.doneKey)
@@ -145,24 +147,36 @@ nonisolated struct LegacyLunaMigration {
 
     // MARK: Files
 
-    /// Copies `from` to `to` when `to` doesn't exist yet. Returns whether it copied.
+    /// Copies whatever of `from` is missing at `to`: the whole item when `to` doesn't exist,
+    /// else folder by folder. Existing files are never overwritten, and neither are the
+    /// SQLite sidecars (-wal/-shm/-journal) of an existing database. Returns the copied items.
     @discardableResult
-    func copyIfAbsent(_ from: URL, to: URL) -> Bool {
-        guard fileManager.fileExists(atPath: from.path), !fileManager.fileExists(atPath: to.path) else { return false }
-        do {
-            try fileManager.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fileManager.copyItem(at: from, to: to)
-            return true
-        } catch {
-            try? fileManager.removeItem(at: to) // drop a half copy; the next launch's app starts clean
-            return false
+    func copyMissing(_ from: URL, to: URL) -> [URL] {
+        var isDir: ObjCBool = false
+        guard fileManager.fileExists(atPath: from.path, isDirectory: &isDir) else { return [] }
+        guard fileManager.fileExists(atPath: to.path) else {
+            do {
+                try fileManager.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fileManager.copyItem(at: from, to: to)
+                return [to]
+            } catch {
+                try? fileManager.removeItem(at: to) // only ever our own half copy: `to` didn't exist
+                return []
+            }
+        }
+        guard isDir.boolValue, let children = try? fileManager.contentsOfDirectory(atPath: from.path) else { return [] }
+        let existing = Set(children.filter { fileManager.fileExists(atPath: to.appendingPathComponent($0).path) })
+        return children.flatMap { name -> [URL] in
+            let db = ["-wal", "-shm", "-journal"].first(where: name.hasSuffix).map { String(name.dropLast($0.count)) }
+            if let db, existing.contains(db) { return [] }
+            return copyMissing(from.appendingPathComponent(name), to: to.appendingPathComponent(name))
         }
     }
 
     /// Rewrites luna:// URLs and renamed keys in Axolotl's fresh copy (JSON stores and history).
-    func rewriteStoredURLs(in dir: URL) {
-        guard let files = fileManager.enumerator(at: dir, includingPropertiesForKeys: nil) else { return }
-        for case let url as URL in files {
+    func rewriteStoredURLs(in item: URL) {
+        let files = fileManager.enumerator(at: item, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? []
+        for url in files + [item] {
             switch url.pathExtension {
             case "json":
                 guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
