@@ -107,7 +107,8 @@ struct BrowserShellView: View {
 
     var body: some View {
         ZStack {
-            LunaBackdrop(material: usesSidebar ? .sidebar : .titlebar, state: .followsWindowActiveState)
+            LunaBackdrop(material: usesSidebar ? .sidebar : .titlebar, state: .followsWindowActiveState,
+                         solid: usesSidebar ? LunaSurface.window : LunaSurface.toolbar, surface: usesSidebar ? .sidebar : .toolbar)
                 .ignoresSafeArea()
             // The window chrome carries a hue of the active profile's color.
             activeProfile.profileColor.color
@@ -171,6 +172,7 @@ struct BrowserShellView: View {
         }
         .ignoresSafeArea(.container, edges: .top)
         .environment(\.lunaMenuFlavor, chromeTemplate ? .chrome : .luna)
+        .tint(LunaSurface.accent)
         .overlayPreferenceValue(AddressFieldAnchorKey.self) { anchor in
             suggestionsOverlay(anchor: anchor)
         }
@@ -877,7 +879,7 @@ struct BrowserShellView: View {
             .frame(maxHeight: .infinity)
             .background {
                 ZStack {
-                    LunaBackdrop(material: .sidebar, blendingMode: .withinWindow, solid: LunaSurface.sidebar)
+                    LunaBackdrop(material: .sidebar, blendingMode: .withinWindow, solid: LunaSurface.sidebar, surface: .sidebar)
                     activeProfile.profileColor.color.opacity(0.14)
                 }
                 .opacity(floating ? 1 : 0)

@@ -50,7 +50,19 @@ struct LunaMenuStyle {
     var fontSize: CGFloat
     var separatorMargin: CGFloat
 
+    /// The flavor's style with the theme's corner radius, text size, density and contrast.
     static func resolve(_ flavor: LunaMenuFlavor, dark: Bool) -> LunaMenuStyle {
+        var s = base(flavor, dark: dark)
+        let theme = ThemeStore.shared.theme
+        s.cornerRadius = theme.radius(s.cornerRadius)
+        s.hoverRadius = theme.radius(s.hoverRadius)
+        s.fontSize = theme.font(s.fontSize)
+        if theme.compact { s.rowHeight -= 4; s.verticalPadding = max(4, s.verticalPadding - 4) }
+        if theme.highContrast { s.secondary = s.text; s.border = dark ? .white.opacity(0.24) : .black.opacity(0.24) }
+        return s
+    }
+
+    private static func base(_ flavor: LunaMenuFlavor, dark: Bool) -> LunaMenuStyle {
         switch flavor {
         case .chrome:
             // Sampled from Chrome's ⋮ menu: light #FFFFFF / hover #F2F2F2 / separator #D6E2FB,

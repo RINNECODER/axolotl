@@ -29,7 +29,7 @@ struct SettingsView: View {
     private var inTab: Bool { external != nil }
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespaces) }
 
-    @AppStorage(LiquidGlass.defaultsKey) private var liquidGlass = LiquidGlass.defaultValue
+    private var liquidGlass: Bool { ThemeStore.shared.glass.isOn(.settings) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,6 +43,7 @@ struct SettingsView: View {
         // Sizes to the tab; no window minimums.
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(SettingsStyle.page)
+        .tint(LunaSurface.accent)
         .background(SettingsInitialFocus())
         .modifier(StandaloneWindowChrome(enabled: !inTab))
     }
@@ -55,7 +56,7 @@ struct SettingsView: View {
             HStack(spacing: 10) {
                 Image(systemName: "gearshape.fill")
                     .font(.system(size: 15))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(LunaSurface.accent)
                 Text("Settings")
                     .font(.system(size: 17, weight: .semibold))
             }
@@ -82,7 +83,7 @@ struct SettingsView: View {
         .padding(liquidGlass ? 8 : 0)
         .background {
             if liquidGlass {
-                Color.clear.lunaGlass(cornerRadius: 16)
+                Color.clear.lunaGlass(cornerRadius: 16, surface: .settings)
             }
         }
         .padding(.leading, liquidGlass ? 12 : 8)
@@ -154,7 +155,7 @@ private struct SettingsSearchField: View {
         .frame(height: 38)
         .background(Capsule(style: .continuous).fill(focused ? SettingsStyle.card : SettingsStyle.field))
         .overlay(Capsule(style: .continuous)
-            .strokeBorder(focused ? Color.accentColor.opacity(0.9) : Color.clear, lineWidth: 1.5))
+            .strokeBorder(focused ? LunaSurface.accent.opacity(0.9) : Color.clear, lineWidth: 1.5))
         .contentShape(Capsule())
         .onTapGesture { focused = true }
     }
@@ -172,17 +173,17 @@ private struct SettingsNavRow: View {
             HStack(spacing: 14) {
                 Image(systemName: pane.icon)
                     .font(.system(size: 13.5, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(isSelected ? LunaSurface.accent : Color.secondary)
                     .frame(width: 20)
                 Text(pane.title)
                     .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                    .foregroundStyle(isSelected ? LunaSurface.accent : Color.primary)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 14)
             .frame(height: 34)
             .background(Capsule(style: .continuous)
-                .fill(isSelected ? Color.accentColor.opacity(0.14) : (hovering ? LunaSurface.hover : .clear)))
+                .fill(isSelected ? LunaSurface.accent.opacity(0.14) : (hovering ? LunaSurface.hover : .clear)))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
@@ -223,6 +224,7 @@ extension SettingsPane {
         case .general: return [("Default browser", "Make Luna open your links."), ("Profiles", "Rename, recolor, add and delete profiles."),
                                ("Add Profile", nil), ("Welcome", "Show the welcome tour again.")]
         case .appearance: return [("Layout template", "Luna or Chrome look in one click."),
+                                  ("Theme colors", "Presets, accent, window, sidebar and tab colors."),
                                   ("Tab layout", nil), ("Wallpaper", "Start page wallpaper and moon."),
                                   ("Moon style", nil), ("Frame rate", nil), ("Remove all shortcuts", "Start page shortcuts.")]
         case .tabs: return []
@@ -439,7 +441,9 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return ["layout.template", "appearance.theme", "appearance.liquidGlass", "tabs.layout",
                                   "toolbar.visible", "bookmarksBar.visible", "chrome.autoHide", "chrome.alwaysShowTopBar",
                                   "chrome.roundedFrame", "chrome.homeButton", "chrome.hideWindowButtons", "addressBar.centered",
-                                  "addressBar.minimalURL", "addressBar.loadingProgress", "startPage.showShortcuts"]
+                                  "addressBar.minimalURL", "addressBar.loadingProgress", "startPage.showShortcuts",
+                                  "appearance.density", "appearance.cornerRadius", "appearance.fontScale", "appearance.contrast",
+                                  "glass.blur", "glass.tint"] + GlassSurface.allCases.map(\.registryKey)
         case .tabs: return ["tabs.unloadAfterMinutes"]
         case .ai: return ["aiPanel.fontSize", "lunaMax.askOnPage", "lunaMax.linkPreviews", "lunaMax.tidyTitles",
                           "lunaMax.tidyDownloads"]
@@ -455,6 +459,8 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .appearance: return ["theme", "dark", "light", "layout", "template", "chrome", "custom", "customize", "sidebar",
                                   "compact", "dynamic", "classic", "address", "url", "frameless", "frame", "auto-hide",
                                   "home", "toolbar", "bookmarks", "wallpaper", "background", "shader", "moon", "glass",
+                                  "accent", "color", "colour", "preset", "density", "radius", "corner", "font", "text size",
+                                  "contrast", "blur", "tint",
                                   "start page", "shortcuts"]
         case .tabs: return ["tabs", "memory", "unload", "sleep", "hibernate", "inactive"]
         case .ai: return ["model", "gemini", "ollama", "openai", "chatgpt", "anthropic", "claude", "api key", "luna max",
@@ -613,10 +619,7 @@ private struct AppearanceSettingsView: View {
                 }
             }
 
-            SettingsCard("Theme") {
-                RegistryPicker("appearance.theme")
-                RegistryToggle("appearance.liquidGlass")
-            }
+            ThemeSettingsSection()
 
             WallpaperSettingsSection()
 
@@ -704,7 +707,7 @@ struct LayoutTemplatePicker: View {
                                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                        .strokeBorder(current == template ? Color.accentColor : Color.primary.opacity(0.12),
+                                        .strokeBorder(current == template ? LunaSurface.accent : Color.primary.opacity(0.12),
                                                       lineWidth: current == template ? 2.5 : 1)
                                 )
                             Text(template.title).font(.system(size: 12, weight: .semibold))
@@ -764,7 +767,7 @@ private struct LayoutTemplateThumbnail: View {
                 .shadow(color: .black.opacity(0.15), radius: 1)
                 .padding([.vertical, .trailing], 5)
         }
-        .background(Color.accentColor.opacity(0.08))
+        .background(LunaSurface.accent.opacity(0.08))
         .background(Color(nsColor: .windowBackgroundColor))
     }
 

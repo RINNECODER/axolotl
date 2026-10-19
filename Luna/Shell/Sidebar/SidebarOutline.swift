@@ -73,6 +73,7 @@ struct SidebarOutline: NSViewRepresentable {
     static func makeScrollView(coordinator: Coordinator) -> NSScrollView {
         let outline = SidebarOutlineView()
         outline.style = .sourceList
+        outline.selectionHighlightStyle = .none  // ThemedSidebarRowView draws the active tab
         outline.headerView = nil
         outline.rowSizeStyle = .default
         outline.floatsGroupRows = false
@@ -110,6 +111,7 @@ struct SidebarOutline: NSViewRepresentable {
     func updateNSView(_ nsView: NSScrollView, context: Context) {
         context.coordinator.actions = actions
         context.coordinator.apply(snapshot)
+        context.coordinator.applyTheme(ThemeStore.shared.theme)
     }
 
     // MARK: - Items
@@ -136,6 +138,7 @@ struct SidebarOutline: NSViewRepresentable {
         var actions: SidebarActions
         weak var outline: SidebarOutlineView?
         private(set) var snapshot: SidebarSnapshot?
+        private var theme: Theme?
         private var roots: [Item] = []
         /// Items are reused across reloads so AppKit keeps expansion state.
         private var cache: [UUID: Item] = [:]
@@ -298,7 +301,18 @@ struct SidebarOutline: NSViewRepresentable {
         // MARK: Delegate
 
         func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-            (item as? Item)?.kind == .divider ? 20 : 30
+            (item as? Item)?.kind == .divider ? 20 : (ThemeStore.shared.theme.compact ? 26 : 30)
+        }
+
+        func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? { ThemedSidebarRowView() }
+
+        /// Density changes row heights; colors and radius redraw the selection.
+        func applyTheme(_ new: Theme) {
+            guard let outline, new != theme else { return }
+            let densityChanged = theme.map { $0.compact != new.compact } ?? false
+            theme = new
+            if densityChanged { outline.noteHeightOfRows(withIndexesChanged: IndexSet(integersIn: 0..<outline.numberOfRows)) }
+            outline.enumerateAvailableRowViews { row, _ in row.needsDisplay = true }
         }
 
         func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
@@ -594,6 +608,33 @@ final class SidebarOutlineView: NSOutlineView {
 
     // No focus ring / key-view highlight: the sidebar isn't a text target.
     override var acceptsFirstResponder: Bool { false }
+}
+
+/// The active tab's highlight in the theme's active tab color (instead of the system selection).
+final class ThemedSidebarRowView: NSTableRowView {
+    override var isEmphasized: Bool { get { false } set {} }
+    /// Theme colors exactly as chosen, not blended with what's behind the window.
+    override var allowsVibrancy: Bool { false }
+
+    // The outline's highlight style is .none (the system source-list highlight is its own vibrancy layer),
+    // so the active row is painted here.
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+        guard isSelected else { return }
+        let theme = ThemeStore.shared.theme
+        let dark = effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        let radius = theme.radius(6)
+        let rect = bounds.insetBy(dx: 4, dy: 1)
+        NSColor.lunaHex(theme.pair(.activeTab).hex(dark: dark)).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+        NSColor.black.withAlphaComponent(dark ? 0.25 : 0.08).setStroke()
+        let border = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: radius, yRadius: radius)
+        border.lineWidth = 1
+        border.stroke()
+    }
+
+    /// Labels keep their normal colors on the light highlight.
+    override var interiorBackgroundStyle: NSView.BackgroundStyle { .normal }
 }
 
 /// A row: SwiftUI content (non-interactive, so AppKit owns clicks and drags)

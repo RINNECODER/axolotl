@@ -50,6 +50,14 @@ final class SidebarOutlineTests: XCTestCase {
 
     private func url(_ s: String) -> URL { URL(string: "https://\(s).com")! }
 
+    func testActiveTabHighlightIsThemeDrawn() {
+        let a = store.newTab(url: url("a"))
+        refresh()
+        let rowView = outline.rowView(atRow: row(of: a), makeIfNecessary: true)
+        XCTAssertTrue(rowView is ThemedSidebarRowView)
+        XCTAssertEqual(rowView?.isSelected, true)
+    }
+
     func testRowsMirrorPinnedDividerNewTabAndToday() {
         let p = store.newTab(url: url("p"))
         store.pin(p)

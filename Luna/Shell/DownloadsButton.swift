@@ -22,7 +22,7 @@ struct DownloadsButton: View {
                     if let fraction = manager.activeFraction {
                         Circle()
                             .trim(from: 0, to: max(0.03, fraction))
-                            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .stroke(LunaSurface.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                             .rotationEffect(.degrees(-90))
                             .frame(width: 18, height: 18)
                             .animation(.linear(duration: 0.2), value: fraction)
@@ -31,7 +31,7 @@ struct DownloadsButton: View {
                     }
                     Image(systemName: "arrow.down")
                         .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(LunaSurface.accent)
                 } else {
                     Image(systemName: "arrow.down.circle")
                         .font(.system(size: 13, weight: .medium))
@@ -74,7 +74,7 @@ private struct IndeterminateRing: View {
     var body: some View {
         Circle()
             .trim(from: 0, to: 0.25)
-            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+            .stroke(LunaSurface.accent, style: StrokeStyle(lineWidth: 2, lineCap: .round))
             .frame(width: 18, height: 18)
             .rotationEffect(.degrees(spinning ? 360 : 0))
             .animation(.linear(duration: 1).repeatForever(autoreverses: false), value: spinning)

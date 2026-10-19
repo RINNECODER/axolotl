@@ -162,8 +162,8 @@ private struct FavoritesGrid: View {
             }
                 .frame(maxWidth: .infinity, minHeight: 40)
                 .background(
-                    RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .fill(isActive ? AnyShapeStyle(.selection.opacity(0.35)) : AnyShapeStyle(.quaternary.opacity(0.6)))
+                    RoundedRectangle(cornerRadius: ThemeStore.shared.theme.radius(9), style: .continuous)
+                        .fill(isActive ? AnyShapeStyle(LunaSurface.activeTab) : AnyShapeStyle(.quaternary.opacity(0.6)))
                 )
                 .contentShape(Rectangle())
         }

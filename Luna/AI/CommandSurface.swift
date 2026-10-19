@@ -505,7 +505,7 @@ struct CommandSurfaceView: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .lunaGlass(cornerRadius: 22, interactive: true)
+            .lunaGlass(cornerRadius: 22, interactive: true, surface: .aiPanel)
             .focusShadow(isInputFocused)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Message input")

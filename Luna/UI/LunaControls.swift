@@ -50,7 +50,7 @@ struct LunaPicker<Value: Hashable>: View {
     var subtitle: String? = nil
     @Binding var selection: Value
     let options: [LunaPickerOption<Value>]
-    @AppStorage(LiquidGlass.defaultsKey) private var glass = LiquidGlass.defaultValue
+    private var glass: Bool { ThemeStore.shared.glass.isOn(.menus) }
 
     init(_ title: String, subtitle: String? = nil, selection: Binding<Value>, options: [LunaPickerOption<Value>]) {
         self.title = title
@@ -102,7 +102,7 @@ struct LunaSegmentedPicker<Value: Hashable>: View {
     var subtitle: String? = nil
     @Binding var selection: Value
     let options: [LunaPickerOption<Value>]
-    @AppStorage(LiquidGlass.defaultsKey) private var glass = LiquidGlass.defaultValue
+    private var glass: Bool { ThemeStore.shared.glass.isOn(.menus) }
 
     init(_ title: String, subtitle: String? = nil, selection: Binding<Value>, options: [LunaPickerOption<Value>]) {
         self.title = title

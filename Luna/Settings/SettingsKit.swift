@@ -301,7 +301,7 @@ struct SettingsSwitch: View {
     var body: some View {
         ZStack(alignment: isOn ? .trailing : .leading) {
             Capsule(style: .continuous)
-                .fill(isOn ? Color.accentColor : SettingsStyle.trackOff)
+                .fill(isOn ? LunaSurface.accent : SettingsStyle.trackOff)
                 .frame(width: 32, height: 18)
             Circle()
                 .fill(Color.white)
@@ -385,7 +385,7 @@ struct SettingsDropdownLabel: View {
         .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
             .fill(isOpen ? LunaSurface.pressed : (hovering ? LunaSurface.hover : Color.clear)))
         .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
-            .strokeBorder(isOpen ? Color.accentColor.opacity(0.8) : LunaSurface.stroke.opacity(1.4), lineWidth: 1))
+            .strokeBorder(isOpen ? LunaSurface.accent.opacity(0.8) : LunaSurface.stroke.opacity(1.4), lineWidth: 1))
         .contentShape(Rectangle())
         .opacity(isEnabled ? 1 : 0.5)
         .onHover { hovering = $0 }
@@ -506,7 +506,7 @@ struct SettingsButtonStyle: ButtonStyle {
 
         var body: some View {
             let destructive = configuration.role == .destructive
-            let tint: Color = destructive ? .red : .accentColor
+            let tint: Color = destructive ? .red : LunaSurface.accent
             configuration.label
                 .font(.system(size: 12.5, weight: .medium))
                 .lineLimit(1)
@@ -576,11 +576,11 @@ struct SettingsTabBar<Value: Hashable>: View {
                 VStack(spacing: 0) {
                     Text(title)
                         .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                        .foregroundStyle(isSelected ? Color.accentColor : (hovering ? Color.primary : Color.secondary))
+                        .foregroundStyle(isSelected ? LunaSurface.accent : (hovering ? Color.primary : Color.secondary))
                         .padding(.horizontal, 14)
                         .frame(height: 34)
                     Capsule(style: .continuous)
-                        .fill(isSelected ? Color.accentColor : Color.clear)
+                        .fill(isSelected ? LunaSurface.accent : Color.clear)
                         .frame(height: 3)
                         .padding(.horizontal, 8)
                 }

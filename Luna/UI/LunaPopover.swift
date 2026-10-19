@@ -101,7 +101,7 @@ private struct LunaPopoverModifier<PopoverContent: View>: ViewModifier {
     let arrowEdge: Edge
     var decorated = true
     @ViewBuilder let popover: () -> PopoverContent
-    @AppStorage(LiquidGlass.defaultsKey) private var glass = LiquidGlass.defaultValue
+    private var glass: Bool { ThemeStore.shared.glass.isOn(.popovers) }
     @Environment(\.colorScheme) private var scheme
     @State private var box = LunaAnchorBox()
     @State private var controller: LunaPopoverController?

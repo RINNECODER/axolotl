@@ -102,7 +102,7 @@ private struct SplitPane<Content: View>: View {
             .clipShape(shape)
             .overlay {
                 shape
-                    .strokeBorder(Color.accentColor.opacity(isFocused ? 0.55 : 0), lineWidth: 1.5)
+                    .strokeBorder(LunaSurface.accent.opacity(isFocused ? 0.55 : 0), lineWidth: 1.5)
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .topTrailing) {
