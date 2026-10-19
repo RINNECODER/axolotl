@@ -280,6 +280,9 @@ final class AxolotlMenuController: ObservableObject {
         let m = Self.margin
         let screen = (parentWindow?.screen ?? NSScreen.main)?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         var menu = NSRect(origin: .zero, size: NSSize(width: size.width - 2 * m, height: size.height - 2 * m))
+        // Menus stay inside the browser window (Chrome-like) when it has room, else the screen.
+        let window = parentWindow.map { $0.frame.intersection(screen).insetBy(dx: 4, dy: 4) } ?? .null
+        let bounds = window.width >= menu.width && window.height >= menu.height ? window : screen.insetBy(dx: 4, dy: 4)
         if level == 0 {
             switch placement {
             case .below(let alignment), .above(let alignment):
@@ -304,10 +307,10 @@ final class AxolotlMenuController: ObservableObject {
             let rowTop = panels[level - 1].frame.maxY - row.minY
             menu.origin.y = rowTop + style.verticalPadding - menu.height
             menu.origin.x = parent.maxX - 2
-            if menu.maxX > screen.maxX { menu.origin.x = parent.minX - menu.width + 2 }
+            if menu.maxX > bounds.maxX { menu.origin.x = parent.minX - menu.width + 2 }
         }
-        menu.origin.x = min(max(menu.minX, screen.minX + 4), screen.maxX - menu.width - 4)
-        menu.origin.y = min(max(menu.minY, screen.minY + 4), screen.maxY - menu.height - 4)
+        menu.origin.x = min(max(menu.minX, bounds.minX), bounds.maxX - menu.width)
+        menu.origin.y = min(max(menu.minY, bounds.minY), screen.maxY - menu.height - 4)
         return menu.insetBy(dx: -m, dy: -m)
     }
 

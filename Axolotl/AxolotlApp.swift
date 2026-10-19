@@ -48,6 +48,11 @@ struct AxolotlApp: App {
             BrowserCommands()
             ProfileCommands()
             // Settings opens as a tab (axolotl://settings), like Chrome; there is no Settings window.
+            #if !AXOLOTL_DEV
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { AppUpdater.shared.checkInteractively() }
+            }
+            #endif
             CommandGroup(replacing: .appSettings) {
                 Button("Settings…") { SettingsOpener.open() }
                     .keyboardShortcut(",")

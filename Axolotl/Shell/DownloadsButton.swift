@@ -96,52 +96,71 @@ struct DownloadsHubView: View {
     var showAll: (() -> Void)? = nil
 
     var body: some View {
-        VStack(spacing: 0) {
+        // Chrome's download bubble: title, recent files, then "Full download history".
+        VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("Downloads")
+                Text("Recent downloads")
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
-                if let showAll {
-                    Button("Show All") { showAll() }
-                        .buttonStyle(.borderless)
-                        .font(.system(size: 12))
-                }
                 if items.contains(where: { !$0.isActive }) {
                     Button("Clear") { manager.clearInactive { $0.belongs(profileId: profileId, isPrivate: isPrivate) } }
                         .buttonStyle(.borderless)
                         .font(.system(size: 12))
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 6)
 
             if items.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "tray.and.arrow.down")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.tertiary)
-                    Text("No downloads")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 28)
+                Text("Files you download appear here")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 2) {
+                    LazyVStack(spacing: 0) {
                         ForEach(items) { item in
                             DownloadRow(item: item)
                         }
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.bottom, 8)
+                    .padding(.horizontal, 8)
                 }
                 .frame(maxHeight: 360)
             }
+
+            if let showAll {
+                Divider().padding(.top, 6)
+                BubbleFooterButton(title: "Full download history", systemName: "arrow.up.right.square", action: showAll)
+            }
         }
-        .frame(width: 340)
+        .frame(width: 360)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Chrome's bubble footer row: full-width, highlights on hover.
+private struct BubbleFooterButton: View {
+    let title: String
+    let systemName: String
+    let action: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack {
+                Text(title).font(.system(size: 13))
+                Spacer()
+                Image(systemName: systemName).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.primary.opacity(isHovering ? 0.06 : 0))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
     }
 }
 

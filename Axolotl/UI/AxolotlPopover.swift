@@ -79,7 +79,10 @@ final class AxolotlPopoverController {
         var y = edge == .top ? anchorRect.maxY + 6 : anchorRect.minY - 6 - h
         if edge != .top, y < screen.minY { y = anchorRect.maxY + 6 }
         if edge == .top, y + h > screen.maxY { y = anchorRect.minY - 6 - h }
-        x = min(max(x, screen.minX + 6), screen.maxX - w - 6)
+        // Like Chrome's bubbles: stay inside the browser window, not just the screen.
+        let bounds = (parentWindow.map { $0.frame.intersection(screen) } ?? screen).insetBy(dx: 8, dy: 8)
+        x = min(max(x, bounds.minX), bounds.maxX - w)
+        if h <= bounds.height { y = max(y, bounds.minY) }
         panel.setFrame(NSRect(x: x - m, y: y - m, width: size.width, height: size.height), display: true)
     }
 

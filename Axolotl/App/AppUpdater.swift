@@ -111,6 +111,12 @@ final class AppUpdater: NSObject, ObservableObject, SPUUpdaterDelegate, SPUStand
         controller.updater.checkForUpdatesInBackground()
     }
 
+    /// App menu › Check for Updates…: Sparkle's own window, including "You're up to date".
+    func checkInteractively() {
+        guard started else { status = .failed("Updates are off in debug builds"); return }
+        controller.checkForUpdates(nil)
+    }
+
     func installNow() {
         if let immediateInstall { immediateInstall() } else { controller.checkForUpdates(nil) }
     }
