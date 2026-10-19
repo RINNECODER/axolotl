@@ -532,3 +532,23 @@ final class LockedBox<T>: @unchecked Sendable {
         set { lock.lock(); _value = newValue; lock.unlock() }
     }
 }
+
+@MainActor
+final class DevEventCoalescerTests: XCTestCase {
+    func testBurstIsDeliveredAsOneBatchInOrder() async throws {
+        var batches: [[CLIEvent]] = []
+        let c = DevEventCoalescer(window: .milliseconds(20)) { batches.append($0) }
+        for i in 0..<600 { c.add(.textDelta("\(i)")) }
+        try await Task.sleep(for: .milliseconds(120))
+        XCTAssertEqual(batches.count, 1)
+        XCTAssertEqual(batches.first?.count, 600)
+    }
+
+    func testFlushDeliversPendingImmediately() {
+        var batches: [[CLIEvent]] = []
+        let c = DevEventCoalescer(window: .seconds(10)) { batches.append($0) }
+        c.add(.textDelta("a"))
+        c.flush()
+        XCTAssertEqual(batches.count, 1)
+    }
+}

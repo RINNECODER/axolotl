@@ -238,6 +238,8 @@ struct DevSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .contentMargins(.bottom, 20, for: .scrollContent)
         .tint(p.primary)
         .task { await scan(refresh: false) }
     }

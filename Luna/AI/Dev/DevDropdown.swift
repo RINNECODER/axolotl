@@ -272,8 +272,8 @@ struct DevDropdownList: View {
                         Text(subtitle)
                             .font(.system(size: DevMetrics.text2xs))
                             .foregroundStyle(p.mutedForeground)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 Spacer(minLength: 6)
@@ -282,6 +282,7 @@ struct DevDropdownList: View {
                         .font(.system(size: DevMetrics.text2xs))
                         .foregroundStyle(p.mutedForeground)
                         .lineLimit(1)
+                        .fixedSize()
                 }
                 Image(systemName: "checkmark")
                     .font(.system(size: 10.5, weight: .semibold))

@@ -441,7 +441,6 @@ struct DevBubbleLabel: View {
                     }
                 }
                 .frame(maxWidth: 230, alignment: .leading)
-                .fixedSize(horizontal: true, vertical: false)
                 if let caption {
                     Text(caption)
                         .font(.system(size: DevMetrics.text(10)))
@@ -514,7 +513,7 @@ struct DevChipFlow: Layout {
         for row in arrange(width: bounds.width, subviews: subviews) {
             var x = bounds.minX + (bounds.width - row.width) / 2
             for index in row.items {
-                let size = subviews[index].sizeThatFits(.unspecified)
+                let size = fit(subviews[index], width: bounds.width)
                 subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
                 x += size.width + spacing
             }
@@ -522,12 +521,19 @@ struct DevChipFlow: Layout {
         }
     }
 
+    /// Natural size, but never wider than the line, so a long chip truncates instead of overflowing.
+    private func fit(_ view: LayoutSubview, width: CGFloat) -> CGSize {
+        let natural = view.sizeThatFits(.unspecified)
+        guard width.isFinite, natural.width > width else { return natural }
+        return view.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+
     private struct Row { var items: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
 
     private func arrange(width: CGFloat, subviews: Subviews) -> [Row] {
         var rows: [Row] = [Row()]
         for (i, view) in subviews.enumerated() {
-            let size = view.sizeThatFits(.unspecified)
+            let size = fit(view, width: width)
             let extra = rows[rows.count - 1].items.isEmpty ? size.width : size.width + spacing
             if rows[rows.count - 1].width + extra > width, !rows[rows.count - 1].items.isEmpty {
                 rows.append(Row())

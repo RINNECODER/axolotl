@@ -30,6 +30,7 @@ struct DevPanelView: View {
     @State private var settings = DevSettings.shared
     @State private var input = ""
     @State private var editorHeight: CGFloat = 36
+    @State private var followsBottom = true
     @State private var expandedGroups: Set<Int> = []
     @State private var turnStartedAt: Date?
     /// "Worked for" durations, keyed by the index of the turn's user message.
@@ -267,8 +268,7 @@ struct DevPanelView: View {
                         .foregroundStyle(projectName == nil ? p.mutedForeground : p.foreground)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                        .frame(maxWidth: 110)
-                        .fixedSize(horizontal: true, vertical: false)
+                        .frame(maxWidth: 110, alignment: .leading)
                     Image(systemName: "chevron.up.chevron.down")
                         .font(.system(size: 8, weight: .semibold))
                         .foregroundStyle(p.mutedForeground)
@@ -278,7 +278,6 @@ struct DevPanelView: View {
                 .background(Capsule().fill(p.accent))
                 .contentShape(Capsule())
             }
-            .fixedSize()
             .layoutPriority(1)
             .accessibilityLabel("Project: \(projectName ?? "none")")
             if session != nil {
@@ -511,9 +510,16 @@ struct DevPanelView: View {
             .overlay {
                 if thread.items.isEmpty, session.sessionID == nil { newSessionHint(session) }
             }
+            .defaultScrollAnchor(.bottom)
+            .onScrollGeometryChange(for: Bool.self) { g in
+                g.contentOffset.y + g.containerSize.height >= g.contentSize.height - 40
+            } action: { _, atBottom in followsBottom = atBottom }
             .frame(maxHeight: .infinity)
-            .onChange(of: thread.items) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            // Only follow new output while the reader is at the bottom; never animate.
+            .onChange(of: thread.items) { _, _ in
+                if followsBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
+            .onAppear { followsBottom = true; proxy.scrollTo("bottom", anchor: .bottom) }
         }
     }
 

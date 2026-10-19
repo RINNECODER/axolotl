@@ -341,10 +341,17 @@ final class DevSession: Identifiable {
         followedFile = file
         let stream = deps.follow(file, harness)
         followTask = Task { [weak self] in
-            for await event in stream {
+            // History arrives as a burst of events: apply them in one pass per window, so the
+            // chat renders (and scrolls) once instead of once per event.
+            let coalescer = DevEventCoalescer { [weak self] events in
                 guard let self, self.followedFile == file else { return }
-                self.timeline.apply(event)
+                for event in events { self.timeline.apply(event) }
             }
+            for await event in stream {
+                guard self != nil else { return }
+                coalescer.add(event)
+            }
+            coalescer.flush()
         }
     }
 
@@ -428,5 +435,41 @@ final class DevSessions {
     func remove(_ session: DevSession) {
         session.close()
         byID = byID.filter { $0.value !== session }
+    }
+}
+
+
+/// Collects events and hands them over together: the first event of a burst opens a short window,
+/// everything arriving inside it is delivered in one call. A throttle, not a debounce, so a
+/// continuous stream still flows.
+@MainActor
+final class DevEventCoalescer {
+    private var buffer: [CLIEvent] = []
+    private var timer: Task<Void, Never>?
+    private let window: Duration
+    private let deliver: ([CLIEvent]) -> Void
+
+    init(window: Duration = .milliseconds(40), deliver: @escaping ([CLIEvent]) -> Void) {
+        self.window = window
+        self.deliver = deliver
+    }
+
+    func add(_ event: CLIEvent) {
+        buffer.append(event)
+        guard timer == nil else { return }
+        timer = Task { [weak self, window] in
+            try? await Task.sleep(for: window)
+            guard !Task.isCancelled else { return }
+            self?.flush()
+        }
+    }
+
+    func flush() {
+        timer?.cancel()
+        timer = nil
+        guard !buffer.isEmpty else { return }
+        let events = buffer
+        buffer = []
+        deliver(events)
     }
 }

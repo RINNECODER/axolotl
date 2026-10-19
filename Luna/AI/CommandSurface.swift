@@ -223,6 +223,8 @@ struct CommandSurfaceView: View {
                 } label: {
                     Text(mode == .general ? "General" : "Dev")
                         .font(.system(size: 11.5, weight: .medium))
+                        .lineLimit(1)
+                        .fixedSize()
                         .foregroundStyle(selected ? Color.primary : Color.secondary)
                         .padding(.horizontal, 8)
                         .frame(height: 22)
@@ -565,7 +567,7 @@ struct CommandSurfaceView: View {
             selectedID: composerMode.rawValue,
             palette: .general,
             edge: .above,
-            width: 290,
+            width: 300,
             presentation: .inWindow,
             onSelect: { item in
                 if let mode = ComposerMode(rawValue: item.id) { setMode(mode) }

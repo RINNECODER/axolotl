@@ -70,7 +70,7 @@ enum DebugSnapshot {
                                    ollama: OllamaClient(), historyManager: HistoryManager(profileId: UUID()),
                                    onActionProposed: { _ in }, tabId: tab)
                     .padding(10)
-                    .frame(width: 400, height: 640)
+                    .frame(width: Double(ProcessInfo.processInfo.environment["LUNA_SNAPSHOT_PANEL_WIDTH"] ?? "") ?? 400, height: 640)
                     .background(Color(nsColor: .windowBackgroundColor))
             }
         }

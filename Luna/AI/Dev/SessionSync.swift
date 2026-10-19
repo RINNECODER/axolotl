@@ -612,7 +612,8 @@ nonisolated enum TranscriptMapper {
 
     /// Claude Code `~/.claude/projects/…/<id>.jsonl` record.
     static func claude(_ o: [String: Any]) -> [TranscriptEntry] {
-        if o["isSidechain"] as? Bool == true || o["isMeta"] as? Bool == true { return [] }
+        if o["isSidechain"] as? Bool == true || o["isMeta"] as? Bool == true
+            || o["isCompactSummary"] as? Bool == true { return [] }
         let message = o["message"] as? [String: Any]
         switch o["type"] as? String {
         case "user":
@@ -620,16 +621,22 @@ nonisolated enum TranscriptMapper {
                 return userText(text).map { [.user($0)] } ?? []
             }
             var out: [TranscriptEntry] = []
+            var typed: [String] = []
             for block in message?["content"] as? [[String: Any]] ?? [] {
                 switch block["type"] as? String {
                 case "text":
-                    if let text = userText(block["text"] as? String) { out.append(.user(text)) }
+                    if let text = userText(block["text"] as? String) { typed.append(text) }
+                case "image", "document":
+                    typed.append(attachmentChip(block["type"] as? String))
                 case "tool_result":
                     out.append(.toolResult(id: block["tool_use_id"] as? String ?? "",
                                            output: clip(resultText(block["content"])),
                                            isError: block["is_error"] as? Bool == true))
                 default: break
                 }
+            }
+            if typed.contains(where: { !isChip($0) }) {
+                out.insert(.user(typed.joined(separator: "\n")), at: 0)
             }
             return out
         case "assistant":
@@ -662,9 +669,15 @@ nonisolated enum TranscriptMapper {
                 let blocks = payload["content"] as? [[String: Any]] ?? []
                 switch payload["role"] as? String {
                 case "user":
-                    return blocks.compactMap { b in
-                        b["type"] as? String == "input_text" ? userText(b["text"] as? String).map(TranscriptEntry.user) : nil
+                    var parts: [String] = []
+                    for b in blocks {
+                        switch b["type"] as? String {
+                        case "input_text": if let t = userText(b["text"] as? String) { parts.append(t) }
+                        case "input_image": parts.append(attachmentChip("image"))
+                        default: break
+                        }
                     }
+                    return parts.isEmpty ? [] : [.user(parts.joined(separator: "\n"))]
                 case "assistant":
                     let text = blocks.compactMap { $0["type"] as? String == "output_text" ? $0["text"] as? String : nil }.joined()
                     return text.isEmpty ? [] : [.assistant(text)]
@@ -691,11 +704,32 @@ nonisolated enum TranscriptMapper {
         }
     }
 
-    /// A real user prompt, or nil for empty / wrapper text (`<command-name>…`, `<environment_context>`…).
+    /// Wrapper blocks the CLIs add around (or beside) what the user typed.
+    private static let wrapperTags = ["system-reminder", "command-name", "command-message", "command-args",
+                                      "local-command-stdout", "local-command-stderr", "local-command-caveat",
+                                      "user-prompt-submit-hook", "environment_context", "user_instructions",
+                                      "ide_opened_file", "ide_selection", "ide_diagnostics", "task-notification",
+                                      "INSTRUCTIONS", "permissions instructions", "collaboration_mode"]
+
+    static func attachmentChip(_ kind: String?) -> String { kind == "document" ? "[Attachment]" : "[Image]" }
+    private static func isChip(_ s: String) -> Bool { s == "[Image]" || s == "[Attachment]" }
+
+    /// What the user typed: wrapper blocks removed, pasted-content tags unwrapped. Nil for empty
+    /// text, pure wrappers (`<command-name>…`, `<environment_context>`) and injected instructions.
     static func userText(_ text: String?) -> String? {
-        guard let text else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.hasPrefix("<") else { return nil }
+        guard var t = text else { return nil }
+        for tag in wrapperTags {
+            let escaped = NSRegularExpression.escapedPattern(for: tag)
+            t = t.replacingOccurrences(of: "<\(escaped)(\\s[^>]*)?>[\\s\\S]*?</\(escaped)>", with: "",
+                                       options: .regularExpression)
+        }
+        // Pasted text keeps its content, loses the tags.
+        t = t.replacingOccurrences(of: "</?pasted[-_ ]content[^>]*>", with: "", options: .regularExpression)
+        let trimmed = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("<"),
+              !trimmed.hasPrefix("# AGENTS.md instructions"),
+              !trimmed.hasPrefix("Caveat: The messages below were generated by the user while running local commands"),
+              !trimmed.hasPrefix("This session is being continued from a previous conversation") else { return nil }
         return trimmed
     }
 
