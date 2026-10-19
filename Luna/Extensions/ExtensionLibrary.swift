@@ -152,7 +152,6 @@ final class ExtensionLibrary: ObservableObject {
         }
         let staging = try makeStagingDirectory()
         try unpackArchive(data, into: staging.appendingPathComponent("ext"))
-        if let existing = records.first(where: { $0.storeID == id }) { remove(existing) }
         return try await finishInstall(staging: staging, storeID: id)
     }
 
@@ -171,9 +170,20 @@ final class ExtensionLibrary: ObservableObject {
             throw InstallError.unreadable(error.localizedDescription)
         }
         guard confirmInstall(ext) else { throw InstallError.cancelled }
-        let record = Record(id: UUID(), name: ext.displayName ?? "Extension", version: ext.displayVersion ?? ext.version ?? "",
+        // A store reinstall replaces the old copy only now that the new one is confirmed, and keeps
+        // its id so the extension's storage carries over.
+        let existing = storeID.flatMap { id in records.firstIndex { $0.storeID == id } }
+        let record = Record(id: existing.map { records[$0].id } ?? UUID(), name: ext.displayName ?? "Extension",
+                            version: ext.displayVersion ?? ext.version ?? "",
                             enabled: true, storeID: storeID, installedAt: Date(), builtInID: nil)
-        try FileManager.default.moveItem(at: root, to: directory(for: record))
+        let dir = directory(for: record)
+        if existing != nil, FileManager.default.fileExists(atPath: dir.path) {
+            _ = try FileManager.default.replaceItemAt(dir, withItemAt: root)
+        } else {
+            try FileManager.default.moveItem(at: root, to: dir)
+        }
+        // Publishing the list without it first makes ExtensionHost unload the old version.
+        if let existing { records.remove(at: existing) }
         records.append(record)
         save()
         return record

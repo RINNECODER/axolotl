@@ -425,6 +425,22 @@ final class WorkspaceTests: XCTestCase {
         assertValid(reloaded)
     }
 
+    func testWorkspaceFromNewerBuildIsKeptAndNotOverwritten() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appendingPathComponent("workspace.json")
+        let newer = Data(#"{"version":\#(Workspace.currentVersion + 1),"future":true}"#.utf8)
+        try newer.write(to: fileURL)
+
+        let store = WorkspaceStore(persistence: WorkspacePersistence(fileURL: fileURL))
+        _ = store.newTab(url: url("a"))
+        store.flush()
+
+        XCTAssertEqual(try Data(contentsOf: fileURL), newer, "a newer build's file is left alone")
+        XCTAssertEqual(try Data(contentsOf: dir.appendingPathComponent("workspace.newer-\(Workspace.currentVersion + 1).json")), newer)
+    }
+
     func testCorruptFileIsBackedUpAndReplacedWithFreshWorkspace() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

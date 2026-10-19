@@ -418,9 +418,12 @@ final class WorkspaceStore: ObservableObject {
     }
 
     private func scheduleSave() {
-        guard persistence != nil else { return }
-        pendingSave?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.saveNow() }
+        // An already pending save picks up this change too; rescheduling would let steady changes postpone it forever.
+        guard persistence != nil, pendingSave == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingSave = nil
+            self?.saveNow()
+        }
         pendingSave = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
@@ -472,11 +475,23 @@ final class WorkspacePersistence {
         return WorkspacePersistence(fileURL: base.appendingPathComponent("workspace.json"))
     }
 
+    /// Set when the file on disk came from a newer Luna: this run must not overwrite it.
+    private(set) var isReadOnly = false
+
     func load() -> Workspace? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
+        struct Header: Decodable { var version: Int? }
+        if let version = (try? JSONDecoder().decode(Header.self, from: data))?.version, version > Workspace.currentVersion {
+            // A newer build's workspace: keep a copy and leave the original alone, so going back
+            // to that build finds its tabs.
+            let copy = fileURL.deletingPathExtension().appendingPathExtension("newer-\(version).json")
+            try? FileManager.default.removeItem(at: copy)
+            try? FileManager.default.copyItem(at: fileURL, to: copy)
+            isReadOnly = true
+            return nil
+        }
         do {
-            let ws = try JSONDecoder().decode(Workspace.self, from: data)
-            return ws.version <= Workspace.currentVersion ? ws : nil
+            return try JSONDecoder().decode(Workspace.self, from: data)
         } catch {
             // Keep the unreadable file for inspection instead of overwriting it silently.
             let backup = fileURL.deletingPathExtension().appendingPathExtension("corrupt.json")
@@ -488,6 +503,7 @@ final class WorkspacePersistence {
     }
 
     func save(_ workspace: Workspace) {
+        guard !isReadOnly else { return }
         let url = fileURL
         queue.async {
             do {

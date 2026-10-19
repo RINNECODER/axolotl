@@ -129,7 +129,7 @@ struct OnboardingLookStep: View {
         } header: {
             Text("Surfaces")
         }
-        WallpaperSettingsSection(staticPreviews: true)
+        WallpaperSettingsSection()
     }
 }
 

@@ -46,16 +46,19 @@ final class HistoryManager: ObservableObject {
     
     func recordPageVisit(url: URL, title: String) {
         guard url.scheme == "http" || url.scheme == "https" || url.scheme == "file" else { return }
+        // Pages control both: keep a hostile title or URL from bloating the history file.
+        let urlString = String(url.absoluteString.prefix(2000))
+        let title = String(title.prefix(300))
         if let latest = historyEvents.first,
            latest.type == .pageVisit,
-           latest.url == url.absoluteString,
+           latest.url == urlString,
            Date().timeIntervalSince(latest.timestamp) < 2 {
             return
         }
         let event = HistoryEvent(
             timestamp: Date(),
             type: .pageVisit,
-            url: url.absoluteString,
+            url: urlString,
             pageTitle: title
         )
         historyEvents.insert(event, at: 0)
@@ -89,22 +92,6 @@ final class HistoryManager: ObservableObject {
 
     // MARK: - Chat History Management
 
-    /// Records a chat session. sessionId = tabId so all chats in the same tab belong to one session until the tab is closed.
-    func recordChatSession(tabId: UUID, messages: [ChatMessage], summary: String? = nil) {
-        let event = HistoryEvent(
-            timestamp: Date(),
-            type: .chatConversation,
-            sessionId: tabId,
-            chatMessages: messages,
-            conversationSummary: summary
-        )
-        historyEvents.insert(event, at: 0)
-        if historyEvents.count > maxHistoryCount {
-            historyEvents.removeLast(historyEvents.count - maxHistoryCount)
-        }
-        scheduleHistorySave()
-    }
-    
     func addConversationSummary(tabId: UUID, summary: ConversationSummary) {
         if conversationSummaries[tabId] == nil {
             conversationSummaries[tabId] = []
@@ -167,11 +154,6 @@ final class HistoryManager: ObservableObject {
         scheduleHistorySave()
     }
     
-    func clearChatHistoryForTab(_ tabId: UUID) {
-        conversationSummaries.removeValue(forKey: tabId)
-        scheduleSummariesSave()
-    }
-    
     // MARK: - Persistence
     
     func flush() {
@@ -186,15 +168,23 @@ final class HistoryManager: ObservableObject {
     }
 
     private func scheduleHistorySave() {
-        pendingHistorySave?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.saveHistory() }
+        // An already pending save picks up this change too; rescheduling would let steady changes postpone it forever.
+        guard pendingHistorySave == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingHistorySave = nil
+            self?.saveHistory()
+        }
         pendingHistorySave = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     private func scheduleSummariesSave() {
-        pendingSummariesSave?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.saveSummaries() }
+        // An already pending save picks up this change too; rescheduling would let steady changes postpone it forever.
+        guard pendingSummariesSave == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.pendingSummariesSave = nil
+            self?.saveSummaries()
+        }
         pendingSummariesSave = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }

@@ -1,14 +1,9 @@
 // Luna — Settings › Appearance › Wallpaper.
 import SwiftUI
 import AppKit
-import WebKit
-import Combine
 
 struct WallpaperSettingsSection: View {
-    /// Onboarding: palette-gradient tiles instead of rendered snapshots, so no web view is created.
-    var staticPreviews = false
     @ObservedObject private var store = WallpaperStore.shared
-    @StateObject private var thumbnails = WallpaperThumbnails()
 
     private let columns = [GridItem(.adaptive(minimum: 104, maximum: 132), spacing: 12)]
 
@@ -20,15 +15,13 @@ struct WallpaperSettingsSection: View {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                 ForEach(WallpaperPreset.allCases) { preset in
                     WallpaperTile(preset: preset,
-                                  image: staticPreviews ? nil : thumbnails.images[preset],
-                                  gradient: staticPreviews ? gradientColors(for: preset) : nil,
+                                  gradient: gradientColors(for: preset),
                                   isSelected: store.preset == preset) {
                         store.preset = preset
                     }
                 }
             }
             .padding(.vertical, 4)
-            .background(alignment: .topLeading) { if !staticPreviews { thumbnails.host } }
             }
 
             SettingsMenuRow("Moon style", subtitle: "Shader draws a softly lit moon with the GPU.",
@@ -38,8 +31,6 @@ struct WallpaperSettingsSection: View {
                 styleControls(for: store.preset)
             }
         }
-        .onAppear { if !staticPreviews { thumbnails.render(store: store) } }
-        .onChange(of: store.styles) { _, _ in if !staticPreviews { thumbnails.render(store: store) } }
     }
 
     private func gradientColors(for preset: WallpaperPreset) -> [Color] {
@@ -107,8 +98,7 @@ struct WallpaperSettingsSection: View {
 
 private struct WallpaperTile: View {
     let preset: WallpaperPreset
-    let image: NSImage?
-    var gradient: [Color]? = nil
+    let gradient: [Color]
     let isSelected: Bool
     let select: () -> Void
 
@@ -122,14 +112,9 @@ private struct WallpaperTile: View {
                         Image(systemName: "moon.stars")
                             .font(.system(size: 20, weight: .light))
                             .foregroundStyle(.white.opacity(0.7))
-                    } else if let gradient {
-                        LinearGradient(colors: gradient, startPoint: .bottomLeading, endPoint: .topTrailing)
-                    } else if let image {
-                        Image(nsImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
                     } else {
-                        ProgressView().controlSize(.small)
+                        // Palette gradient, not a live render: no web view per tile.
+                        LinearGradient(colors: gradient, startPoint: .bottomLeading, endPoint: .topTrailing)
                     }
                 }
                 .frame(height: 66)
@@ -181,78 +166,4 @@ private extension Color {
         self.init(red: Double((v >> 16) & 0xff) / 255, green: Double((v >> 8) & 0xff) / 255,
                   blue: Double(v & 0xff) / 255)
     }
-}
-
-/// Renders still thumbnails of each preset in one small, hidden web view.
-@MainActor
-final class WallpaperThumbnails: ObservableObject {
-    @Published private(set) var images: [WallpaperPreset: NSImage] = [:]
-    private var rendered: [WallpaperPreset: WallpaperRenderConfig] = [:]
-    private let bridge = WallpaperBridge()
-    private lazy var webView: WKWebView = {
-        let view = WallpaperWeb.makeWebView(bridge: bridge)
-        bridge.webView = view
-        return view
-    }()
-    private var loaded = false
-    private var pending: WallpaperStore?
-    private var running = false
-
-    /// Sits in the window (rendering needs a live layer) but is too small to see.
-    var host: some View {
-        ThumbnailHost(webView: webView).frame(width: 2, height: 2).opacity(0.02).allowsHitTesting(false)
-    }
-
-    init() {
-        bridge.onState = { [weak self] state in
-            guard state == "loaded", let self else { return }
-            self.loaded = true
-            if let store = self.pending { self.render(store: store) }
-        }
-    }
-
-    func render(store: WallpaperStore) {
-        _ = webView
-        pending = store
-        guard loaded, !running else { return }
-        running = true
-        Task { [weak self] in
-            await self?.drain()
-        }
-    }
-
-    private func drain() async {
-        while let store = pending {
-            pending = nil
-            for preset in WallpaperPreset.allCases where preset != .none {
-                let config = store.renderConfig(for: preset, still: true)
-                guard rendered[preset] != config else { continue }
-                if let image = await snapshot(config) {
-                    images[preset] = image
-                    rendered[preset] = config
-                }
-            }
-        }
-        running = false
-    }
-
-    private func snapshot(_ config: WallpaperRenderConfig) async -> NSImage? {
-        let script = "return await window.lunaWallpaper.snapshot(\(config.json()), 192, 120)"
-        guard let result = try? await webView.callAsyncJavaScript(script, contentWorld: .page),
-              let url = result as? String,
-              let comma = url.firstIndex(of: ","),
-              let data = Data(base64Encoded: String(url[url.index(after: comma)...])) else { return nil }
-        return NSImage(data: data)
-    }
-}
-
-private struct ThumbnailHost: NSViewRepresentable {
-    let webView: WKWebView
-    func makeNSView(context: Context) -> NSView {
-        let container = NSView()
-        webView.frame = NSRect(x: 0, y: 0, width: 192, height: 120)
-        container.addSubview(webView)
-        return container
-    }
-    func updateNSView(_ view: NSView, context: Context) {}
 }
