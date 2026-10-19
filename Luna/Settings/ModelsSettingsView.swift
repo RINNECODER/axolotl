@@ -282,7 +282,7 @@ private struct ComputerUseSection: View {
 /// Keys saved by `/grab` and the `grab_api_key` tool. Values stay in the Keychain;
 /// this list shows names and dates only, with Copy and Delete.
 private struct GrabbedKeysSection: View {
-    @AppStorage(SecretVault.autoClearKey) private var autoClear = false
+    @AppStorage(SecretVault.autoClearKey) private var autoClear = true
     @State private var items: [SecretVault.Item] = []
     @State private var copied: String?
 

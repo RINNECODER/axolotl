@@ -337,6 +337,76 @@ final class BrowserImportTests: XCTestCase {
         XCTAssertThrowsError(try OnePasswordImporter.parse1PUX(at: notZip))
     }
 
+    func testZipReaderRejectsHostileHeadersWithoutCrashing() throws {
+        let zip = makeZip("export.data", Data(exportData.utf8), deflate: true)
+        let central = zip.count - 22 - (46 + "export.data".utf8.count)
+        func patched(_ offset: Int, _ value: UInt32) -> Data {
+            var d = zip
+            for i in 0..<4 { d[offset + i] = UInt8((value >> (8 * UInt32(i))) & 0xff) }
+            return d
+        }
+        XCTAssertNotNil(try ZipReader.entry(named: "export.data", in: zip))
+        XCTAssertThrowsError(try ZipReader.entry(named: "export.data", in: patched(central + 24, 0xFFFF_FFFF)), "4 GB claimed size")
+        XCTAssertThrowsError(try ZipReader.entry(named: "export.data", in: patched(central + 20, 0)), "empty deflate body")
+        XCTAssertThrowsError(try ZipReader.entry(named: "export.data", in: patched(central + 20, 0xFFFF_FFFF)), "body past the end")
+        XCTAssertThrowsError(try ZipReader.entry(named: "export.data", in: patched(central + 42, 0xFFFF_FFF0)), "local header past the end")
+        XCTAssertThrowsError(try ZipReader.entry(named: "export.data", in: patched(zip.count - 6, 0xFFFF_FFFF)), "central directory past the end")
+        // Every truncation and every single-byte corruption either throws or returns; none may crash.
+        for n in 0..<zip.count { _ = try? ZipReader.entry(named: "export.data", in: zip.prefix(n)) }
+        for i in 0..<zip.count {
+            var d = zip
+            d[i] ^= 0xFF
+            _ = try? ZipReader.entry(named: "export.data", in: d)
+        }
+    }
+
+    func testSQLiteSnapshotRemovesItsTempCopy() throws {
+        let tmp = FileManager.default.temporaryDirectory
+        func snapshots() -> Set<String> {
+            Set((try? FileManager.default.contentsOfDirectory(atPath: tmp.path))?.filter { $0.hasPrefix("luna-import-") } ?? [])
+        }
+        let before = snapshots()
+        let db = home.appendingPathComponent("t.sqlite")
+        try sqlite(db, "CREATE TABLE t(x INTEGER); INSERT INTO t VALUES (1);")
+        do {
+            let snap = try SQLiteSnapshot(copying: db)
+            XCTAssertEqual(try snap.rows("SELECT x FROM t").first?.first?.int, 1)
+            XCTAssertFalse(snapshots().subtracting(before).isEmpty, "reads a private copy")
+        }
+        XCTAssertEqual(snapshots().subtracting(before), [], "copy removed once the snapshot is released")
+
+        try Data("not sqlite".utf8).write(to: db)
+        _ = try? SQLiteSnapshot(copying: db).rows("SELECT 1 FROM t")
+        XCTAssertEqual(snapshots().subtracting(before), [], "removed on failure too")
+    }
+
+    func testChromiumHistoryLimitCountsOnlyWebVisits() throws {
+        let profile = try dir("Chrome/Default")
+        let t1 = ChromiumImporter.chromiumTime(from: Date(timeIntervalSince1970: 1_700_000_000))
+        let t2 = ChromiumImporter.chromiumTime(from: Date(timeIntervalSince1970: 1_700_000_100))
+        try sqlite(profile.appendingPathComponent("History"), """
+            CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT);
+            CREATE TABLE visits(id INTEGER PRIMARY KEY, url INTEGER, visit_time INTEGER);
+            INSERT INTO urls VALUES (1,'https://a.example.com/','A'), (2,'chrome://settings','Settings');
+            INSERT INTO visits VALUES (1,1,\(t1)), (2,2,\(t2));
+            """)
+        XCTAssertEqual(try ChromiumImporter.history(profileFolder: profile, limit: 1).map(\.url), ["https://a.example.com/"])
+    }
+
+    func testKeepInSyncSkipsBookmarksAlreadyImportedOnce() {
+        let a = URL(string: "https://a.example/")!, b = URL(string: "https://b.example")!, c = URL(string: "https://c.example")!
+        let first: [ImportedBookmark] = [.link(title: "A", url: a), .folder(name: "F", children: [.link(title: "B", url: b)])]
+        let imported = ImportedBookmark.keys(first)
+        XCTAssertEqual(imported.count, 2)
+        // The user deleted A and B in Luna; the source still has them plus a new C.
+        let later = first + [.link(title: "C", url: c)]
+        XCTAssertEqual(ImportedBookmark.removing(imported, from: later), [.link(title: "C", url: c)], "empty folders dropped too")
+
+        var ws = Workspace()
+        let r = ws.mergeImportedBookmarks(ImportedBookmark.removing(imported, from: first), folderName: "Imported", existingFolderId: nil)
+        XCTAssertEqual(r, .init(folderId: nil, added: 0), "a deleted import folder is not recreated empty")
+    }
+
     func testOnePasswordCSVAndVaultCSVRoundTrip() {
         let csv = "Title,Url,Username,Password,OTPAuth,Favorite,Archived,Tags,Notes\n" +
             "Example,https://example.com,me,\"pa,ss\",,false,false,,note\n" +

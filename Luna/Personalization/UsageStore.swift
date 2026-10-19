@@ -120,6 +120,9 @@ final class UsageStore: ObservableObject {
         return store
     }
 
+    /// Drops a deleted profile's record and its pending save.
+    static func forget(_ id: UUID) { stores.removeValue(forKey: id)?.deleteAll() }
+
     // MARK: Recording
 
     var isEnabled: Bool { PersonalizationPrefs.isEnabled(defaults) }

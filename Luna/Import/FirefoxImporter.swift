@@ -48,14 +48,16 @@ nonisolated enum FirefoxImporter {
         return result
     }
 
-    /// Most recent visits first, only those after `since`. Firefox stores microseconds since 1970.
+    /// Most recent visits first, only those after `since`. The limit matches the
+    /// history store's cap (HistoryManager keeps the newest 10,000), so older rows would be dropped anyway;
+    /// web URLs are filtered in SQL so the limit counts only importable visits. Firefox stores microseconds since 1970.
     static func history(profileFolder: URL, since: Date? = nil, limit: Int = 10_000) throws -> [ImportedVisit] {
         let db = try SQLiteSnapshot(copying: profileFolder.appendingPathComponent("places.sqlite"))
         let after = since.map { Int64($0.timeIntervalSince1970 * 1_000_000) } ?? 0
         let rows = try db.rows("""
             SELECT p.url, p.title, v.visit_date FROM moz_historyvisits v
             JOIN moz_places p ON p.id = v.place_id
-            WHERE v.visit_date > ?
+            WHERE v.visit_date > ? AND (p.url LIKE 'http://%' OR p.url LIKE 'https://%')
             ORDER BY v.visit_date DESC LIMIT ?
             """, bind: [after, Int64(limit)])
         return rows.compactMap { r in

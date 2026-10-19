@@ -33,9 +33,7 @@ final class KeychainManager {
 
     // MARK: Gemini (kept for existing callers)
 
-    func storeGeminiKey(_ key: String) throws { try store(key, for: .geminiKey) }
     func fetchGeminiKey() -> String? { string(for: .geminiKey) }
-    func deleteGeminiKey() throws { try delete(.geminiKey) }
 
     // MARK: Named secrets (provider keys, OAuth credentials)
 
@@ -48,12 +46,12 @@ final class KeychainManager {
     }
 
     /// API keys and tokens stay on this Mac: never synced to iCloud.
+    /// Updates in place so a failed write never loses the old value.
     func store(_ value: Data, for account: Account) throws {
-        try? delete(account)
-        var add = query(account)
-        add[kSecValueData as String] = value
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        let status = keychain.add(add, sync: .deviceOnly)
+        let attrs: [String: Any] = [kSecValueData as String: value,
+                                    kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly]
+        var status = keychain.update(query(account), sync: .deviceOnly, set: attrs)
+        if status == errSecItemNotFound { status = keychain.add(query(account).merging(attrs) { $1 }, sync: .deviceOnly) }
         guard status == errSecSuccess else { throw KeychainError.storeFailed(status) }
     }
 

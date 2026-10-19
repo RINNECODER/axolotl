@@ -188,7 +188,7 @@ struct PasswordsSettingsView: View {
             do {
                 let text = try String(contentsOf: url, encoding: .utf8)
                 let r = try PasswordVault.shared.importCSV(text, profile: profileId)
-                status = "Imported \(r.imported) login\(r.imported == 1 ? "" : "s")" + (r.skipped > 0 ? ", skipped \(r.skipped)." : ".")
+                status = r.summary
             } catch {
                 status = "Couldn't read that file. Export it again from the Passwords app as CSV."
             }

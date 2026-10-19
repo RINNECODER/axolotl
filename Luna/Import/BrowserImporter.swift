@@ -29,6 +29,8 @@ enum BrowserImporter {
         var folderId: UUID?
         var lastVisit: Date?
         var keepInSync = false
+        /// Bookmark keys imported from this source so far; sync skips them so deletions stick.
+        var importedKeys: Set<String>?
 
         func matches(_ kind: BrowserKind, _ profileId: String, _ luna: UUID) -> Bool {
             self.kind == kind && profile.id == profileId && lunaProfileId == luna
@@ -48,6 +50,9 @@ enum BrowserImporter {
     static func source(_ kind: BrowserKind, _ profile: SourceProfile, _ luna: UUID) -> Source {
         sources.first { $0.matches(kind, profile.id, luna) } ?? Source(kind: kind, profile: profile, lunaProfileId: luna)
     }
+
+    /// Forgets every source that imports into a deleted Luna profile.
+    static func forgetSources(lunaProfileId: UUID) { sources.removeAll { $0.lunaProfileId == lunaProfileId } }
 
     static func save(_ source: Source) {
         var all = sources
@@ -138,7 +143,9 @@ enum BrowserImporter {
         }.value
         var summary = Summary(errors: read.errors)
         if let bookmarks = read.bookmarks {
-            let r = applyBookmarks(bookmarks, folderName: folderName(kind, profile, profileCount: profileCount),
+            let fresh = incremental ? ImportedBookmark.removing(source.importedKeys ?? [], from: bookmarks) : bookmarks
+            source.importedKeys = (source.importedKeys ?? []).union(ImportedBookmark.keys(bookmarks))
+            let r = applyBookmarks(fresh, folderName: folderName(kind, profile, profileCount: profileCount),
                                    existingFolderId: source.folderId, lunaProfileId: lunaProfileId)
             summary.bookmarks = r.added
             if let id = r.folderId { source.folderId = id }

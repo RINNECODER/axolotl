@@ -231,8 +231,14 @@ final class ProfileManager: ObservableObject {
                     completion()
                     return
                 }
+                // Logins first: their synced key depends on the profile list still holding this name.
+                PasswordVault.shared.deleteAll(profile: profileId)
+                BrowserImporter.forgetSources(lunaProfileId: profileId)
+                UsageStore.forget(profileId)
+                let wasDefault = self.profiles.first { $0.id == profileId }?.isDefault == true
                 self.profiles.removeAll { $0.id == profileId }
                 self.dataStores.removeValue(forKey: profileId)
+                if !wasDefault { WKWebsiteDataStore.remove(forIdentifier: profileId) { _ in } }
                 if self.lastActiveProfileId == profileId, let first = self.profiles.first {
                     self.lastActiveProfileId = first.id
                 }

@@ -63,9 +63,8 @@ enum JWTVerifier {
         let aud = claims["aud"]
         let audiences = (aud as? [String]) ?? [(aud as? String) ?? ""]
         guard audiences.contains(audience) else { throw VerifyError.claim("wrong audience") }
-        if let exp = claims["exp"] as? Double, Date(timeIntervalSince1970: exp) < now.addingTimeInterval(-60) {
-            throw VerifyError.claim("expired")
-        }
+        guard let exp = claims["exp"] as? Double else { throw VerifyError.claim("no expiry") }
+        if Date(timeIntervalSince1970: exp) < now.addingTimeInterval(-60) { throw VerifyError.claim("expired") }
         if let nonce, claims["nonce"] as? String != nonce { throw VerifyError.claim("nonce mismatch") }
         return claims
     }

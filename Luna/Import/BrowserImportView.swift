@@ -324,7 +324,7 @@ struct BrowserImportView: View {
         do {
             let text = try String(contentsOf: url, encoding: .utf8)
             let r = try PasswordVault.shared.importCSV(text, profile: profile)
-            return "Imported \(r.imported) login\(r.imported == 1 ? "" : "s")" + (r.skipped > 0 ? ", skipped \(r.skipped)." : ".")
+            return r.summary
         } catch {
             return "Couldn't read that file. Export it again as CSV."
         }

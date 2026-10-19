@@ -37,7 +37,7 @@ final class KeychainLiveTests: XCTestCase {
         for service in [legacyService, controlService] {
             var add = generic(service)
             add[kSecValueData as String] = Data("test-only".utf8)
-            XCTAssertEqual(store.legacyAdd(add), errSecSuccess)
+            XCTAssertEqual(store.backend.add(store.legacyScoped(add)), errSecSuccess)
         }
         UserDefaults.standard.removeObject(forKey: doneKey)
         var m = KeychainMigrator(store: store, defaults: .standard)

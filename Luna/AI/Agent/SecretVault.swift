@@ -109,14 +109,14 @@ final class SecretVault {
         return String(data: data, encoding: .utf8)
     }
 
-    /// Optional (Settings, default off): clears the clipboard after 90 s unless something else was copied.
+    /// Optional (Settings, default on): clears the clipboard after 90 s unless something else was copied.
     private func putOnPasteboard(_ value: String) {
         pasteboard.clearContents()
         pasteboard.setString(value, forType: .string)
         // Clipboard managers skip items carrying these markers (nspasteboard.org).
         pasteboard.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
         pasteboard.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
-        guard UserDefaults.standard.bool(forKey: Self.autoClearKey) else { return }
+        guard UserDefaults.standard.object(forKey: Self.autoClearKey) as? Bool ?? true else { return }
         let count = pasteboard.changeCount
         let board = pasteboard
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.autoClearSeconds) {

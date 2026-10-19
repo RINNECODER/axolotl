@@ -152,16 +152,18 @@ final class PasswordVault {
     }
 
     /// Turns iCloud sync on or off for `profile` and moves its existing logins to match.
+    /// Copies every login first and deletes the sources only once all copies
+    /// are written, so a failure part way leaves every login where it was.
     func setICloudSync(_ enabled: Bool, profile: UUID) throws {
-        defaults.set(enabled, forKey: syncKey(profile))
         let from = enabled ? deviceScope(profile) : syncedScope(profile)
         let to = enabled ? syncedScope(profile) : deviceScope(profile)
         var query = Self.baseQuery(domain: from.domain)
         query[kSecReturnAttributes as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitAll
         let (status, result) = keychain.copyMatching(query, sync: from.sync)
-        if status == errSecItemNotFound { return }
+        if status == errSecItemNotFound { defaults.set(enabled, forKey: syncKey(profile)); return }
         guard status == errSecSuccess, let items = result as? [[String: Any]] else { throw VaultError.keychain(status) }
+        var copied: [[String: Any]] = []
         for attrs in items {
             guard let server = attrs[kSecAttrServer as String] as? String else { continue }
             var match = Self.baseQuery(domain: from.domain)
@@ -178,10 +180,40 @@ final class PasswordVault {
             add[kSecAttrProtocol as String] = kSecAttrProtocolHTTPS
             add[kSecAttrLabel as String] = attrs[kSecAttrLabel as String] as? String ?? "\(server) (Luna)"
             add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlocked
-            let added = keychain.add(add, sync: to.sync)
-            guard added == errSecSuccess || added == errSecDuplicateItem else { throw VaultError.keychain(added) }
-            _ = keychain.delete(match, sync: from.sync)
+            var added = keychain.add(add, sync: to.sync)
+            if added == errSecDuplicateItem {
+                // The destination already has this login: the newest copy wins.
+                var target = match
+                target[kSecAttrSecurityDomain as String] = to.domain
+                var probe = target
+                probe[kSecReturnAttributes as String] = true
+                probe[kSecMatchLimit as String] = kSecMatchLimitOne
+                let (probeStatus, existing) = keychain.copyMatching(probe, sync: to.sync)
+                guard probeStatus == errSecSuccess else { throw VaultError.keychain(probeStatus) }
+                let theirs = (existing as? [String: Any])?[kSecAttrModificationDate as String] as? Date ?? .distantPast
+                let ours = attrs[kSecAttrModificationDate as String] as? Date ?? .distantPast
+                added = ours > theirs ? keychain.update(target, sync: to.sync, set: [kSecValueData as String: secret]) : errSecSuccess
+            }
+            guard added == errSecSuccess else { throw VaultError.keychain(added) }
+            copied.append(match)
         }
+        for match in copied {
+            let removed = keychain.delete(match, sync: from.sync)
+            guard removed == errSecSuccess || removed == errSecItemNotFound else { throw VaultError.keychain(removed) }
+        }
+        defaults.set(enabled, forKey: syncKey(profile))
+    }
+
+    /// Removes every login and the sync setting of `profile`, which is being deleted.
+    /// Call while it is still in `profileNames`. Synced logins under its name key go
+    /// only when no other local profile shares the name (`syncDomain` falls back to the UUID).
+    func deleteAll(profile: UUID) {
+        _ = keychain.delete(Self.baseQuery(domain: profile.uuidString), sync: .any)
+        let named = syncDomain(profile: profile)
+        if named != profile.uuidString, isICloudSyncEnabled(profile: profile) {
+            _ = keychain.delete(Self.baseQuery(domain: named), sync: .synchronizable)
+        }
+        defaults.removeObject(forKey: syncKey(profile))
     }
 
     // MARK: Name keys (renames and migration)
@@ -358,7 +390,17 @@ final class PasswordVault {
 
     struct ImportResult {
         var imported = 0
+        /// Rows without a website or password, and logins already saved with the same password.
         var skipped = 0
+        /// Rows whose login is already saved with a different password (kept as is).
+        var conflicts = 0
+
+        var summary: String {
+            var notes: [String] = []
+            if skipped > 0 { notes.append("skipped \(skipped)") }
+            if conflicts > 0 { notes.append("kept \(conflicts) existing login\(conflicts == 1 ? "" : "s") with a different password") }
+            return "Imported \(imported) login\(imported == 1 ? "" : "s")" + (notes.isEmpty ? "." : ", " + notes.joined(separator: ", ") + ".")
+        }
     }
 
     /// Imports Apple Passwords' CSV export (Title,URL,Username,Password,Notes,OTPAuth),
@@ -377,6 +419,12 @@ final class PasswordVault {
             let rawURL = row[urlCol].trimmingCharacters(in: .whitespaces)
             let url = URL(string: rawURL.contains("://") ? rawURL : "https://\(rawURL)")
             guard let host = url?.host, !host.isEmpty, !row[passCol].isEmpty else { result.skipped += 1; continue }
+            // Never overwrite a saved password; this also drops repeated rows of the file.
+            let (status, existing) = secret(host: Self.normalize(host), username: row[userCol], profile: profile)
+            if status == errSecSuccess {
+                if existing == Data(row[passCol].utf8) { result.skipped += 1 } else { result.conflicts += 1 }
+                continue
+            }
             try save(host: host, username: row[userCol], password: row[passCol], profile: profile)
             result.imported += 1
         }

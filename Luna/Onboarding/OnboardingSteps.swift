@@ -188,15 +188,7 @@ struct OnboardingPrivacyStep: View {
         } header: {
             Text("Passwords")
         }
-        .onAppear {
-            // Off until turned on: when sync was never chosen and nothing is saved yet, start local-only.
-            // (Existing logins keep their current setting.)
-            let chosen = UserDefaults.standard.object(forKey: PasswordVault.syncKey(profileId.uuidString)) != nil
-            if !chosen, PasswordVault.shared.credentials(profile: profileId).isEmpty {
-                try? PasswordVault.shared.setICloudSync(false, profile: profileId)
-            }
-            iCloudSync = PasswordVault.shared.isICloudSyncEnabled(profile: profileId)
-        }
+        .onAppear { iCloudSync = PasswordVault.shared.isICloudSyncEnabled(profile: profileId) }
     }
 
     private func setICloudSync(_ enabled: Bool) {
