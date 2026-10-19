@@ -49,10 +49,10 @@ enum Omnibox {
     /// Row 1 is what was typed; then (deduped) pages, then up to 3 search phrases; at most `maxRows`.
     /// Pages leave room for 2 phrases when there are any.
     static func rows(typed: String, pages: [AddressSuggestion], phrases: [String],
-                     engine: SearchEngine = .current, chat: Bool = false, maxRows: Int = maxRows) -> [OmniboxRow] {
+                     engine: SearchEngine? = nil, chat: Bool = false, maxRows: Int = maxRows) -> [OmniboxRow] {
         let text = typed.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let url = AddressInput.url(for: text, engine: engine) else { return [] }
-        let isURL = url != engine.searchURL(for: text)
+        let isURL = url != SearchEngine.url(searching: text, engine: engine)
         var rows = [OmniboxRow(kind: isURL ? .typedURL(text, url) : .typedSearch(text))]
         if chat { rows.append(OmniboxRow(kind: .chat(text))) }
 
@@ -145,7 +145,7 @@ struct OmniboxDropdown: View {
     let rows: [OmniboxRow]
     let query: String
     var selectedIndex: Int
-    var engineTitle: String = SearchEngine.current.title
+    var engineTitle: String = SearchEngine.currentTitle
     /// False when the rows sit inside a card that already is the surface (start page).
     var drawsSurface = true
     let onSelect: (OmniboxRow) -> Void
@@ -238,7 +238,8 @@ private struct OmniboxRowView: View {
     private var subtitle: String? {
         switch row.kind {
         case .typedURL: return "Open"
-        case .typedSearch: return "\(engineTitle) Search"
+        case .typedSearch(let t):
+            return "\(CustomSearchEngine.keywordSearch(t, in: CustomSearchEngine.load())?.engine.name ?? engineTitle) Search"
         case .chat: return "Ask Luna"
         case .search: return nil
         case .page(let p):

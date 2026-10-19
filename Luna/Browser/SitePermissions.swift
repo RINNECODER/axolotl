@@ -235,3 +235,53 @@ enum SiteSecurity {
         return records.filter { host == $0.displayName.lowercased() || host.hasSuffix("." + $0.displayName.lowercased()) }
     }
 }
+
+/// Brave's "Forget me when I close this site": per profile, sites whose cookies and storage are removed
+/// once their last open tab closes. Off for every site by default; never used in private windows.
+enum ForgetSites {
+    static func defaultsKey(_ profileId: UUID) -> String { "luna_forget_sites_\(profileId.uuidString)" }
+
+    /// The stored form of a host: lowercased, without "www.".
+    /// shortcut: not eTLD+1, so "mail.example.com" covers only itself and its subdomains; use a public-suffix list if that matters.
+    static func site(_ host: String?) -> String? {
+        guard var h = host?.lowercased(), !h.isEmpty else { return nil }
+        if h.hasPrefix("www.") { h.removeFirst(4) }
+        return h
+    }
+
+    static func sites(_ profileId: UUID, defaults: UserDefaults = .standard) -> [String] {
+        defaults.stringArray(forKey: defaultsKey(profileId)) ?? []
+    }
+
+    static func isOn(host: String?, profileId: UUID, defaults: UserDefaults = .standard) -> Bool {
+        site(host).map { sites(profileId, defaults: defaults).contains($0) } ?? false
+    }
+
+    static func set(_ on: Bool, host: String?, profileId: UUID, defaults: UserDefaults = .standard) {
+        guard let site = site(host) else { return }
+        var list = sites(profileId, defaults: defaults).filter { $0 != site }
+        if on { list.append(site) }
+        if list.isEmpty { defaults.removeObject(forKey: defaultsKey(profileId)) } else { defaults.set(list, forKey: defaultsKey(profileId)) }
+    }
+
+    private static func belongs(_ host: String, to site: String) -> Bool {
+        let h = host.lowercased()
+        return h == site || h.hasSuffix("." + site)
+    }
+
+    /// The site to forget after a tab on `host` closed: one marked to forget that no `openHosts` still uses.
+    static func siteToForget(closing host: String?, openHosts: [String], sites: [String]) -> String? {
+        guard let host, let site = sites.first(where: { belongs(host, to: $0) }),
+              !openHosts.contains(where: { belongs($0, to: site) }) else { return nil }
+        return site
+    }
+
+    /// Removes every website data record of `site` from `dataStore`.
+    static func forget(_ site: String, in dataStore: WKWebsiteDataStore) {
+        let types = WKWebsiteDataStore.allWebsiteDataTypes()
+        dataStore.fetchDataRecords(ofTypes: types) { records in
+            let mine = SiteSecurity.records(records, for: site)
+            if !mine.isEmpty { dataStore.removeData(ofTypes: types, for: mine) {} }
+        }
+    }
+}

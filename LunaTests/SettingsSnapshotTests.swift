@@ -24,8 +24,8 @@ final class SettingsSnapshotTests: XCTestCase {
             try render(SettingsView(initialPane: .general, query: "tab"), appearance: appearance, to: "\(dir)/search-\(name).png")
             // Sheets and popovers opened from Settings, each at its own size.
             try render(UsageDataSheet(usage: UsageStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("shots-usage.json"))), appearance: appearance, size: NSSize(width: 460, height: 560), to: "\(dir)/sheet-usage-\(name).png")
-            try render(ClearHistorySheet(history: ProfileStoreRegistry.stores(for: Usage.profileId()).history) { _ in },
-                       appearance: appearance, size: NSSize(width: 420, height: 260), to: "\(dir)/sheet-clear-\(name).png")
+            try render(ClearBrowsingDataSheet(profileId: Usage.profileId()) { _ in },
+                       appearance: appearance, size: NSSize(width: 420, height: 440), to: "\(dir)/sheet-clear-\(name).png")
             try render(MCPPortChooser(current: 8765) { _ in }, appearance: appearance, size: NSSize(width: 340, height: 260), to: "\(dir)/popover-port-\(name).png")
             try render(BrowserImportView(onDone: {}), appearance: appearance, size: NSSize(width: 640, height: 600), to: "\(dir)/sheet-import-\(name).png")
             // Left nav with Liquid Glass on.

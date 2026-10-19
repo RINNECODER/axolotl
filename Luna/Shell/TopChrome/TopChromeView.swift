@@ -9,6 +9,8 @@ struct TopChromeActions {
     var split: (UUID, UUID) -> Void
     /// Tab dragged out of the strip, released at a screen point.
     var tearOff: (UUID, CGPoint) -> Void = { _, _ in }
+    /// Tab menu: move the tab (or, with true, its group) to a new window.
+    var moveToNewWindow: (UUID, Bool) -> Void = { _, _ in }
     var submitAddress: () -> Void
     var goHome: () -> Void
     var toggleAI: () -> Void
@@ -169,7 +171,8 @@ struct TopChromeView: View {
                     HorizontalTabStrip(
                         store: store, web: web, height: ChromeMetrics.tabStripHeight,
                         onActivate: actions.activate, onClose: actions.close, onNewTab: actions.newTab,
-                        onSplit: actions.split, onTearOff: actions.tearOff, chromeStyle: true
+                        onSplit: actions.split, onTearOff: actions.tearOff, onMoveToNewWindow: actions.moveToNewWindow,
+                        chromeStyle: true
                     )
                     .padding(.trailing, 8)
                 }
@@ -277,7 +280,8 @@ struct TopChromeView: View {
             onClose: actions.close,
             onNewTab: actions.newTab,
             onSplit: actions.split,
-            onTearOff: actions.tearOff
+            onTearOff: actions.tearOff,
+            onMoveToNewWindow: actions.moveToNewWindow
         )
     }
 

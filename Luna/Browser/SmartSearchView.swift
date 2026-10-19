@@ -713,7 +713,7 @@ struct SmartSearchView: View {
                     }
                 }
             }
-            guard wantsPhrases, let url = SearchEngine.current.suggestURL(for: trimmed) else { return }
+            guard wantsPhrases, let url = SearchEngine.suggestEngine?.suggestURL(for: trimmed) else { return }
             var request = URLRequest(url: url)
             request.timeoutInterval = 3
             (isPrivate ? PrivateBrowsing.urlSession : URLSession.shared).dataTask(with: request) { data, _, _ in
@@ -951,7 +951,7 @@ struct SmartSearchView: View {
 
     private func performSearch(_ query: String) {
         withAnimation(.easeOut(duration: 0.15)) { viewState = .searching }
-        if let url = SearchEngine.current.searchURL(for: query) {
+        if let url = SearchEngine.url(searching: query) {
             onNavigate(url)
         }
     }

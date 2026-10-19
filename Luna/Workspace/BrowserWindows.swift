@@ -42,6 +42,26 @@ enum BrowserWindows {
         try? FileManager.default.removeItem(at: WorkspacePersistence.forWindow(record.id, profileId: record.profileId).fileURL)
     }
 
+    // MARK: Reopening (⌘⇧T)
+
+    /// The extra window closed last: off the restore list, but its workspace file is kept until
+    /// another window closes or Luna quits, so ⌘⇧T can bring back its tabs and groups.
+    private(set) static var lastClosed: (record: Record, at: Date)?
+
+    private static func keepForReopen(_ record: Record) {
+        if let old = lastClosed { forget(old.record) }
+        save(records().filter { $0 != record })
+        lastClosed = (record, Date())
+    }
+
+    /// Reopens the last closed window if it closed after `date` (the newest closed tab, if any).
+    static func reopenLastClosed(ifNewerThan date: Date?) -> Bool {
+        guard let last = lastClosed, last.at > (date ?? .distantPast) else { return false }
+        lastClosed = nil
+        open(profileId: last.record.profileId, windowId: last.record.id)
+        return true
+    }
+
     // MARK: Opening
 
     /// Set while the app quits, so windows closing on the way out stay saved.
@@ -55,6 +75,7 @@ enum BrowserWindows {
         restored = true
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
             isTerminating = true
+            if let last = lastClosed { forget(last.record) }
         }
         let profiles = Set(ProfileManager.shared.profiles.map(\.id))
         for record in records() {
@@ -105,7 +126,7 @@ enum BrowserWindows {
         openWindows.insert(window)
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { _ in
             openWindows.remove(window)
-            if !isTerminating && !isPrivate { forget(record) }
+            if !isTerminating && !isPrivate { keepForReopen(record) }
         }
         window.makeKeyAndOrderFront(nil)
         return window
@@ -115,6 +136,9 @@ enum BrowserWindows {
 /// A tab moving between windows: its saved state, including back/forward.
 struct TabTransfer {
     var tab: Tab
+    /// A whole tab group moving: its other tabs, and the group whose name and color wrap them all.
+    var groupTabs: [Tab] = []
+    var group: Folder? = nil
 }
 
 /// Live browser windows that can take a dropped tab.

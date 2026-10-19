@@ -26,7 +26,15 @@ final class WorkspaceStore: ObservableObject {
 
     private let persistence: WorkspacePersistence?
     private var pendingSave: DispatchWorkItem?
-    private var recentlyClosed: [(tab: Tab, location: NodeLocation?, favoriteIndex: Int?)] = []
+    /// One ⌘⇧T step: a closed tab, or every tab of a closed group with the group's name, color and place.
+    private struct ClosedEntry {
+        var tabs: [(tab: Tab, location: NodeLocation?)]
+        var group: (folder: Folder, location: NodeLocation?)? = nil
+        var closedAt = Date()
+    }
+    private var recentlyClosed: [ClosedEntry] = []
+    /// Collects the tabs `closeTabGroup` closes into one entry.
+    private var closingGroup: ClosedEntry?
     private let recentlyClosedLimit = 25
 
     // Avoid the MainActor isolated-deinit executor hop that double-frees
@@ -143,8 +151,11 @@ final class WorkspaceStore: ObservableObject {
                 let loc = ws.location(ofNode: tabId)
                 if let tab = ws.removeTab(tabId) {
                     ws.archive(tab)
-                    recentlyClosed.append((tab, loc, nil))
-                    if recentlyClosed.count > recentlyClosedLimit { recentlyClosed.removeFirst() }
+                    if closingGroup != nil {
+                        closingGroup?.tabs.append((tab, loc))
+                    } else {
+                        pushClosed(ClosedEntry(tabs: [(tab, loc)]))
+                    }
                 }
             }
             if wasActive, let i = order.firstIndex(of: tabId) {
@@ -157,31 +168,71 @@ final class WorkspaceStore: ObservableObject {
         return persistent ? .reset : .removed
     }
 
-    /// Closed tabs that can be reopened, newest first (tab search).
-    var recentlyClosedTabs: [Tab] {
-        recentlyClosed.reversed().map(\.tab).filter { workspace.tabs[$0.id] == nil }
+    private func pushClosed(_ entry: ClosedEntry) {
+        recentlyClosed.append(entry)
+        if recentlyClosed.count > recentlyClosedLimit { recentlyClosed.removeFirst() }
     }
 
-    /// Reopens the most recently closed tab (Cmd+Shift+T), or the closed tab `id`, where it was.
+    /// Closes a tab group's tabs through `close` (the shell's cleanup); ⌘⇧T reopens the whole group.
+    func closeTabGroup(_ groupId: UUID, closingWith close: (UUID) -> Void) {
+        guard case .folder(let folder)? = workspace.node(withId: groupId) else { return }
+        closingGroup = ClosedEntry(tabs: [], group: (folder, workspace.location(ofNode: groupId)))
+        ungroupFolder(groupId)
+        folder.tabIds.forEach(close)
+        if let entry = closingGroup, !entry.tabs.isEmpty { pushClosed(entry) }
+        closingGroup = nil
+    }
+
+    /// When the newest ⌘⇧T entry closed (to order it against a closed window).
+    var lastClosedAt: Date? { recentlyClosed.last?.closedAt }
+
+    /// Closed tabs that can be reopened, newest first (tab search).
+    var recentlyClosedTabs: [Tab] {
+        recentlyClosed.reversed().flatMap { $0.tabs.reversed().map(\.tab) }.filter { workspace.tabs[$0.id] == nil }
+    }
+
+    /// Reopens the most recently closed tab or group (Cmd+Shift+T), or the closed tab `id`, where it was.
     @discardableResult
     func reopenClosedTab(_ id: UUID? = nil) -> UUID? {
-        // Skip entries already brought back by Undo.
-        recentlyClosed.removeAll { workspace.tabs[$0.tab.id] != nil }
-        let index = id == nil ? recentlyClosed.indices.last : recentlyClosed.lastIndex { $0.tab.id == id }
+        // Skip tabs already brought back by Undo.
+        for i in recentlyClosed.indices { recentlyClosed[i].tabs.removeAll { workspace.tabs[$0.tab.id] != nil } }
+        recentlyClosed.removeAll { $0.tabs.isEmpty }
+        let index = id == nil ? recentlyClosed.indices.last : recentlyClosed.lastIndex { $0.tabs.contains { $0.tab.id == id } }
         guard let index else { return nil }
-        let entry = recentlyClosed.remove(at: index)
-        var tab = entry.tab
-        tab.lastActiveAt = Date()
-        perform("Reopen Tab") { ws in
-            ws.tabs[tab.id] = tab
-            if let loc = entry.location, ws.spaceIndex(loc.spaceId) != nil {
-                ws.insertNode(.tab(tab.id), at: loc)
-            } else {
-                ws.spaces[ws.activeSpaceIndex].today.append(.tab(tab.id))
-            }
-            Self.activate(tab.id, in: &ws)
+        var entry = recentlyClosed[index]
+        if let id {
+            // Tab search brings back just that tab, ungrouped.
+            entry = ClosedEntry(tabs: entry.tabs.filter { $0.tab.id == id })
+            recentlyClosed[index].tabs.removeAll { $0.tab.id == id }
+            if recentlyClosed[index].tabs.isEmpty { recentlyClosed.remove(at: index) }
+        } else {
+            recentlyClosed.remove(at: index)
         }
-        return tab.id
+        let ids = entry.tabs.map(\.tab.id)
+        perform(entry.group == nil ? "Reopen Tab" : "Reopen Group") { ws in
+            for (tab, loc) in entry.tabs {
+                var tab = tab
+                tab.lastActiveAt = Date()
+                ws.tabs[tab.id] = tab
+                guard entry.group == nil else { continue }
+                if let loc, ws.spaceIndex(loc.spaceId) != nil {
+                    ws.insertNode(.tab(tab.id), at: loc)
+                } else {
+                    ws.spaces[ws.activeSpaceIndex].today.append(.tab(tab.id))
+                }
+            }
+            if let (folder, loc) = entry.group {
+                var group = folder
+                group.children = ids.map { .tab($0) }
+                if let loc, ws.spaceIndex(loc.spaceId) != nil {
+                    ws.insertNode(.folder(group), at: loc)
+                } else {
+                    ws.spaces[ws.activeSpaceIndex].today.append(.folder(group))
+                }
+            }
+            Self.activate(ids[0], in: &ws)
+        }
+        return ids[0]
     }
 
     func updateURL(_ tabId: UUID, _ url: URL?) {
@@ -351,6 +402,22 @@ final class WorkspaceStore: ObservableObject {
             ws.addTab(tab, placement: .section(.today, spaceId: nil))
             if let target, ws.tabs[target] != nil { ws.moveTab(tab.id, nextTo: target, after: after) }
             Self.activate(tab.id, in: &ws)
+        }
+    }
+
+    /// Wraps an adopted tab and the rest of its moved group in the group's name and color, where that tab is.
+    func adoptGroup(_ group: Folder, first: UUID, others: [Tab]) {
+        perform("Move Group to Window") { ws in
+            for var tab in others {
+                tab.lastActiveAt = Date()
+                ws.addTab(tab, placement: .section(.today, spaceId: nil))
+            }
+            guard let loc = ws.location(ofNode: first) else { return }
+            let ids = [first] + others.map(\.id)
+            ids.forEach { _ = ws.detachNode($0) }
+            var folder = group
+            folder.children = ids.map { .tab($0) }
+            ws.insertNode(.folder(folder), at: loc)
         }
     }
 

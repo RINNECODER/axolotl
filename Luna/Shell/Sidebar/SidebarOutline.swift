@@ -49,6 +49,8 @@ struct SidebarActions {
     var tidyToday: () -> Void = {}
     /// A tab dragged out of the window, released at a screen point.
     var tearOff: (UUID, CGPoint) -> Void = { _, _ in }
+    /// Tab menu: move the tab (or, with true, its group) to a new window.
+    var moveToNewWindow: ((UUID, Bool) -> Void)? = nil
     /// ⋯ → Bookmark This Page (⌘D); nil when the current tab has no web page.
     var bookmarkPage: (() -> Void)? = nil
     /// Reload, Duplicate and Mute in the tab menu.
@@ -513,7 +515,8 @@ struct SidebarOutline: NSViewRepresentable {
             switch node {
             case .tab(let id):
                 // Chrome's items (shared with the tab strip), then the sidebar's own, then the close group.
-                let shared = TabContextMenu.items(for: id, store: store, web: actions.web, close: actions.close)
+                let shared = TabContextMenu.items(for: id, store: store, web: actions.web, close: actions.close,
+                                                  moveToNewWindow: actions.moveToNewWindow)
                 for section in shared.dropLast() {
                     TabContextMenu.addItems(section, to: menu)
                     menu.addItem(.separator())
@@ -572,11 +575,11 @@ struct SidebarOutline: NSViewRepresentable {
                 colorItem.submenu = colors
                 menu.addItem(colorItem)
                 menu.addItem(MenuAction("Ungroup") { store.ungroupFolder(f.id) })
-                menu.addItem(MenuAction("Close Group") { [actions] in
-                    let tabs = f.tabIds
-                    store.ungroupFolder(f.id)
-                    tabs.forEach(actions.close)
-                })
+                if let move = actions.moveToNewWindow, let first = f.tabIds.first, f.tabIds.count < store.orderedTabIds.count,
+                   store.workspace.tabGroup(containing: first)?.id == f.id {
+                    menu.addItem(MenuAction(TabContextMenu.Command.moveGroupToNewWindow.title) { move(first, true) })
+                }
+                menu.addItem(MenuAction("Close Group") { [actions] in store.closeTabGroup(f.id, closingWith: actions.close) })
             case .split(let g):
                 menu.addItem(MenuAction("Separate Split View") { store.dissolveSplit(g.id) })
                 if let active = snapshot.activeTabId, !g.panes.contains(active), g.panes.count < SplitGroup.maxPanes,

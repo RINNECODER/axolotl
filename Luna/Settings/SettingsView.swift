@@ -461,7 +461,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
     /// Words that find this pane from the search field.
     var keywords: [String] {
         switch self {
-        case .general: return ["default browser", "profile", "account", "window", "search engine", "suggestions",
+        case .general: return ["default browser", "profile", "account", "window", "search engine", "site search", "keyword", "suggestions",
                                "welcome", "onboarding", "startup"]
         case .appearance: return ["theme", "dark", "light", "layout", "template", "chrome", "custom", "customize", "sidebar",
                                   "compact", "dynamic", "classic", "address", "url", "frameless", "frame", "auto-hide",
@@ -501,10 +501,7 @@ private struct GeneralSettingsView: View {
     var body: some View {
         DefaultBrowserSection()
 
-        SettingsCard("Search engine") {
-            RegistryPicker("search.engine")
-            RegistryToggle("search.suggestions")
-        }
+        SearchEngineSettings()
 
         ProfileSettingsSections()
 

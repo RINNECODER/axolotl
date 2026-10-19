@@ -49,8 +49,11 @@ struct SiteInfoPopover: View {
     let webView: WKWebView?
     /// The tab is showing a load error (e.g. a certificate failure), so nothing on screen is the secure page.
     var hasPageError = false
+    /// The profile for "Forget me when I close this site"; nil hides it (private windows).
+    var forgetProfileId: UUID? = nil
     var onClose: () -> Void = {}
     @State private var records: [WKWebsiteDataRecord]?
+    @State private var forget = false
 
     private var host: String { url.host ?? "" }
     private var origin: String { SitePermissionStore.origin(url) ?? host }
@@ -95,6 +98,18 @@ struct SiteInfoPopover: View {
                 Button("Clear site data", role: .destructive, action: clear)
                     .buttonStyle(.settings)
                     .disabled(records?.isEmpty ?? true)
+            }
+            if let profileId = forgetProfileId, ForgetSites.site(url.host) != nil {
+                row("eye.slash") {
+                    Toggle("Forget me when I close this site", isOn: Binding(get: { forget }, set: {
+                        forget = $0
+                        ForgetSites.set($0, host: url.host, profileId: profileId)
+                    }))
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 13))
+                    .help("Clears this site's cookies and data when you close its last tab.")
+                }
+                .onAppear { forget = ForgetSites.isOn(host: url.host, profileId: profileId) }
             }
             Divider().padding(.vertical, 10)
             Button {

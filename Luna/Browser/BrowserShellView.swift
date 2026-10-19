@@ -369,7 +369,7 @@ struct BrowserShellView: View {
                         return nil
                     }
                     if event.keyCode == 48, event.modifierFlags.intersection([.shift, .command, .option, .control]).isEmpty,
-                       acceptInlineCompletion() { // Tab
+                       acceptSearchKeyword() || acceptInlineCompletion() { // Tab
                         return nil
                     }
                 }
@@ -624,6 +624,7 @@ struct BrowserShellView: View {
             profileId: { sessionStore.activeProfileId },
             newTab: { newTab() },
             reopenClosedTab: {
+                if !isPrivate, BrowserWindows.reopenLastClosed(ifNewerThan: session.workspace.lastClosedAt) { return }
                 if let id = session.workspace.reopenClosedTab() { switchToTab(id) }
             },
             closeTab: { closeCurrentTab() },
@@ -733,6 +734,7 @@ struct BrowserShellView: View {
                 if session.workspace.splitTab(dropped, onto: target) != nil { Usage.record(.splitView); switchToTab(dropped) }
             },
             tearOff: { tearOff($0, at: $1) },
+            moveToNewWindow: { moveToNewWindow($0, group: $1) },
             submitAddress: { applyAddressBarSubmit() },
             goHome: { goHome() },
             toggleAI: { toggleAIPanel() },
@@ -949,6 +951,7 @@ struct BrowserShellView: View {
                 tidyTitle: { session.tidyTitle($0) },
                 tidyToday: { session.tidyToday() },
                 tearOff: { tearOff($0, at: $1) },
+                moveToNewWindow: { moveToNewWindow($0, group: $1) },
                 bookmarkPage: isCurrentTabStartOrAIChat ? nil : { bookmarkCurrentPage() },
                 web: web
             ),
@@ -1262,6 +1265,16 @@ struct BrowserShellView: View {
     }
 
     /// Tab accepts the inline completion: caret to the end, completion becomes typed text.
+    /// Tab after a site-search keyword ("yt") adds the space that starts that engine's search.
+    private func acceptSearchKeyword() -> Bool {
+        let typed = omniTyped.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !typed.isEmpty, CustomSearchEngine.load().contains(where: { $0.keyword.lowercased() == typed }),
+              let editor = hostWindow?.firstResponder as? NSTextView else { return false }
+        editor.insertText(omniTyped.trimmingCharacters(in: .whitespaces) + " ",
+                          replacementRange: NSRange(location: 0, length: (editor.string as NSString).length))
+        return true
+    }
+
     private func acceptInlineCompletion() -> Bool {
         guard !omniCompletion.isEmpty,
               Omnibox.acceptInlineCompletion(full: omniTyped + omniCompletion, in: hostWindow?.firstResponder as? NSTextView)
@@ -1349,8 +1362,10 @@ struct BrowserShellView: View {
     /// pointer (same profile), where its tab strip shows it, or to a new
     /// window there. A window's only tab can join another window (an extra
     /// window then closes) but doesn't open a new one.
-    private func tearOff(_ id: UUID, at screenPoint: CGPoint) {
-        let target = TabDropTargets.shared.target(at: screenPoint, from: hostWindow)
+    /// Moves a tab out of this window: onto the window under `screenPoint`, else into a new window
+    /// (centered when there is no point, as from the tab menu).
+    private func tearOff(_ id: UUID, at screenPoint: CGPoint?) {
+        let target = screenPoint.flatMap { TabDropTargets.shared.target(at: $0, from: hostWindow) }
         let isLastTab = tabManager.tabCount() <= 1
         guard !isLastTab || target != nil else { return }
         let liveState = web.webViewIfLoaded(for: id)?.interactionState as? Data
@@ -1363,7 +1378,7 @@ struct BrowserShellView: View {
             syncAddressBarFromCurrentTab()
         }
         let transfer = TabTransfer(tab: tab)
-        if let target {
+        if let target, let screenPoint {
             target.adopt(transfer, screenPoint)
             target.window?.makeKeyAndOrderFront(nil)
             if isLastTab {
@@ -1373,6 +1388,30 @@ struct BrowserShellView: View {
             BrowserWindows.open(profileId: sessionStore.activeProfileId, adopting: transfer, at: screenPoint,
                                 size: hostWindow?.frame.size ?? CGSize(width: 1200, height: 800), isPrivate: isPrivate)
         }
+    }
+
+    /// Tab menu → Move Tab (or its Group) to New Window. A group keeps its name and color there.
+    private func moveToNewWindow(_ id: UUID, group: Bool) {
+        let store = session.workspace
+        guard group, let folder = store.workspace.tabGroup(containing: id) else { return tearOff(id, at: nil) }
+        guard folder.tabIds.count < tabManager.tabCount() else { return }
+        store.ungroupFolder(folder.id)
+        let tabs = folder.tabIds.compactMap { tabId -> Tab? in
+            let liveState = web.webViewIfLoaded(for: tabId)?.interactionState as? Data
+            guard var tab = store.takeTab(tabId) else { return nil }
+            if let liveState { tab.interactionState = liveState }
+            web.removeWebView(for: tabId)
+            tabsWithPanelOpen.remove(tabId)
+            return tab
+        }
+        guard let first = tabs.first else { return }
+        if let current = tabManager.currentTab {
+            web.setActiveTab(current)
+            syncAddressBarFromCurrentTab()
+        }
+        BrowserWindows.open(profileId: sessionStore.activeProfileId,
+                            adopting: TabTransfer(tab: first, groupTabs: Array(tabs.dropFirst()), group: folder),
+                            size: hostWindow?.frame.size ?? CGSize(width: 1200, height: 800), isPrivate: isPrivate)
     }
 
     /// Takes in a tab from another window and shows it. A new window's
@@ -1385,7 +1424,8 @@ struct BrowserShellView: View {
         }
         let slot = screenPoint.flatMap { TabStripDropZone.zone(for: hostWindow)?.insertion(atScreen: $0) }
         store.adopt(transfer.tab, nextTo: slot?.target, after: slot?.after ?? true)
-        if replacingPlaceholder, placeholders.count == store.orderedTabIds.count - 1 {
+        if let group = transfer.group { store.adoptGroup(group, first: transfer.tab.id, others: transfer.groupTabs) }
+        if replacingPlaceholder, placeholders.count == store.orderedTabIds.count - 1 - transfer.groupTabs.count {
             for id in placeholders {
                 _ = store.takeTab(id)
                 web.removeWebView(for: id)
@@ -1486,7 +1526,7 @@ struct BrowserShellView: View {
 
     /// Search phrases from the selected engine's suggest endpoint (opt-in, Settings → Search).
     private func fetchSearchSuggestions(for trimmed: String) {
-        guard searchSuggestionsEnabled, let url = SearchEngine.current.suggestURL(for: trimmed) else {
+        guard searchSuggestionsEnabled, let url = SearchEngine.suggestEngine?.suggestURL(for: trimmed) else {
             searchSuggestions = []
             return
         }
@@ -1790,6 +1830,8 @@ struct BrowserShellView: View {
 
     private func closeTab(_ id: UUID) {
         Usage.record(.closeTab)
+        let closingHost = session.workspace.tab(id)?.url?.host
+        defer { forgetSiteIfLastTab(closingHost) }
         web.removeWebView(for: id)
         tabsWithPanelOpen.remove(id)
         session.chatStore.removeMessages(for: id)
@@ -1800,6 +1842,17 @@ struct BrowserShellView: View {
             web.setActiveTab(newCurrent)
             syncAddressBarFromCurrentTab()
         }
+    }
+
+    /// Forget Me sites: once a marked site's last tab (in any window of the profile) closes, clear its data.
+    private func forgetSiteIfLastTab(_ host: String?) {
+        guard !isPrivate, host != nil else { return }
+        let profileId = sessionStore.activeProfileId
+        let sites = ForgetSites.sites(profileId)
+        guard !sites.isEmpty else { return }
+        let open = ProfileSession.open(profileId: profileId).flatMap { $0.workspace.workspace.tabs.values.compactMap(\.url?.host) }
+        guard let site = ForgetSites.siteToForget(closing: host, openHosts: open, sites: sites) else { return }
+        ForgetSites.forget(site, in: ProfileManager.shared.dataStore(for: profileId))
     }
 
     private func switchToTab(_ id: UUID) {

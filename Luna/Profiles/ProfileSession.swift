@@ -28,6 +28,12 @@ enum ProfileStoreRegistry {
 
 /// Browser state owned by exactly one profile.
 final class ProfileSession: ObservableObject {
+    /// Every live session (all windows), for checks across windows such as Forget Me sites.
+    private static let openSessions = NSHashTable<ProfileSession>.weakObjects()
+    static func open(profileId: UUID) -> [ProfileSession] {
+        openSessions.allObjects.filter { $0.profileId == profileId && !$0.isPrivate }
+    }
+
     let profileId: UUID
     let workspace: WorkspaceStore
     let tabManager: TabManager
@@ -91,6 +97,7 @@ final class ProfileSession: ObservableObject {
                 self.workspace.updateURL(tabId, nil)
             }
         }
+        Self.openSessions.add(self)
         self.workspace.captureInteractionStates = { [weak webViewWrapper] in
             webViewWrapper?.interactionStates() ?? [:]
         }

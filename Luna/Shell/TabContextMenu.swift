@@ -12,6 +12,7 @@ enum TabContextMenu {
         /// Chrome's tab groups: new group, "Add Tab to Group ›" (its children name groups), remove.
         case addToNewGroup, addToGroupMenu, removeFromGroup
         case addToGroup(UUID, name: String)
+        case moveToNewWindow, moveGroupToNewWindow
 
         var title: String {
             switch self {
@@ -29,6 +30,8 @@ enum TabContextMenu {
             case .addToGroupMenu: return "Add Tab to Group"
             case .removeFromGroup: return "Remove from Group"
             case .addToGroup(_, let name): return TabContextMenu.groupTitle(name)
+            case .moveToNewWindow: return "Move Tab to New Window"
+            case .moveGroupToNewWindow: return "Move Group to New Window"
             }
         }
 
@@ -43,6 +46,7 @@ enum TabContextMenu {
             case .unmute: return "speaker.wave.2"
             case .close: return "xmark"
             case .addToNewGroup, .addToGroupMenu: return "square.grid.2x2"
+            case .moveToNewWindow, .moveGroupToNewWindow: return "macwindow.badge.plus"
             case .closeOthers, .closeToRight, .removeFromGroup, .addToGroup: return nil
             }
         }
@@ -58,8 +62,9 @@ enum TabContextMenu {
 
     /// The menu's sections, in order; the last is the close group.
     /// `order` is the tab strip's order and `persistent` its pinned and favorite tabs.
+    /// `canMove` offers "Move Tab to New Window" when the window has another tab to keep.
     nonisolated static func sections(for tabId: UUID, order: [UUID], persistent: Set<UUID>,
-                                     hasPage: Bool, hasSite: Bool, isMuted: Bool) -> [[Command]] {
+                                     hasPage: Bool, hasSite: Bool, isMuted: Bool, canMove: Bool = false) -> [[Command]] {
         var page: [Command] = []
         if hasPage { page += [.reload, .duplicate] }
         page.append(persistent.contains(tabId) ? .unpin : .pin)
@@ -70,7 +75,8 @@ enum TabContextMenu {
         if let i = order.firstIndex(of: tabId), order[(i + 1)...].contains(where: { !persistent.contains($0) }) {
             close.append(.closeToRight)
         }
-        return [[.newTabToRight], page, close]
+        let first: [Command] = canMove && order.count > 1 ? [.newTabToRight, .moveToNewWindow] : [.newTabToRight]
+        return [first, page, close]
     }
 
     /// Tabs that "Close Other Tabs" / "Close Tabs to the Right" close: never pinned or favorite ones.
@@ -103,7 +109,7 @@ enum TabContextMenu {
     nonisolated static func groupTitle(_ name: String) -> String { name.isEmpty ? "Unnamed group" : name }
 
     /// Chrome's group section: only Today tabs group (favorites and pinned tabs don't).
-    static func groupItems(for tabId: UUID, store: WorkspaceStore) -> [Item] {
+    static func groupItems(for tabId: UUID, store: WorkspaceStore, moveToNewWindow: ((UUID, Bool) -> Void)? = nil) -> [Item] {
         let ws = store.workspace
         guard ws.section(containing: tabId) == .today else { return [] }
         let current = ws.tabGroup(containing: tabId)
@@ -114,13 +120,18 @@ enum TabContextMenu {
                 Item(command: .addToGroup(g.id, name: g.name)) { store.addToTabGroup(tabId, group: g.id) }
             }) {})
         }
-        if current != nil { items.append(Item(command: .removeFromGroup) { store.removeFromTabGroup(tabId) }) }
+        if let current {
+            items.append(Item(command: .removeFromGroup) { store.removeFromTabGroup(tabId) })
+            if let moveToNewWindow, current.tabIds.count < store.orderedTabIds.count {
+                items.append(Item(command: .moveGroupToNewWindow) { moveToNewWindow(tabId, true) })
+            }
+        }
         return items
     }
 
     /// The live menu for a tab. `close` goes through the shell so web views and chat state are cleaned up.
     static func items(for tabId: UUID, store: WorkspaceStore, web: WebViewWrapper?,
-                      close: @escaping (UUID) -> Void) -> [[Item]] {
+                      close: @escaping (UUID) -> Void, moveToNewWindow: ((UUID, Bool) -> Void)? = nil) -> [[Item]] {
         let ws = store.workspace
         let order = store.orderedTabIds
         let persistent = Set(order.filter { ws.isPersistent($0) })
@@ -128,15 +139,17 @@ enum TabContextMenu {
         let hasPage = url.map { $0.absoluteString != "about:blank" && !InternalPage.isInternal($0) } ?? false
         let hasSite = web.flatMap { WebViewWrapper.siteKey($0.webViewIfLoaded(for: tabId)?.url) } != nil
         let isMuted = web?.isMuted(tabId) ?? false
-        var result = sections(for: tabId, order: order, persistent: persistent, hasPage: hasPage, hasSite: hasSite, isMuted: isMuted)
+        var result = sections(for: tabId, order: order, persistent: persistent, hasPage: hasPage, hasSite: hasSite, isMuted: isMuted,
+                              canMove: moveToNewWindow != nil)
             .map { section in
                 section.map { command in
                     Item(command: command) {
+                        if command == .moveToNewWindow { moveToNewWindow?(tabId, false); return }
                         perform(command, on: tabId, store: store, web: web, order: order, persistent: persistent, close: close)
                     }
                 }
             }
-        let groups = groupItems(for: tabId, store: store)
+        let groups = groupItems(for: tabId, store: store, moveToNewWindow: moveToNewWindow)
         if !groups.isEmpty { result.insert(groups, at: 1) }
         return result
     }
@@ -165,8 +178,8 @@ enum TabContextMenu {
             web?.setMuted(command == .mute, tab: tabId)
         case .close, .closeOthers, .closeToRight:
             tabsToClose(command, from: tabId, order: order, persistent: persistent).forEach(close)
-        case .addToNewGroup, .addToGroupMenu, .removeFromGroup, .addToGroup:
-            break // built by groupItems
+        case .addToNewGroup, .addToGroupMenu, .removeFromGroup, .addToGroup, .moveToNewWindow, .moveGroupToNewWindow:
+            break // built by groupItems or `items`
         }
     }
 
