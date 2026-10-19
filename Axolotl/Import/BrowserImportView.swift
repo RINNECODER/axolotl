@@ -106,16 +106,36 @@ final class BrowserImportModel: ObservableObject {
         running = true
         summary = nil
         error = nil
-        let wanted = types.subtracting([.passwords])
+        let basic = types.intersection([.bookmarks, .history])
+        let secureTypes = types.intersection([.passwords, .cookies, .extensions, .autofill])
         let sync = keepInSync
+        let kind = b.kind
+        let profileCount = b.profiles.count
         Task {
-            let result = await BrowserImporter.run(kind: b.kind, dataFolder: folder, profile: profile,
-                                                   profileCount: b.profiles.count, types: wanted,
-                                                   axolotlProfileId: target, keepInSync: sync)
+            var parts: [String] = []
+            var errors: [String] = []
+            if !basic.isEmpty {
+                let result = await BrowserImporter.run(kind: kind, dataFolder: folder, profile: profile,
+                                                       profileCount: profileCount, types: basic,
+                                                       axolotlProfileId: target, keepInSync: sync)
+                parts += BrowserImporter.Summary(bookmarks: result.bookmarks, history: result.history).parts
+                errors += result.errors
+            }
+            if !secureTypes.isEmpty {
+                let read = await Task.detached(priority: .userInitiated) {
+                    BrowserImporter.readSecure(kind: kind, dataFolder: folder, profile: profile, types: secureTypes)
+                }.value
+                let sec = await BrowserImporter.applySecure(read, into: target)
+                parts += sec.parts
+                errors += sec.errors
+                if sec.keychainUnavailable {
+                    errors.append("Passwords and cookies need Keychain access to \(kind.displayName) Safe Storage.")
+                }
+            }
             if !isFixtureMode { folder.stopAccessingSecurityScopedResource() }
             running = false
-            if result.errors.isEmpty || result.total > 0 { summary = result.text }
-            if !result.errors.isEmpty { error = result.errors.joined(separator: "\n") }
+            summary = parts.isEmpty ? (errors.isEmpty ? "Nothing new to import." : nil) : "Imported " + parts.joined(separator: ", ") + "."
+            if !errors.isEmpty { error = errors.joined(separator: "\n") }
         }
     }
 
@@ -268,6 +288,12 @@ struct BrowserImportView: View {
                 if browser.kind != .safari {
                     SettingsToggleRow("History", isOn: binding(.history))
                 }
+                if browser.kind.engine == .chromium {
+                    SettingsToggleRow("Passwords", subtitle: "Saved logins, added to the Axolotl vault.", isOn: binding(.passwords))
+                    SettingsToggleRow("Cookies (keep me signed in)", isOn: binding(.cookies))
+                    SettingsToggleRow("Extensions", isOn: binding(.extensions))
+                    SettingsToggleRow("Autofill addresses", isOn: binding(.autofill))
+                }
                 SettingsToggleRow("Keep in sync", subtitle: "Re-import new bookmarks and history each time Axolotl starts.",
                                   isOn: $model.keepInSync)
                 SettingsContentRow {
@@ -276,7 +302,7 @@ struct BrowserImportView: View {
                         if model.running { ProgressView().controlSize(.small).padding(.trailing, 6) }
                         Button("Import") { model.runImport(into: axolotlProfileId) }
                             .buttonStyle(.settingsProminent)
-                            .disabled(model.running || model.types.subtracting([.passwords]).isEmpty || browser.profiles.isEmpty)
+                            .disabled(model.running || model.types.isEmpty || browser.profiles.isEmpty)
                     }
                 }
             }

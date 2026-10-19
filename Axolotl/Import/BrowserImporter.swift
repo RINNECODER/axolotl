@@ -12,12 +12,15 @@ enum BrowserImporter {
 
         var total: Int { (bookmarks ?? 0) + (history ?? 0) }
 
-        var text: String {
+        var parts: [String] {
             var parts: [String] = []
             if let b = bookmarks { parts.append("\(b.formatted()) bookmark\(b == 1 ? "" : "s")") }
             if let h = history { parts.append("\(h.formatted()) history entr\(h == 1 ? "y" : "ies")") }
-            if parts.isEmpty { return "Nothing new to import." }
-            return "Imported " + parts.joined(separator: ", ") + "."
+            return parts
+        }
+
+        var text: String {
+            parts.isEmpty ? "Nothing new to import." : "Imported " + parts.joined(separator: ", ") + "."
         }
     }
 
