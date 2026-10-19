@@ -8,20 +8,21 @@ enum WallpaperPrefs {
     static let styles = "axolotl_wallpaper_styles"
     static let frameRate = "axolotl_wallpaper_fps"
     static let showMoon = "axolotl_wallpaper_show_moon"
-    static let moonStyle = "axolotl_moon_style"
+    static let logo = "axolotl_logo_style"
 }
 
-/// The start page logo. Raw values are stored ("ascii"/"shader" are the moons), so they stay.
-enum MoonStyle: String, CaseIterable, Identifiable {
-    case axolotl, ascii, shader
-    var id: String { rawValue }
-    var title: String {
-        switch self {
-        case .axolotl: return "Axolotl"
-        case .ascii: return "ASCII moon"
-        case .shader: return "Shader moon"
-        }
-    }
+/// The start page ASCII axolotl's look. The defaults are the original logo.
+struct LogoStyle: Codable, Equatable {
+    enum Glyphs: String, Codable, CaseIterable { case classic, blocks, dots, binary, letters }
+    enum Tint: String, Codable, CaseIterable { case classic, accent, mono, pink, gold }
+    enum Size: String, Codable, CaseIterable { case small, medium, large }
+    enum Motion: String, Codable, CaseIterable { case wave, still }
+
+    var glyphs = Glyphs.classic
+    var tint = Tint.classic
+    var size = Size.medium
+    var motion = Motion.wave
+    var show = true
 }
 
 /// A dark base plus two mid tones. The accent is chosen separately.
@@ -166,8 +167,6 @@ struct WallpaperRenderConfig: Codable, Equatable {
     let scale: Double
     /// Draw one frame and hold it (Reduce Motion, Low Power Mode, thumbnails).
     var still: Bool
-    /// The shader moon turns faster while the AI is working.
-    var busy = false
 
     init(preset: WallpaperPreset, style: WallpaperStyle, fps: Int, still: Bool, scale: Double = 0.5) {
         let s = style.validated(for: preset)
@@ -213,7 +212,7 @@ final class WallpaperStore: ObservableObject {
     @Published private(set) var styles: [String: WallpaperStyle]
     @Published var frameRate: Int { didSet { defaults.set(frameRate, forKey: WallpaperPrefs.frameRate) } }
     @Published var showMoon: Bool { didSet { defaults.set(showMoon, forKey: WallpaperPrefs.showMoon) } }
-    @Published var moonStyle: MoonStyle { didSet { defaults.set(moonStyle.rawValue, forKey: WallpaperPrefs.moonStyle) } }
+    @Published var logo: LogoStyle { didSet { defaults.set(try? JSONEncoder().encode(logo), forKey: WallpaperPrefs.logo) } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -222,7 +221,8 @@ final class WallpaperStore: ObservableObject {
         let fps = defaults.integer(forKey: WallpaperPrefs.frameRate)
         frameRate = WallpaperRenderConfig.allowedFrameRates.contains(fps) ? fps : 30
         showMoon = defaults.object(forKey: WallpaperPrefs.showMoon) == nil ? true : defaults.bool(forKey: WallpaperPrefs.showMoon)
-        moonStyle = MoonStyle(rawValue: defaults.string(forKey: WallpaperPrefs.moonStyle) ?? "") ?? .axolotl
+        // Unreadable or unknown values (e.g. from a newer build) fall back to the original logo.
+        logo = defaults.data(forKey: WallpaperPrefs.logo).flatMap { try? JSONDecoder().decode(LogoStyle.self, from: $0) } ?? LogoStyle()
     }
 
     static func decodeStyles(_ data: Data?) -> [String: WallpaperStyle] {

@@ -39,17 +39,15 @@ final class WallpaperTests: XCTestCase {
         XCTAssertEqual(decoded["still"] as? Bool, true)
     }
 
-    func testStorePersistsPerPresetStylesAndDefaultsToNoWallpaperWithAsciiAxolotl() {
+    func testStorePersistsPerPresetStylesAndDefaultsToNoWallpaper() {
         let defaults = freshDefaults()
         let store = WallpaperStore(defaults: defaults)
         XCTAssertEqual(store.preset, .none)
-        XCTAssertEqual(store.moonStyle, .axolotl)
         XCTAssertTrue(store.showMoon)
         XCTAssertEqual(store.frameRate, 30)
 
         store.preset = .tidalDither
         store.setStyle(WallpaperStyle(palette: "moss", accent: "rose", speed: 0.5), for: .tidalDither)
-        store.moonStyle = .shader
         store.showMoon = false
         store.frameRate = 60
 
@@ -57,12 +55,24 @@ final class WallpaperTests: XCTestCase {
         XCTAssertEqual(reloaded.preset, .tidalDither)
         XCTAssertEqual(reloaded.style(for: .tidalDither), WallpaperStyle(palette: "moss", accent: "rose", speed: 0.5))
         XCTAssertEqual(reloaded.style(for: .polarVeil), WallpaperPreset.polarVeil.defaultStyle)
-        XCTAssertEqual(reloaded.moonStyle, .shader)
         XCTAssertFalse(reloaded.showMoon)
         XCTAssertEqual(reloaded.frameRate, 60)
 
         reloaded.resetStyle(for: .tidalDither)
         XCTAssertEqual(WallpaperStore(defaults: defaults).style(for: .tidalDither), WallpaperPreset.tidalDither.defaultStyle)
+    }
+
+    func testLogoStyleDefaultsToTheOriginalLogoAndPersists() {
+        let defaults = freshDefaults()
+        XCTAssertEqual(WallpaperStore(defaults: defaults).logo,
+                       LogoStyle(glyphs: .classic, tint: .classic, size: .medium, motion: .wave, show: true))
+
+        let custom = LogoStyle(glyphs: .letters, tint: .gold, size: .large, motion: .still, show: false)
+        WallpaperStore(defaults: defaults).logo = custom
+        XCTAssertEqual(WallpaperStore(defaults: defaults).logo, custom)
+
+        defaults.set(Data(#"{"glyphs":"emoji"}"#.utf8), forKey: WallpaperPrefs.logo)
+        XCTAssertEqual(WallpaperStore(defaults: defaults).logo, LogoStyle(), "unknown values fall back to the original")
     }
 
     func testWallpaperOnlyAnimatesWhileOnScreenAndHoldsStillForReduceMotionOrLowPower() {
@@ -94,7 +104,7 @@ final class WallpaperTests: XCTestCase {
     }
 
     func testNavigationPolicyAllowsOnlyBundledSchemePagesInMainFrame() {
-        let page = URL(string: "axolotl-wallpaper://app/moon.html")
+        let page = URL(string: "axolotl-wallpaper://app/index.html")
         XCTAssertTrue(WallpaperBridge.allowsNavigation(to: page, isMainFrame: true))
         XCTAssertFalse(WallpaperBridge.allowsNavigation(to: page, isMainFrame: nil), "new windows have no target frame")
         XCTAssertFalse(WallpaperBridge.allowsNavigation(to: URL(string: "https://example.com"), isMainFrame: true))
@@ -120,11 +130,16 @@ final class WallpaperTests: XCTestCase {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent(name)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             print("Logo shot: \(dir.path)")
-            let renderer = ImageRenderer(content: Canvas { ctx, size in AxolotlRenderer.draw(&ctx, size: size, diameter: 170, t: 40) }
-                .frame(width: 170 * 1.3, height: 170 * 1.15).background(Color.black))
-            renderer.scale = 2
-            let image = try XCTUnwrap(renderer.nsImage?.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
-            try image.representation(using: .png, properties: [:])!.write(to: dir.appendingPathComponent("axolotl-170.png"))
+            var styles = LogoStyle.Glyphs.allCases.map { ("glyphs-\($0.rawValue)", LogoStyle(glyphs: $0)) }
+            styles += LogoStyle.Tint.allCases.map { ("tint-\($0.rawValue)", LogoStyle(tint: $0)) }
+            for (file, style) in styles {
+                let renderer = ImageRenderer(content: Canvas { ctx, size in
+                    AxolotlRenderer.draw(&ctx, size: size, diameter: 170, t: 40, style: style)
+                }.frame(width: 170 * 1.3, height: 170 * 1.15).background(Color.black))
+                renderer.scale = 2
+                let image = try XCTUnwrap(renderer.nsImage?.tiffRepresentation.flatMap(NSBitmapImageRep.init(data:)))
+                try image.representation(using: .png, properties: [:])!.write(to: dir.appendingPathComponent("\(file).png"))
+            }
         }
     }
 }

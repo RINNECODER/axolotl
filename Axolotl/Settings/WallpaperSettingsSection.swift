@@ -14,9 +14,7 @@ struct WallpaperSettingsSection: View {
             SettingsContentRow {
             LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
                 ForEach(WallpaperPreset.allCases) { preset in
-                    WallpaperTile(preset: preset,
-                                  gradient: gradientColors(for: preset),
-                                  isSelected: store.preset == preset) {
+                    WallpaperTile(preset: preset, isSelected: store.preset == preset) {
                         store.preset = preset
                     }
                 }
@@ -24,19 +22,39 @@ struct WallpaperSettingsSection: View {
             .padding(.vertical, 4)
             }
 
-            SettingsMenuRow("Start page logo", subtitle: "The mark above the greeting. Shader moon draws with the GPU.",
-                            selection: $store.moonStyle, options: MoonStyle.allCases.map { .init($0, $0.title) })
-
             if store.preset != .none {
                 styleControls(for: store.preset)
             }
         }
+        logoCard
     }
 
-    private func gradientColors(for preset: WallpaperPreset) -> [Color] {
-        let id = store.style(for: preset).palette
-        let palette = WallpaperPalette.all.first { $0.id == id } ?? WallpaperPalette.all[0]
-        return [palette.base, palette.mid, palette.high].map { Color(hex: $0) }
+    private var logoCard: some View {
+        SettingsCard("Start page logo") {
+            SettingsToggleRow("Show logo", subtitle: "The axolotl above the greeting.", isOn: $store.logo.show)
+            if store.logo.show {
+                SettingsContentRow { LogoPreview(style: store.logo) }
+                SettingsRow("Characters") {
+                    HStack(spacing: 6) {
+                        ForEach(LogoStyle.Glyphs.allCases, id: \.self) { glyphs in
+                            GlyphsButton(glyphs: glyphs, isSelected: store.logo.glyphs == glyphs) { store.logo.glyphs = glyphs }
+                        }
+                    }
+                }
+                SettingsRow("Colors") {
+                    HStack(spacing: 8) {
+                        ForEach(LogoStyle.Tint.allCases, id: \.self) { tint in
+                            SwatchButton(colors: tint.colors.map { Color(nsColor: $0) }, name: tint.title,
+                                         isSelected: store.logo.tint == tint) { store.logo.tint = tint }
+                        }
+                    }
+                }
+                SettingsMenuRow("Size", selection: $store.logo.size,
+                                options: LogoStyle.Size.allCases.map { .init($0, $0.title) })
+                SettingsMenuRow("Motion", subtitle: "Still draws once and stops. Reduce Motion always holds it still.",
+                                selection: $store.logo.motion, options: [.init(.wave, "Wave"), .init(.still, "Still")])
+            }
+        }
     }
 
     @ViewBuilder
@@ -47,7 +65,7 @@ struct WallpaperSettingsSection: View {
         SettingsRow("Palette") {
             HStack(spacing: 8) {
                 ForEach(WallpaperPalette.all) { palette in
-                    SwatchButton(colors: [palette.base, palette.mid, palette.high],
+                    SwatchButton(colors: [palette.base, palette.mid, palette.high].map { Color(hex: $0) },
                                  name: palette.name,
                                  isSelected: style.wrappedValue.palette == palette.id) {
                         style.wrappedValue.palette = palette.id
@@ -58,7 +76,7 @@ struct WallpaperSettingsSection: View {
         SettingsRow("Accent") {
             HStack(spacing: 8) {
                 ForEach(WallpaperAccent.all) { accent in
-                    SwatchButton(colors: [accent.hex], name: accent.name,
+                    SwatchButton(colors: [Color(hex: accent.hex)], name: accent.name,
                                  isSelected: style.wrappedValue.accent == accent.id) {
                         style.wrappedValue.accent = accent.id
                     }
@@ -98,7 +116,6 @@ struct WallpaperSettingsSection: View {
 
 private struct WallpaperTile: View {
     let preset: WallpaperPreset
-    let gradient: [Color]
     let isSelected: Bool
     let select: () -> Void
 
@@ -113,8 +130,8 @@ private struct WallpaperTile: View {
                             .frame(width: 30)
                             .foregroundStyle(.white.opacity(0.7))
                     } else {
-                        // Palette gradient, not a live render: no web view per tile.
-                        LinearGradient(colors: gradient, startPoint: .bottomLeading, endPoint: .topTrailing)
+                        // Pre-rendered by scripts/wallpaper/thumbs.mjs: no web view per tile.
+                        Color.clear.overlay(Image("wallpaper-\(preset.rawValue)").resizable().scaledToFill())
                     }
                 }
                 .frame(height: 66)
@@ -137,8 +154,45 @@ private struct WallpaperTile: View {
     }
 }
 
+/// A small live logo, drawn like the start page; it holds still while scrolled out of view.
+private struct LogoPreview: View {
+    let style: LogoStyle
+    @State private var inView = true
+
+    var body: some View {
+        var shown = style
+        if !inView { shown.motion = .still }
+        return AsciiAxolotl(diameter: 64 * style.size.scale, style: shown)
+            .frame(maxWidth: .infinity, minHeight: 64 * 1.25 * 1.15)
+            .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .onScrollVisibilityChange(threshold: 0.05) { inView = $0 }
+    }
+}
+
+private struct GlyphsButton: View {
+    let glyphs: LogoStyle.Glyphs
+    let isSelected: Bool
+    let select: () -> Void
+
+    var body: some View {
+        Button(action: select) {
+            Text(glyphs.ramp.prefix(4).joined())
+                .font(.system(size: 11, design: .monospaced))
+                .frame(width: 44, height: 22)
+                .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                .foregroundStyle(.white.opacity(0.85))
+                .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(isSelected ? Color.accentColor : Color.primary.opacity(0.12), lineWidth: isSelected ? 2 : 1))
+        }
+        .buttonStyle(.plain)
+        .help(glyphs.title)
+        .accessibilityLabel(glyphs.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
 private struct SwatchButton: View {
-    let colors: [String]
+    let colors: [Color]
     let name: String
     let isSelected: Bool
     let select: () -> Void
@@ -146,7 +200,7 @@ private struct SwatchButton: View {
     var body: some View {
         Button(action: select) {
             Circle()
-                .fill(LinearGradient(colors: colors.map { Color(hex: $0) },
+                .fill(LinearGradient(colors: colors,
                                      startPoint: .bottomLeading, endPoint: .topTrailing))
                 .frame(width: 20, height: 20)
                 .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
