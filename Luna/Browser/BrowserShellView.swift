@@ -105,7 +105,7 @@ struct BrowserShellView: View {
 
     var body: some View {
         ZStack {
-            VisualEffectView(material: usesSidebar ? .sidebar : .titlebar, blendingMode: .behindWindow, state: .followsWindowActiveState)
+            LunaBackdrop(material: usesSidebar ? .sidebar : .titlebar, state: .followsWindowActiveState)
                 .ignoresSafeArea()
             // The window chrome carries a hue of the active profile's color.
             activeProfile.profileColor.color
@@ -194,7 +194,7 @@ struct BrowserShellView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 8)
-                .background(Capsule().fill(.regularMaterial))
+                .background(LunaMaterialFill(shape: Capsule()))
                 .overlay(Capsule().strokeBorder(profile.profileColor.color.opacity(0.5), lineWidth: 1))
                 .shadow(color: .black.opacity(0.2), radius: 10, y: 4)
                 .padding(.top, 14)
@@ -795,7 +795,7 @@ struct BrowserShellView: View {
             .frame(maxHeight: .infinity)
             .background {
                 ZStack {
-                    VisualEffectView(material: .sidebar, blendingMode: .withinWindow, state: .active)
+                    LunaBackdrop(material: .sidebar, blendingMode: .withinWindow, solid: LunaSurface.sidebar)
                     activeProfile.profileColor.color.opacity(0.14)
                 }
                 .opacity(floating ? 1 : 0)
@@ -1020,7 +1020,7 @@ struct BrowserShellView: View {
                         navigateFromAddressBar()
                     }
                 )
-                .background(.regularMaterial)
+                .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 10, style: .continuous)))
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
                 .frame(width: max(field.width, 440))

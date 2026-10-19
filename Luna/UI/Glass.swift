@@ -1,10 +1,65 @@
-// Luna — Liquid Glass UI foundation.
-// Uses the native .glassEffect APIs on macOS 26+ (Tahoe) and degrades to
-// material blur + hairline stroke on macOS 15, so one call site serves both.
+// Luna — surface foundation.
+// Settings → Appearance → "Liquid Glass" picks between two looks:
+//  • on  (default): native .glassEffect on macOS 26+ (material blur below), as before.
+//  • off: Luna's own solid surfaces — opaque fills from `LunaSurface`, a
+//    hairline border and a small shadow. No blur, materials or vibrancy.
+// Every glass / material / vibrancy use in the app goes through this file so
+// the switch is one place and updates live.
 import SwiftUI
 import AppKit
 
-// MARK: - Shared glass tint (dark grey glassmorphism; opaque but see-through)
+// MARK: - Setting
+
+enum LiquidGlass {
+    /// UserDefaults key (bool, default true). Registry key: `appearance.liquidGlass`.
+    static let defaultsKey = "luna_liquid_glass"
+    static let defaultValue = true
+
+    static var isOn: Bool {
+        UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? defaultValue
+    }
+}
+
+// MARK: - Tokens (solid look)
+
+extension Color {
+    /// A color that follows the view's appearance (light / dark) on its own.
+    init(light: NSColor, dark: NSColor) {
+        self.init(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+        })
+    }
+
+    init(lunaHex hex: UInt32, alpha: CGFloat = 1) {
+        self.init(nsColor: .lunaHex(hex, alpha: alpha))
+    }
+}
+
+extension NSColor {
+    static func lunaHex(_ hex: UInt32, alpha: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat((hex >> 16) & 0xFF) / 255, green: CGFloat((hex >> 8) & 0xFF) / 255,
+                blue: CGFloat(hex & 0xFF) / 255, alpha: alpha)
+    }
+}
+
+/// Luna's solid surface colors (Liquid Glass off).
+enum LunaSurface {
+    /// The window backdrop behind tabs and content (replaces sidebar / titlebar vibrancy).
+    static let window = Color(light: .lunaHex(0xECECEE), dark: .lunaHex(0x1C1C1E))
+    /// A floating sidebar sitting over the page.
+    static let sidebar = Color(light: .lunaHex(0xF5F5F7), dark: .lunaHex(0x242426))
+    /// Cards, bars, capsules and popups.
+    static let raised = Color(light: .white, dark: .lunaHex(0x2A2A2D))
+    /// Hairline border around raised surfaces.
+    static let stroke = Color(light: .black.withAlphaComponent(0.10), dark: .white.withAlphaComponent(0.10))
+    /// Hover and pressed fills for controls on any surface.
+    static let hover = Color(light: .black.withAlphaComponent(0.06), dark: .white.withAlphaComponent(0.08))
+    static let pressed = Color(light: .black.withAlphaComponent(0.11), dark: .white.withAlphaComponent(0.14))
+    /// Shadow under raised surfaces.
+    static let shadow = Color(light: .black.withAlphaComponent(0.12), dark: .black.withAlphaComponent(0.45))
+}
+
+// MARK: - Shared start page tint (dark grey)
 
 let startPageGlassTint = Color(red: 0.09, green: 0.09, blue: 0.10)
 let startPageGlassTintOpacity: Double = 0.88
@@ -31,17 +86,78 @@ struct VisualEffectView: NSViewRepresentable {
     }
 }
 
-// MARK: - Liquid Glass surface modifier
+/// A window / sidebar backdrop: vibrancy with Liquid Glass on, a solid fill off.
+struct LunaBackdrop: View {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode = .behindWindow
+    var state: NSVisualEffectView.State = .active
+    var solid: Color = LunaSurface.window
+    @AppStorage(LiquidGlass.defaultsKey) private var glass = LiquidGlass.defaultValue
 
-/// Applies native Liquid Glass on macOS 26+, or a material-blur fallback below.
-/// `interactive` enables the live-warp variant (use for surfaces the user touches).
+    var body: some View {
+        if glass {
+            VisualEffectView(material: material, blendingMode: blendingMode, state: state)
+        } else {
+            solid
+        }
+    }
+}
+
+/// The start page / chat backdrop: under-window material with a near-opaque
+/// dark wash (glass on), or the same dark grey, opaque (glass off).
+struct StartPageBackdrop: View {
+    @AppStorage(LiquidGlass.defaultsKey) private var glass = LiquidGlass.defaultValue
+
+    var body: some View {
+        ZStack {
+            if glass {
+                VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow, state: .active)
+            }
+            startPageGlassTint.opacity(glass ? startPageGlassTintOpacity : 1)
+        }
+    }
+}
+
+/// A shape filled with a material (glass on) or a solid token with a hairline
+/// border (glass off). Drop-in for `shape.fill(.regularMaterial)`.
+struct LunaMaterialFill<S: InsettableShape>: View {
+    var shape: S
+    var material: Material = .regularMaterial
+    var solid: Color = LunaSurface.raised
+    var strokesWhenSolid = true
+    @AppStorage(LiquidGlass.defaultsKey) private var glass = LiquidGlass.defaultValue
+
+    var body: some View {
+        if glass {
+            shape.fill(material)
+        } else {
+            shape.fill(solid).overlay(shape.strokeBorder(strokesWhenSolid ? LunaSurface.stroke : .clear, lineWidth: 1))
+        }
+    }
+}
+
+// MARK: - Glass surface modifier
+
+/// Native Liquid Glass on macOS 26+ (material-blur fallback below) when the
+/// setting is on; Luna's solid raised surface when it is off.
+/// `interactive` enables the live-warp variant / a hover fill.
 struct LunaGlass<S: Shape>: ViewModifier {
     var shape: S
     var interactive: Bool = false
     var tint: Color? = nil
+    @AppStorage(LiquidGlass.defaultsKey) private var glassOn = LiquidGlass.defaultValue
+    @State private var isHovering = false
 
     func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
+        if !glassOn {
+            content
+                .background(shape.fill(LunaSurface.hover.opacity(interactive && isHovering ? 1 : 0)))
+                .background(shape.fill(tint ?? LunaSurface.raised))
+                .overlay(shape.stroke(LunaSurface.stroke, lineWidth: 1))
+                .compositingGroup()
+                .shadow(color: LunaSurface.shadow, radius: 6, y: 2)
+                .onHover { if interactive { isHovering = $0 } }
+        } else if #available(macOS 26.0, *) {
             content.glassEffect(glass, in: shape)
         } else {
             content
@@ -60,13 +176,27 @@ struct LunaGlass<S: Shape>: ViewModifier {
     }
 }
 
+/// Groups sibling glass shapes (macOS 26+, setting on); a no-op otherwise.
+private struct LunaGlassContainer: ViewModifier {
+    var spacing: CGFloat?
+    @AppStorage(LiquidGlass.defaultsKey) private var glassOn = LiquidGlass.defaultValue
+
+    func body(content: Content) -> some View {
+        if glassOn, #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: spacing) { content }
+        } else {
+            content
+        }
+    }
+}
+
 extension View {
-    /// Liquid Glass capsule (the default shape across the app's controls).
+    /// Glass (or solid) capsule — the default shape across the app's controls.
     func lunaGlassCapsule(interactive: Bool = false, tint: Color? = nil) -> some View {
         modifier(LunaGlass(shape: Capsule(style: .continuous), interactive: interactive, tint: tint))
     }
 
-    /// Liquid Glass rounded rectangle.
+    /// Glass (or solid) rounded rectangle.
     func lunaGlass(cornerRadius: CGFloat, interactive: Bool = false, tint: Color? = nil) -> some View {
         modifier(LunaGlass(
             shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous),
@@ -76,14 +206,9 @@ extension View {
     }
 
     /// Groups sibling glass shapes so they share one sampling region and can
-    /// morph together (no-op below macOS 26).
-    @ViewBuilder
+    /// morph together (no-op below macOS 26 or with Liquid Glass off).
     func lunaGlassContainer(spacing: CGFloat? = nil) -> some View {
-        if #available(macOS 26.0, *) {
-            GlassEffectContainer(spacing: spacing) { self }
-        } else {
-            self
-        }
+        modifier(LunaGlassContainer(spacing: spacing))
     }
 }
 
@@ -108,8 +233,7 @@ extension View {
 
 // MARK: - Glass icon button (circular, toolbar-grade)
 
-/// Circular icon button with a Liquid Glass background — the standard toolbar
-/// control shape on macOS 26.
+/// Circular icon button with a hover fill — the standard toolbar control shape.
 struct GlassIconButton: View {
     let systemName: String
     var size: CGFloat = 28

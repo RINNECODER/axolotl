@@ -43,6 +43,8 @@ enum LayoutTemplate: String, CaseIterable, Identifiable {
                 ("chrome.homeButton", .bool(true)),
                 ("addressBar.centered", .bool(false)),
                 ("addressBar.minimalURL", .bool(true)),
+                // Chrome draws solid, opaque surfaces and menus.
+                ("appearance.liquidGlass", .bool(false)),
             ]
         }
     }

@@ -142,10 +142,7 @@ struct SmartSearchView: View {
     /// Native macOS surface: under-window material with a near-opaque dark wash,
     /// like Notes/Music/Xcode. Depth comes from the material, not from color.
     private var background: some View {
-        ZStack {
-            VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow, state: .active)
-            startPageGlassTint.opacity(startPageGlassTintOpacity)
-        }
+        StartPageBackdrop()
         .ignoresSafeArea()
     }
 
@@ -262,8 +259,8 @@ struct SmartSearchView: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.ultraThinMaterial)
+            LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 10, style: .continuous),
+                             material: .ultraThinMaterial, solid: Color(lunaHex: 0x232326), strokesWhenSolid: false)
         )
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)

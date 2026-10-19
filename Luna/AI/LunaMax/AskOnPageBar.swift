@@ -59,7 +59,7 @@ struct AskOnPageBar: View {
         }
         .padding(12)
         .frame(width: 400)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(.regularMaterial))
+        .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 16, style: .continuous)))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(.separator.opacity(0.6), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
         .onAppear { focused = true }

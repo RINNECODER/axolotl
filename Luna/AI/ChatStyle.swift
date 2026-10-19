@@ -32,10 +32,7 @@ enum LunaType {
 /// Dark under-window material with a near-opaque wash (the start page backdrop).
 struct ChatSurfaceBackground: View {
     var body: some View {
-        ZStack {
-            VisualEffectView(material: .underWindowBackground, blendingMode: .behindWindow, state: .active)
-            startPageGlassTint.opacity(startPageGlassTintOpacity)
-        }
+        StartPageBackdrop()
     }
 }
 

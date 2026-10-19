@@ -235,7 +235,7 @@ struct FileDropHint: View {
         RoundedRectangle(cornerRadius: 18, style: .continuous)
             .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [6, 5]))
             .foregroundStyle(.secondary)
-            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.regularMaterial))
+            .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 18, style: .continuous)))
             .overlay {
                 VStack(spacing: 6) {
                     Image(systemName: "doc.badge.plus").font(.system(size: 22, weight: .light))

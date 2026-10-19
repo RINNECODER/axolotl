@@ -138,6 +138,7 @@ private struct AppearanceSettingsView: View {
     @AppStorage(ChromePrefs.showBookmarksBar) private var showBookmarksBar = false
     @AppStorage("luma_ai_panel_font_size") private var aiPanelFontSize: Int = 13
     @AppStorage(StartPagePrefs.showShortcuts) private var showShortcuts = true
+    @AppStorage(LiquidGlass.defaultsKey) private var liquidGlass = LiquidGlass.defaultValue
     @ObservedObject private var shortcutStore = ShortcutStore.shared
     @State private var confirmRemoveShortcuts = false
 
@@ -153,6 +154,9 @@ private struct AppearanceSettingsView: View {
                     Text("Light").tag("light")
                     Text("Dark").tag("dark")
                 }
+                Toggle("Liquid Glass", isOn: $liquidGlass)
+            } footer: {
+                Text("Off draws Luna's own solid surfaces and menus instead of translucent glass.")
             }
 
             Section {

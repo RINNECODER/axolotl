@@ -384,7 +384,7 @@ final class TabDragPreview {
             }
             .padding(.horizontal, 10)
             .frame(width: TabDragPreview.size.width, height: TabDragPreview.size.height)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 8, style: .continuous)))
         }
     }
 }
@@ -562,8 +562,7 @@ private struct LiftedTab: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.regularMaterial)
+                LunaMaterialFill(shape: RoundedRectangle(cornerRadius: 8, style: .continuous))
                     .padding(.vertical, 2)
                     .opacity(isLifted ? 1 : 0)
             )

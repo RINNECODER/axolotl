@@ -126,6 +126,9 @@ enum CustomizationRegistry {
     static let all: [CustomizableSetting] = [
         choice("appearance.theme", "luma_appearance", "Theme", "Light, dark or follow the system.", default: "system",
                [("system", "System"), ("light", "Light"), ("dark", "Dark")]),
+        bool("appearance.liquidGlass", LiquidGlass.defaultsKey, "Liquid Glass",
+             "On: macOS Liquid Glass and translucent materials. Off: Luna's solid, opaque surfaces.",
+             default: LiquidGlass.defaultValue),
         choice("tabs.layout", BrowserLayout.defaultsKey, "Tab layout",
                "sidebar = vertical tabs; compact/dynamic/classic = tabs on top.", default: BrowserLayout.sidebar.rawValue,
                BrowserLayout.allCases.map { ($0.rawValue, $0.title) }),
