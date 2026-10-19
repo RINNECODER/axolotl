@@ -62,10 +62,11 @@ fn craters(p: vec3f) -> f32 {
 
   // Faint glow, stronger on the lit side.
   let side = max(dot(normalize(q), normalize(L.xy)), 0.0);
-  // Fades out well before the frame edge so the view never shows a box.
-  let edgeDist = min(min(pos.x, pos.y), min(u.res.x - pos.x, u.res.y - pos.y)) / u.radius;
+  // Fades out radially by the largest circle that fits the frame. Fading by distance to the
+  // frame edges instead traced a rounded box around the moon, with visible corners.
+  let fit = min(u.res.x, u.res.y) * 0.5 / u.radius;
   let glow = exp(-max(r - 1.0, 0.0) * 9.0) * (0.04 + 0.16 * side) * smoothstep(0.98, 1.02, r)
-    * smoothstep(0.0, 0.1, edgeDist);
+    * smoothstep(fit, 1.0, r);
 
   if (r >= 1.0 + 2.0 / u.radius) {
     let g = glow * 0.9;
