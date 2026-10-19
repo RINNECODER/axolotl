@@ -129,6 +129,7 @@ enum CustomizationRegistry {
         choice("tabs.layout", BrowserLayout.defaultsKey, "Tab layout",
                "sidebar = vertical tabs; compact/dynamic/classic = tabs on top.", default: BrowserLayout.sidebar.rawValue,
                BrowserLayout.allCases.map { ($0.rawValue, $0.title) }),
+        LayoutTemplate.setting,
         bool("toolbar.visible", ChromePrefs.showToolbar, "Toolbar",
              "Sidebar layout: a toolbar row (back, forward, reload, address field, buttons) above the page.", default: false),
         bool("bookmarksBar.visible", ChromePrefs.showBookmarksBar, "Bookmarks bar",

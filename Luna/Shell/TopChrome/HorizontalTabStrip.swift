@@ -17,6 +17,8 @@ struct HorizontalTabStrip: View {
     /// Tab released outside the window (or well away from the strip), with the
     /// screen point: move it to its own window (or the window it was dropped on).
     var onTearOff: ((UUID, CGPoint) -> Void)? = nil
+    /// Chrome layout template: Chrome's curved tabs and widths.
+    var chromeStyle = false
 
     /// The tab being dragged: it lifts off the strip and follows the pointer
     /// while the others slide aside (Helium-style).
@@ -57,15 +59,18 @@ struct HorizontalTabStrip: View {
         GeometryReader { geo in
             let iconCount = ids.filter { persistent.contains($0) }.count
             let titled = ids.count - iconCount
-            let available = geo.size.width - CGFloat(iconCount) * Self.iconTabWidth - 34
-            let width = titled > 0 ? min(Self.maxTabWidth, max(Self.minTabWidth, available / CGFloat(titled))) : 0
+            let iconWidth = chromeStyle ? ChromeMetrics.pinnedTabPitch : Self.iconTabWidth
+            let available = geo.size.width - CGFloat(iconCount) * iconWidth - (chromeStyle ? ChromeMetrics.newTabButtonWidth : 34)
+            let width = chromeStyle ? ChromeMetrics.tabPitch(available: available, count: titled)
+                : titled > 0 ? min(Self.maxTabWidth, max(Self.minTabWidth, available / CGFloat(titled))) : 0
+            let minWidth = chromeStyle ? ChromeMetrics.minTabPitch : Self.minTabWidth
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 0) {
                     ForEach(Array(ids.enumerated()), id: \.element) { index, id in
                         if let tab = ws.tabs[id] {
                             let iconOnly = persistent.contains(id)
-                            let tabWidth = iconOnly ? Self.iconTabWidth : width
+                            let tabWidth = iconOnly ? iconWidth : width
                             let split = ws.splitGroup(containing: id)
                             Color.clear
                                 .frame(width: tabWidth, height: height)
@@ -86,7 +91,10 @@ struct HorizontalTabStrip: View {
                                         onSplitWithCurrent: ws.activeTabId.flatMap { active in
                                             active != id && !ws.isFavorite(active) && !ws.isFavorite(id) ? { onSplit(id, active) } : nil
                                         },
-                                        onRemoveFromSplit: split.map { _ in { store.removeFromSplit(id) } }
+                                        onRemoveFromSplit: split.map { _ in { store.removeFromSplit(id) } },
+                                        chromeStyle: chromeStyle,
+                                        chromeShowsClose: ChromeMetrics.showsClose(pitch: tabWidth, isActive: ws.activeTabId == id),
+                                        chromeNarrow: !iconOnly && ChromeMetrics.isNarrow(pitch: tabWidth)
                                     )
                                     .frame(width: tabWidth, height: height)
                                     .overlay(TabPressView(
@@ -104,19 +112,24 @@ struct HorizontalTabStrip: View {
                                     frames[id] = $0
                                     zone.frames[id] = $0
                                 }
-                                .zIndex(drag?.id == id ? 1 : 0)
+                                // Chrome's active tab flares over its neighbours.
+                                .zIndex(drag?.id == id ? 1 : (chromeStyle && ws.activeTabId == id ? 0.5 : 0))
                         }
                     }
-                    Button(action: onNewTab) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 28, height: height - 4)
-                            .contentShape(Rectangle())
+                    if chromeStyle {
+                        ChromeNewTabButton(showsSeparator: ids.last != nil && ids.last != ws.activeTabId, action: onNewTab)
+                    } else {
+                        Button(action: onNewTab) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, height: height - 4)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("New Tab (⌘T)")
+                        .padding(.leading, 4)
                     }
-                    .buttonStyle(.plain)
-                    .help("New Tab (⌘T)")
-                    .padding(.leading, 4)
                 }
                 .background(NonDraggableWindowView())
                 .background(WindowReader { zone.attach(to: $0, store: store) })
@@ -139,7 +152,7 @@ struct HorizontalTabStrip: View {
             }
             // The lifted tab can rise a little out of the strip.
             .scrollClipDisabled()
-            .scrollDisabled(titled == 0 || CGFloat(titled) * Self.minTabWidth <= available)
+            .scrollDisabled(titled == 0 || CGFloat(titled) * minWidth <= available)
         }
         .frame(height: height)
     }
@@ -414,10 +427,54 @@ private struct StripTab: View {
     let onClose: () -> Void
     var onSplitWithCurrent: (() -> Void)?
     var onRemoveFromSplit: (() -> Void)?
+    var chromeStyle = false
+    var chromeShowsClose = true
+    var chromeNarrow = false
 
     @State private var isHovered = false
 
     var body: some View {
+        content
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .help(displayTitle(for: tab))
+            .contextMenu {
+                if let onSplitWithCurrent {
+                    Button("Open in Split View with Current Tab", action: onSplitWithCurrent)
+                }
+                if let onRemoveFromSplit {
+                    Button("Remove from Split View", action: onRemoveFromSplit)
+                }
+                Button("Close Tab", action: onClose)
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if chromeStyle {
+            ChromeTabView(tab: tab, faviconURL: faviconURL, isActive: isActive, isLoading: isLoading, iconOnly: iconOnly,
+                          showsSeparator: showsSeparator && !isHovered, showsClose: chromeShowsClose,
+                          isHovered: isHovered || isVisible, narrow: chromeNarrow, onClose: onClose)
+                .overlay { splitTargetMark }
+        } else {
+            lunaTab
+        }
+    }
+
+    @ViewBuilder
+    private var splitTargetMark: some View {
+        if isSplitTarget {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.accentColor, lineWidth: 1.5)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.accentColor.opacity(0.12)))
+                .overlay(Image(systemName: "rectangle.split.2x1").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.accentColor))
+                .padding(.vertical, 2)
+                .padding(.horizontal, 1)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var lunaTab: some View {
         HStack(spacing: 6) {
             ZStack {
                 TabIcon(tab: tab, faviconURL: faviconURL)
@@ -453,35 +510,44 @@ private struct StripTab: View {
                 .padding(.vertical, 2)
                 .padding(.horizontal, 1)
         )
-        .overlay {
-            // Drop here to open side by side.
-            if isSplitTarget {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.accentColor, lineWidth: 1.5)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.accentColor.opacity(0.12)))
-                    .overlay(Image(systemName: "rectangle.split.2x1").font(.system(size: 11, weight: .semibold)).foregroundStyle(Color.accentColor))
-                    .padding(.vertical, 2)
-                    .padding(.horizontal, 1)
-                    .allowsHitTesting(false)
-            }
-        }
+        // Drop here to open side by side.
+        .overlay { splitTargetMark }
         .overlay(alignment: .leading) {
             if showsSeparator {
                 Rectangle().fill(.separator).frame(width: 1, height: 14)
             }
         }
-        .contentShape(Rectangle())
-        .onHover { isHovered = $0 }
-        .help(displayTitle(for: tab))
-        .contextMenu {
-            if let onSplitWithCurrent {
-                Button("Open in Split View with Current Tab", action: onSplitWithCurrent)
-            }
-            if let onRemoveFromSplit {
-                Button("Remove from Split View", action: onRemoveFromSplit)
-            }
-            Button("Close Tab", action: onClose)
+    }
+}
+
+/// Chrome's "+" after the last tab, with the separator before it.
+private struct ChromeNewTabButton: View {
+    let showsSeparator: Bool
+    let action: () -> Void
+    @Environment(\.colorScheme) private var scheme
+    @State private var isHovering = false
+
+    var body: some View {
+        let palette = ChromePalette.for(scheme)
+        Button(action: action) {
+            Image(systemName: "plus")
+                .font(.system(size: 15, weight: .regular))
+                .foregroundStyle(palette.icon)
+                .frame(width: 28, height: 28)
+                .background(Circle().fill(palette.hover.opacity(isHovering ? 1.5 : 0)))
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("New Tab (⌘T)")
+        .padding(.leading, 3)
+        .overlay(alignment: .topLeading) {
+            if showsSeparator {
+                Rectangle().fill(palette.tabSeparator).frame(width: 1, height: 16).offset(x: -0.5, y: 6)
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .padding(.top, ChromeMetrics.tabTop)
     }
 }
 
