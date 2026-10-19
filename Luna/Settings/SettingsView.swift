@@ -107,7 +107,8 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         switch self {
         case .profiles: return ["profile", "account", "color", "window"]
         case .appearance: return ["theme", "dark", "light", "layout", "sidebar", "compact", "dynamic", "classic",
-                                  "address", "url", "frameless", "frame", "home", "font", "text size", "toolbar", "bookmarks"]
+                                  "address", "url", "frameless", "frame", "home", "font", "text size", "toolbar", "bookmarks",
+                                  "wallpaper", "background", "shader", "moon"]
         case .tabs: return ["memory", "unload", "sleep", "hibernate", "inactive"]
         case .dev: return ["claude code", "codex", "harness", "cli", "terminal", "agent", "sync", "approval"]
         case .ai: return ["model", "gemini", "ollama", "openai", "chatgpt", "anthropic", "claude", "api key"]
@@ -227,6 +228,8 @@ private struct AppearanceSettingsView: View {
                                 isPresented: $confirmRemoveShortcuts) {
                 Button("Remove All", role: .destructive) { shortcutStore.removeAll() }
             }
+
+            WallpaperSettingsSection()
 
             Section("AI panel") {
                 LabeledContent("Text size") {

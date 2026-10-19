@@ -33,8 +33,13 @@ targetTemplates:
         excludes:
           - Resources/README_NOT_RESOURCES.md
           - BuiltInExtensions/**
+          - Wallpaper/WallpaperWeb/**
       # Shipped as a folder (structure intact) so WebKit can load the extensions.
       - path: Luna/BuiltInExtensions
+        type: folder
+        buildPhase: resources
+      # Start page wallpaper shaders (bundled WebGPU page, loaded offline).
+      - path: Luna/Wallpaper/WallpaperWeb
         type: folder
         buildPhase: resources
     settings:

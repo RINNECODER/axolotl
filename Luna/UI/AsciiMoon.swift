@@ -13,18 +13,77 @@ struct AsciiMoon: View {
     var isBusy: Bool = false
 
     @State private var clock = MoonClock()
+    @State private var onScreen = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.controlActiveState) private var activeState
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: activeState == .inactive)) { tl in
+        // Runs while the window is on screen, whether or not Luna is the
+        // active app (pausing on an inactive window froze the moon mid-frame
+        // whenever focus went elsewhere). Occluded, minimized or removed:
+        // the schedule pauses and no frames are drawn. Reduce Motion: still.
+        let animating = onScreen && !reduceMotion
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animating)) { tl in
             Canvas { ctx, size in
-                let t = clock.advance(tl.date, busy: isBusy, reduceMotion: reduceMotion)
+                let t = animating ? clock.advance(tl.date, busy: isBusy) : clock.hold()
                 MoonRenderer.draw(&ctx, size: size, diameter: diameter, t: t)
             }
         }
         .frame(width: diameter * 1.3, height: diameter * 1.15)
+        .background(WindowVisibilityReader(isVisible: $onScreen))
+        .onDisappear { onScreen = false }
         .accessibilityHidden(true)
+    }
+}
+
+/// Reports whether the hosting window is actually on screen (not occluded,
+/// minimized or hidden), from AppKit notifications rather than app focus.
+struct WindowVisibilityReader: NSViewRepresentable {
+    @Binding var isVisible: Bool
+
+    func makeNSView(context: Context) -> ProbeView { ProbeView() }
+
+    func updateNSView(_ view: ProbeView, context: Context) {
+        let binding = $isVisible
+        view.onChange = { visible in
+            if binding.wrappedValue != visible { binding.wrappedValue = visible }
+        }
+        view.report()
+    }
+
+    final class ProbeView: NSView {
+        var onChange: ((Bool) -> Void)?
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            if let window {
+                let names: [Notification.Name] = [
+                    NSWindow.didChangeOcclusionStateNotification,
+                    NSWindow.didMiniaturizeNotification,
+                    NSWindow.didDeminiaturizeNotification,
+                ]
+                observers = names.map {
+                    NotificationCenter.default.addObserver(forName: $0, object: window, queue: .main) { [weak self] _ in
+                        self?.report()
+                    }
+                }
+            }
+            report()
+        }
+
+        override func viewDidHide() { super.viewDidHide(); report() }
+        override func viewDidUnhide() { super.viewDidUnhide(); report() }
+
+        func report() {
+            let visible = window.map { $0.occlusionState.contains(.visible) && !$0.isMiniaturized } ?? false
+            let shown = visible && !isHiddenOrHasHiddenAncestor
+            // Deferred: this can run during a SwiftUI view update.
+            DispatchQueue.main.async { [weak self] in self?.onChange?(shown) }
+        }
+
+        deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     }
 }
 
@@ -34,12 +93,19 @@ private final class MoonClock {
     private var phase: Double = 40
     private var speed: Double = 1
 
-    func advance(_ date: Date, busy: Bool, reduceMotion: Bool) -> Float {
+    func advance(_ date: Date, busy: Bool) -> Float {
         let dt = min(0.1, max(0, last.map { date.timeIntervalSince($0) } ?? 0))
         last = date
-        let target = reduceMotion ? 0.1 : (busy ? 3.2 : 1)
+        let target = busy ? 3.2 : 1
         speed += (target - speed) * min(1, dt * 2)
         phase += dt * speed
+        return Float(phase)
+    }
+
+    /// Current frame without advancing; the next `advance` resumes from here
+    /// instead of jumping over the time spent paused.
+    func hold() -> Float {
+        last = nil
         return Float(phase)
     }
 }
