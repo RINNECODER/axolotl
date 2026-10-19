@@ -62,6 +62,7 @@ targetTemplates:
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
         INFOPLIST_KEY_NSCameraUsageDescription: "Luna needs camera access for websites that request it."
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Luna needs microphone access for websites that request it."
+        INFOPLIST_KEY_NSLocationUsageDescription: "Luna shares your location with websites you allow."
         INFOPLIST_KEY_NSDownloadsFolderUsageDescription: "Luna needs access to Downloads to save files."
         ENABLE_APP_SANDBOX: YES
         ENABLE_INCOMING_NETWORK_CONNECTIONS: YES # Loopback listener for "Sign in with ChatGPT" (127.0.0.1 only)
@@ -72,7 +73,7 @@ targetTemplates:
         ENABLE_RESOURCE_ACCESS_CALENDARS: NO # TODO: Enable this when we have a way to handle calendars
         ENABLE_RESOURCE_ACCESS_CAMERA: YES # TODO: Enable this when we have a way to handle camera
         ENABLE_RESOURCE_ACCESS_CONTACTS: NO # TODO: Enable this when we have a way to handle contacts
-        ENABLE_RESOURCE_ACCESS_LOCATION: NO # TODO: Enable this when we have a way to handle location
+        ENABLE_RESOURCE_ACCESS_LOCATION: YES # Sites ask first (SitePermissions, macOS 27+)
         ENABLE_RESOURCE_ACCESS_PRINTING: YES
         ENABLE_RESOURCE_ACCESS_USB: NO
         ENABLE_USER_SELECTED_FILES: readwrite # Save panels, e.g. Save as PDF from the print dialog
