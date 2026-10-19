@@ -16,6 +16,7 @@ struct TopChromeActions {
     var showPasswords: () -> Void = {}
     var showHistory: () -> Void
     var askOnPage: () -> Void = {}
+    var canAskOnPage: Bool = true
     var bookmarkPage: () -> Void = {}
     var newWindow: () -> Void = {}
     /// Current tab's zoom (1.0 = 100%); nil when the tab has no web page.
@@ -38,7 +39,7 @@ enum AppMenuEntries {
             .button("New tab", icon: "plus.square.on.square", shortcut: "⌘T", action: actions.newTab),
             .button("New window", icon: "macwindow.badge.plus", action: actions.newWindow),
             .divider("s1"),
-            .button("Ask on Page", icon: "sparkles", action: actions.askOnPage),
+            .button("Ask on Page", icon: "sparkles", enabled: actions.canAskOnPage, action: actions.askOnPage),
             .divider("s2"),
             .button("History", icon: "clock.arrow.circlepath", shortcut: "⌘Y", action: actions.showHistory),
             .button("Downloads", icon: "arrow.down.to.line", action: actions.showDownloads),

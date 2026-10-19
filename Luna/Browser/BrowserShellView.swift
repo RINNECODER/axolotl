@@ -576,7 +576,7 @@ struct BrowserShellView: View {
             // Find in page (web tabs only; start page / AI chat handle it themselves).
             guard !isCurrentTabStartOrAIChat else { return false }
             // Luna Max: holding ⌘F (key repeat) or ⌘⇧F opens Ask on Page.
-            if LunaMaxPrefs.isOn(LunaMaxPrefs.askOnPage), event.isARepeat || shift {
+            if LunaMaxPrefs.isOn(LunaMaxPrefs.askOnPage), canAskOnPage, event.isARepeat || shift {
                 DispatchQueue.main.async { openAskOnPage() }
                 return true
             }
@@ -740,6 +740,7 @@ struct BrowserShellView: View {
             showPasswords: { openPasswordsPage() },
             showHistory: { navigateToHistory() },
             askOnPage: { openAskOnPage() },
+            canAskOnPage: canAskOnPage,
             bookmarkPage: { bookmarkCurrentPage() },
             newWindow: { BrowserWindows.open(profileId: sessionStore.activeProfileId) },
             zoomLevel: { isCurrentTabStartOrAIChat ? nil : web.zoomLevel(tabManager.currentTab) },
@@ -913,10 +914,12 @@ struct BrowserShellView: View {
             }
     }
 
+    /// Private windows never send page text to a cloud model.
+    private var canAskOnPage: Bool { !isPrivate || LLMService.shared.provider == .ollama }
+
     private func openAskOnPage() {
         guard !isCurrentTabStartOrAIChat else { return }
-        // Private windows never send page text to a cloud model.
-        guard !isPrivate || LLMService.shared.provider == .ollama else { return }
+        guard canAskOnPage else { return }
         Usage.record(.askOnPage)
         if showBrowserFindBar {
             showBrowserFindBar = false
