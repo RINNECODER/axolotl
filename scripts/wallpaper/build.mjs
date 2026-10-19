@@ -1,5 +1,5 @@
-// Builds Luna/Wallpaper/WallpaperWeb/shaders.js: the MIT `shaders` library (https://github.com/shader-effects-inc/shaders)
-// trimmed to the components Luna's wallpapers use, with telemetry stubbed out so the
+// Builds Axolotl/Wallpaper/WallpaperWeb/shaders.js: the MIT `shaders` library (https://github.com/shader-effects-inc/shaders)
+// trimmed to the components Axolotl's wallpapers use, with telemetry stubbed out so the
 // wallpaper never talks to the network.
 //
 //   cd scripts/wallpaper && npm install --no-save shaders@4.0.4 esbuild@0.25.10 && node build.mjs
@@ -11,10 +11,10 @@ import path from 'node:path'
 import fs from 'node:fs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const out = path.resolve(here, '../../Luna/Wallpaper/WallpaperWeb/shaders.js')
+const out = path.resolve(here, '../../Axolotl/Wallpaper/WallpaperWeb/shaders.js')
 const dist = path.resolve(here, 'node_modules/shaders/dist')
 
-// Keep in sync with the component types used in Luna/Wallpaper/WallpaperWeb/wallpaper.js.
+// Keep in sync with the component types used in Axolotl/Wallpaper/WallpaperWeb/wallpaper.js.
 export const COMPONENTS = [
   'Aurora', 'Dither', 'FilmGrain', 'FloatingParticles', 'FlowingGradient', 'Fog', 'Godrays',
   'Halftone', 'LinearGradient', 'Marble', 'MeshGradient', 'Plasma', 'RadialGradient',
@@ -32,23 +32,23 @@ const registry = COMPONENTS.map((n, i) =>
   `\nexport function getShaderCategories() { return [...new Set(entries.map(e => e.category))].sort() }` +
   `\nexport { shaderRegistry as a, getShadersByCategory as i, getShaderByName as n, getShaderCategories as r, getAllShaders as t }\n`
 
-const luna = {
-  name: 'luna-trim',
+const axolotl = {
+  name: 'axolotl-trim',
   setup(build) {
-    build.onResolve({ filter: /(core\/registry|shaderRegistry-[\w-]+)\.js$/ }, () => ({ path: 'luna-registry', namespace: 'luna' }))
-    build.onResolve({ filter: /core\/telemetry\/index\.js$/ }, () => ({ path: 'luna-telemetry', namespace: 'luna' }))
-    build.onLoad({ filter: /.*/, namespace: 'luna' }, (args) => ({
+    build.onResolve({ filter: /(core\/registry|shaderRegistry-[\w-]+)\.js$/ }, () => ({ path: 'axolotl-registry', namespace: 'axolotl' }))
+    build.onResolve({ filter: /core\/telemetry\/index\.js$/ }, () => ({ path: 'axolotl-telemetry', namespace: 'axolotl' }))
+    build.onLoad({ filter: /.*/, namespace: 'axolotl' }, (args) => ({
       resolveDir: here,
-      contents: args.path === 'luna-registry'
+      contents: args.path === 'axolotl-registry'
         ? registry
         : 'export const isExternalUser = () => false\nexport const startTelemetry = () => null\n',
     }))
-    // Expose the renderer so Luna can cap the frame rate and lower the resolution scale.
+    // Expose the renderer so Axolotl can cap the frame rate and lower the resolution scale.
     build.onLoad({ filter: /js\/createShader\.js$/ }, (args) => {
       const src = fs.readFileSync(args.path, 'utf8')
       const patched = src.replace('getFailureReason: () => unavailable',
-        'getFailureReason: () => unavailable,\n\t\tlunaRenderer: () => current ? current.renderer : null')
-      if (patched === src) throw new Error('createShader.js changed; update the Luna patch')
+        'getFailureReason: () => unavailable,\n\t\taxolotlRenderer: () => current ? current.renderer : null')
+      if (patched === src) throw new Error('createShader.js changed; update the Axolotl patch')
       return { contents: patched, loader: 'js' }
     })
   },
@@ -65,9 +65,9 @@ await esbuild.build({
   format: 'esm',
   minify: true,
   legalComments: 'none',
-  banner: { js: '/* shaders@4.0.4 (MIT, Copyright (c) 2026 Shader Effects Inc.), trimmed for Luna. See LICENSE-shaders.txt */' },
+  banner: { js: '/* shaders@4.0.4 (MIT, Copyright (c) 2026 Shader Effects Inc.), trimmed for Axolotl. See LICENSE-shaders.txt */' },
   target: 'safari18',
   outfile: out,
-  plugins: [luna],
+  plugins: [axolotl],
 })
 console.log(`wrote ${out} (${(fs.statSync(out).size / 1024).toFixed(0)} KB)`)

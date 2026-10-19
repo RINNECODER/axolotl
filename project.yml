@@ -1,6 +1,6 @@
-name: Luna
+name: Axolotl
 options:
-  bundleIdPrefix: com.luna
+  bundleIdPrefix: com.axolotl
   deploymentTarget:
     macOS: "15.4"
   xcodeVersion: "26.2"
@@ -23,47 +23,47 @@ configFiles:
   Debug: Signing.xcconfig
   Release: Signing.xcconfig
 
-# Shared by the sandboxed Luna app and the unsandboxed Luna Dev variant.
+# Shared by the sandboxed Axolotl app and the unsandboxed Axolotl Dev variant.
 targetTemplates:
-  LunaApp:
+  AxolotlApp:
     type: application
     platform: macOS
     sources:
-      - path: Luna
+      - path: Axolotl
         excludes:
           - Resources/README_NOT_RESOURCES.md
           - BuiltInExtensions/**
           - Wallpaper/WallpaperWeb/**
       # Shipped as a folder (structure intact) so WebKit can load the extensions.
-      - path: Luna/BuiltInExtensions
+      - path: Axolotl/BuiltInExtensions
         type: folder
         buildPhase: resources
       # Start page wallpaper shaders (bundled WebGPU page, loaded offline).
-      - path: Luna/Wallpaper/WallpaperWeb
+      - path: Axolotl/Wallpaper/WallpaperWeb
         type: folder
         buildPhase: resources
     settings:
       base:
-        PRODUCT_NAME: Luna
-        PRODUCT_BUNDLE_IDENTIFIER: com.luna.browser
+        PRODUCT_NAME: Axolotl
+        PRODUCT_BUNDLE_IDENTIFIER: com.axolotl.browser
         MARKETING_VERSION: "1.0.2"
         CURRENT_PROJECT_VERSION: 3
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_ENTITLEMENTS: Luna/Luna.entitlements
+        CODE_SIGN_ENTITLEMENTS: Axolotl/Axolotl.entitlements
         CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
         COMBINE_HIDPI_IMAGES: YES
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: Luna
-        INFOPLIST_KEY_CFBundleName: Luna
+        INFOPLIST_KEY_CFBundleDisplayName: Axolotl
+        INFOPLIST_KEY_CFBundleName: Axolotl
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
-        INFOPLIST_KEY_NSCameraUsageDescription: "Luna needs camera access for websites that request it."
-        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Luna needs microphone access for websites that request it."
-        INFOPLIST_KEY_NSLocationUsageDescription: "Luna shares your location with websites you allow."
-        INFOPLIST_KEY_NSDownloadsFolderUsageDescription: "Luna needs access to Downloads to save files."
+        INFOPLIST_KEY_NSCameraUsageDescription: "Axolotl needs camera access for websites that request it."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Axolotl needs microphone access for websites that request it."
+        INFOPLIST_KEY_NSLocationUsageDescription: "Axolotl shares your location with websites you allow."
+        INFOPLIST_KEY_NSDownloadsFolderUsageDescription: "Axolotl needs access to Downloads to save files."
         ENABLE_APP_SANDBOX: YES
         ENABLE_INCOMING_NETWORK_CONNECTIONS: YES # Loopback listener for "Sign in with ChatGPT" (127.0.0.1 only)
         ENABLE_OUTGOING_NETWORK_CONNECTIONS: YES # TODO: Enable this when we have a way to handle outgoing network connections
@@ -97,79 +97,79 @@ targetTemplates:
     dependencies:
       - package: MarkdownUI
       - package: LaTeXSwiftUI
-      # SwiftTerm is linked by both apps: Dev code (DevTerminalController / DevSession, which LunaTests
-      # also exercise) shares sources, and the Dev mode UI is gated at runtime, not with #if LUNA_DEV.
-      # Moving it to LunaDev alone needs a terminal abstraction first.
+      # SwiftTerm is linked by both apps: Dev code (DevTerminalController / DevSession, which AxolotlTests
+      # also exercise) shares sources, and the Dev mode UI is gated at runtime, not with #if AXOLOTL_DEV.
+      # Moving it to AxolotlDev alone needs a terminal abstraction first.
       - package: SwiftTerm
     configFiles:
       Debug: Signing.xcconfig
       Release: Signing.xcconfig
 
 targets:
-  Luna:
-    templates: [LunaApp]
+  Axolotl:
+    templates: [AxolotlApp]
 
   # Unsandboxed build for Dev mode (drives the claude / codex CLIs). Same sources;
   # separate bundle id so it never shares the sandboxed app's container or settings.
-  LunaDev:
-    templates: [LunaApp]
+  AxolotlDev:
+    templates: [AxolotlApp]
     settings:
       base:
-        PRODUCT_NAME: Luna Dev
-        PRODUCT_MODULE_NAME: LunaDev
-        PRODUCT_BUNDLE_IDENTIFIER: com.luna.browser.dev
-        INFOPLIST_KEY_CFBundleDisplayName: Luna Dev
-        INFOPLIST_KEY_CFBundleName: Luna Dev
+        PRODUCT_NAME: Axolotl Dev
+        PRODUCT_MODULE_NAME: AxolotlDev
+        PRODUCT_BUNDLE_IDENTIFIER: com.axolotl.browser.dev
+        INFOPLIST_KEY_CFBundleDisplayName: Axolotl Dev
+        INFOPLIST_KEY_CFBundleName: Axolotl Dev
         ENABLE_APP_SANDBOX: NO
-        # Its own keychain access group: the default one is tied to com.luna.browser.
-        CODE_SIGN_ENTITLEMENTS: Luna/LunaDev.entitlements
+        # Its own keychain access group: the default one is tied to com.axolotl.browser.
+        CODE_SIGN_ENTITLEMENTS: Axolotl/AxolotlDev.entitlements
       configs:
         Debug:
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "LUNA_DEV $(inherited)"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "AXOLOTL_DEV $(inherited)"
         Release:
-          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "LUNA_DEV $(inherited)"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "AXOLOTL_DEV $(inherited)"
 
-  LunaTests:
+  AxolotlTests:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - path: LunaTests
+      - path: AxolotlTests
     dependencies:
-      - target: Luna
+      - target: Axolotl
     settings:
       base:
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
 
-  # Dev tests hosted by the unsandboxed LunaDev app, so process-spawning tests can run.
-  LunaDevTests:
+  # Dev tests hosted by the unsandboxed AxolotlDev app, so process-spawning tests can run.
+  AxolotlDevTests:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - path: LunaTests
+      - path: AxolotlTests
         includes:
           - "Dev*Tests.swift"
           - "CLIFixtures.swift"
     dependencies:
-      - target: LunaDev
+      - target: AxolotlDev
     settings:
       base:
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
         CODE_SIGNING_ALLOWED: NO
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "LUNA_DEV $(inherited)"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Luna Dev.app/Contents/MacOS/Luna Dev"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "AXOLOTL_DEV $(inherited)"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Axolotl Dev.app/Contents/MacOS/Axolotl Dev"
         BUNDLE_LOADER: "$(TEST_HOST)"
 
 schemes:
-  LunaDev:
+  AxolotlDev:
     build:
       targets:
-        LunaDev: all
+        AxolotlDev: all
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - LunaDevTests
+        - AxolotlDevTests

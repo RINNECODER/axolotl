@@ -63,4 +63,4 @@ xcodegen
 echo "✅ Xcode project generated successfully!"
 
 echo ""
-echo "🎉 Setup complete! Open Luna.xcodeproj in Xcode and build (⌘R)."
+echo "🎉 Setup complete! Open Axolotl.xcodeproj in Xcode and build (⌘R)."
