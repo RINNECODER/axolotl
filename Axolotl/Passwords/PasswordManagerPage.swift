@@ -11,23 +11,37 @@ final class PasswordManagerModel: ObservableObject {
 
     let vault: PasswordVault
     let profileId: UUID
+    let passkeyStore: PasskeyStoring
     private let authenticate: (String) async -> Bool
 
     @Published private(set) var credentials: [Credential] = []
+    /// Axolotl's own passkeys for this profile, newest first.
+    @Published private(set) var passkeys: [PasskeyRecord] = []
     @Published var query = ""
     @Published var selection: Credential?
     /// The selected login's password, while shown.
     @Published private(set) var revealed: String?
     @Published var status: String?
 
-    init(vault: PasswordVault = .shared, profileId: UUID, authenticate: ((String) async -> Bool)? = nil) {
+    init(vault: PasswordVault = .shared, profileId: UUID, passkeyStore: PasskeyStoring = KeychainPasskeyStore.shared,
+         authenticate: ((String) async -> Bool)? = nil) {
         self.vault = vault
         self.profileId = profileId
+        self.passkeyStore = passkeyStore
         self.authenticate = authenticate ?? { [vault] in await vault.unlock(reason: $0) }
         reload()
     }
 
-    func reload() { credentials = vault.credentials(profile: profileId) }
+    func reload() {
+        credentials = vault.credentials(profile: profileId)
+        passkeys = passkeyStore.all().filter { $0.profile == profileId }.sorted { $0.created > $1.created }
+    }
+
+    func delete(_ passkey: PasskeyRecord) {
+        passkeyStore.delete(passkey.credentialId)
+        reload()
+        status = "Passkey deleted"
+    }
 
     /// Logins matching the search (site or username), grouped by site as Chrome does.
     var sites: [(host: String, logins: [Credential])] {
@@ -122,6 +136,7 @@ struct PasswordManagerPageView: View {
     @StateObject private var model: PasswordManagerModel
     @State private var editing: Editor?
     @State private var pendingDelete: PasswordVault.Credential?
+    @State private var pendingPasskeyDelete: PasskeyRecord?
 
     /// The add/edit sheet: nil `original` adds.
     struct Editor: Identifiable {
@@ -161,6 +176,13 @@ struct PasswordManagerPageView: View {
         } message: { cred in
             Text("The password for \(cred.username.isEmpty ? cred.host : "\(cred.username) on \(cred.host)") will be deleted from Axolotl. You can't undo this.")
         }
+        .alert("Delete passkey?", isPresented: Binding(get: { pendingPasskeyDelete != nil }, set: { if !$0 { pendingPasskeyDelete = nil } }),
+               presenting: pendingPasskeyDelete) { passkey in
+            Button("Delete", role: .destructive) { model.delete(passkey) }
+            Button("Cancel", role: .cancel) {}
+        } message: { passkey in
+            Text("You won't be able to sign in to \(passkey.rpId) as \(PasskeyBridge.label(passkey)) with this passkey. Remove it from the site's account settings too. You can't undo this.")
+        }
     }
 
     private var header: some View {
@@ -193,7 +215,7 @@ struct PasswordManagerPageView: View {
     @ViewBuilder
     private var list: some View {
         let sites = model.sites
-        if sites.isEmpty {
+        if sites.isEmpty && model.passkeys.isEmpty {
             VStack(spacing: 10) {
                 Image(systemName: "key").font(.system(size: 36)).foregroundStyle(.tertiary)
                 Text(model.query.isEmpty ? "Passwords you save appear here" : "No passwords found")
@@ -203,25 +225,60 @@ struct PasswordManagerPageView: View {
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("\(model.credentials.count) saved password\(model.credentials.count == 1 ? "" : "s")")
-                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
-                        .padding(.leading, 4)
-                    VStack(spacing: 0) {
-                        ForEach(Array(sites.enumerated()), id: \.element.host) { index, site in
-                            if index > 0 { Divider().padding(.leading, 52) }
-                            ForEach(site.logins) { cred in
-                                PasswordSiteRow(credential: cred, showsHost: cred == site.logins.first) {
-                                    model.select(cred)
-                                }
-                            }
-                        }
-                    }
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quaternary.opacity(0.35)))
+                    if !sites.isEmpty { passwordList(sites) }
+                    if !model.passkeys.isEmpty { passkeyList }
                 }
                 .frame(maxWidth: 680)
                 .padding(24)
                 .frame(maxWidth: .infinity)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func passwordList(_ sites: [(host: String, logins: [PasswordVault.Credential])]) -> some View {
+            Text("\(model.credentials.count) saved password\(model.credentials.count == 1 ? "" : "s")")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                .padding(.leading, 4)
+            VStack(spacing: 0) {
+                ForEach(Array(sites.enumerated()), id: \.element.host) { index, site in
+                    if index > 0 { Divider().padding(.leading, 52) }
+                    ForEach(site.logins) { cred in
+                        PasswordSiteRow(credential: cred, showsHost: cred == site.logins.first) {
+                            model.select(cred)
+                        }
+                    }
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quaternary.opacity(0.35)))
+    }
+}
+
+extension PasswordManagerPageView {
+    fileprivate var passkeyList: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(model.passkeys.count) passkey\(model.passkeys.count == 1 ? "" : "s") on this Mac")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                .padding(.leading, 4).padding(.top, 16)
+            VStack(spacing: 0) {
+                ForEach(Array(model.passkeys.enumerated()), id: \.element.id) { index, passkey in
+                    if index > 0 { Divider().padding(.leading, 52) }
+                    HStack(spacing: 12) {
+                        SiteIcon(host: passkey.rpId)
+                        Text(passkey.rpId).font(.system(size: 13)).lineLimit(1).frame(width: 240, alignment: .leading)
+                        Text(PasskeyBridge.label(passkey)).font(.system(size: 13)).foregroundStyle(.secondary).lineLimit(1)
+                        Spacer(minLength: 0)
+                        Text(passkey.created, format: .dateTime.month(.abbreviated).day().year())
+                            .font(.system(size: 11.5)).foregroundStyle(.tertiary)
+                        Button { pendingPasskeyDelete = passkey } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel("Delete passkey for \(passkey.rpId)")
+                    }
+                    .padding(.horizontal, 16)
+                    .frame(height: 40)
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(.quaternary.opacity(0.35)))
         }
     }
 }

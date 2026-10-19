@@ -359,6 +359,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     @Published var autofillOffer: AutofillOffer?
     @Published var autofillSaveOffer: AutofillSaveOffer?
 
+    private lazy var passkeyBridge = PasskeyBridge(profileId: profileId, isPrivate: isPrivate)
     private lazy var autofillHandler: AutofillMessageHandler = {
         let h = AutofillMessageHandler()
         h.wrapper = self
@@ -781,6 +782,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             controller.addUserScript(WKUserScript(source: WebViewWrapper.linkPreviewScriptSource, injectionTime: .atDocumentEnd,
                                                   forMainFrameOnly: true, in: .defaultClient))
         }
+        // Passkeys (Settings → Passwords): page-world bridge; origins come from WebKit, never from the page.
+        PasskeyBridge.install(passkeyBridge, in: controller)
         controller.add(mediaHandler, contentWorld: .defaultClient, name: "axolotlMedia")
         controller.addUserScript(WKUserScript(source: WebViewWrapper.mediaScriptSource, injectionTime: .atDocumentEnd,
                                               forMainFrameOnly: false, in: .defaultClient))

@@ -35,6 +35,8 @@ struct PasswordsSettingsView: View {
                 }
             }
 
+            PasskeySettingsCard(profileId: profileId)
+
             SettingsCard("iCloud", footer: "Logins Axolotl saves for this profile sync to your other Macs signed in to the same Apple Account. Axolotl can't read passwords saved by Safari or the Passwords app, even with sync on; use Import below to bring those in.") {
                 SettingsToggleRow("Sync passwords with iCloud Keychain", subtitle: iCloudSyncNote,
                                   isOn: Binding(get: { iCloudSync }, set: setICloudSync))
@@ -206,6 +208,49 @@ struct PasswordsSettingsView: View {
                 status = "Couldn't read that file. Export it again from the Passwords app as CSV."
             }
             reload()
+        }
+    }
+}
+
+/// Settings → Passwords → Passkeys: Axolotl's own passkeys on or off, globally and per site (for a site that misbehaves).
+struct PasskeySettingsCard: View {
+    let profileId: UUID
+    var defaults: UserDefaults = .standard
+    @State private var enabled = PasskeyPrefs.isOn()
+    @State private var offSites = PasskeyPrefs.offSites()
+    @State private var newSite = ""
+
+    private var sites: [String] {
+        let saved = KeychainPasskeyStore.shared.all().filter { $0.profile == profileId }.map { PasswordVault.normalize($0.rpId) }
+        return Array(Set(saved + offSites)).sorted()
+    }
+
+    var body: some View {
+        SettingsCard("Passkeys", footer: "Axolotl keeps passkeys on this Mac and asks for Touch ID or your Mac password each time. Passkeys in Apple Passwords stay out of reach. Changes apply to tabs opened afterwards.") {
+            SettingsToggleRow("Use Axolotl passkeys", isOn: Binding(get: { enabled }, set: {
+                enabled = $0
+                defaults.set($0, forKey: PasskeyPrefs.enabledKey)
+            }))
+            if enabled {
+                ForEach(sites, id: \.self) { site in
+                    SettingsToggleRow(site, subtitle: "Use Axolotl passkeys on this site", isOn: Binding(
+                        get: { !offSites.contains(site) },
+                        set: { PasskeyPrefs.set($0, host: site, defaults); offSites = PasskeyPrefs.offSites(defaults) }))
+                }
+                SettingsRow("Turn off for a site", subtitle: "The site then sees no passkey support from Axolotl.") {
+                    TextField("Site", text: $newSite, prompt: Text("example.com"))
+                        .textFieldStyle(SettingsTextFieldStyle())
+                        .frame(width: 180)
+                    Button("Turn Off") {
+                        if let host = PasswordManagerModel.host(from: newSite) {
+                            PasskeyPrefs.set(false, host: host, defaults)
+                            offSites = PasskeyPrefs.offSites(defaults)
+                        }
+                        newSite = ""
+                    }
+                    .disabled(PasswordManagerModel.host(from: newSite) == nil)
+                }
+            }
         }
     }
 }
