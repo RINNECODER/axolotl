@@ -23,76 +23,12 @@ struct OnboardingWelcomeStep: View {
 
 struct OnboardingImportStep: View {
     @StateObject private var model = BrowserImportModel()
-    @State private var pickingCSV = false
-    @State private var passwordStatus: String?
     private let profileId = ProfileManager.shared.lastActiveProfileId
 
     var body: some View {
-        Section {
-            BrowserCardGrid(browsers: model.browsers, selected: model.onePasswordSelected ? nil : model.selectedKind,
-                            onePasswordSelected: model.onePasswordSelected,
-                            onSelect: { model.select($0) },
-                            onSelectOnePassword: { model.select(nil); model.onePasswordSelected = true })
-            if model.browsers.isEmpty {
-                Text("No other browsers found. You can import a bookmarks file later from File → Import from Browser….")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-        } header: {
-            Text("Import from")
-        }
-        .onAppear { model.detect() }
-
-        if model.onePasswordSelected {
-            OnePasswordImportSection(axolotlProfileId: model.targetProfile(profileId), isFixtureMode: model.isFixtureMode)
-        } else if let browser = model.selected {
-            Section {
-                HStack {
-                    Button(model.hasAccess(browser) ? "Import" : "Allow Access…") {
-                        importBookmarksAndHistory(browser)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.running)
-                    if model.running { ProgressView().controlSize(.small).padding(.leading, 6) }
-                    Spacer()
-                }
-                if let summary = model.summary {
-                    Label(summary, systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                }
-                if let error = model.error {
-                    Text(error).font(.callout).foregroundStyle(.red)
-                }
-            } header: {
-                Text(browser.kind.displayName)
-            } footer: {
-                Text("More options (profiles, keep in sync, bookmarks files) are in File → Import from Browser….")
-                    .foregroundStyle(.secondary)
-            }
-
-            Section {
-                Text(browser.kind.passwordExportSteps).font(.callout).foregroundStyle(.secondary)
-                Button("Choose Passwords CSV…") { pickingCSV = true }
-                if let passwordStatus { Text(passwordStatus).font(.callout) }
-            } header: {
-                Text("Passwords")
-            } footer: {
-                Text("Delete the CSV after importing; it isn't encrypted.").foregroundStyle(.secondary)
-            }
-            .fileImporter(isPresented: $pickingCSV, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
-                guard case .success(let url) = result else { return }
-                let target = model.targetProfile(profileId)
-                Task { if let status = await BrowserImportView.importPasswordsCSV(url, into: target) { passwordStatus = status } }
-            }
-        }
-    }
-
-    /// One click: ask for folder access if needed, then import bookmarks and history.
-    private func importBookmarksAndHistory(_ browser: DetectedBrowser) {
-        model.types = browser.kind == .safari ? [.bookmarks] : [.bookmarks, .history]
-        if !model.hasAccess(browser) {
-            model.requestAccess()
-            guard let refreshed = model.selected, model.hasAccess(refreshed) else { return }
-        }
-        model.runImport(into: profileId)
+        // Same one-click card as File → Import from Browser…, with the default browser preselected.
+        OneClickImportCard(model: model, axolotlProfileId: profileId)
+            .onAppear { if model.browsers.isEmpty { model.detect() } }
     }
 }
 

@@ -24,6 +24,25 @@ nonisolated struct BrowserDetector {
         return FileManager.default.homeDirectoryForCurrentUser
     }
 
+    /// The browser to offer first: the system default, else the most recently used, else the first found.
+    static func preferred(_ browsers: [DetectedBrowser], defaultBundleID: String?,
+                          lastUsed: (DetectedBrowser) -> Date?) -> BrowserKind? {
+        if let id = defaultBundleID, let b = browsers.first(where: { $0.kind.bundleIdentifiers.contains(id) }) { return b.kind }
+        return browsers.max { (lastUsed($0) ?? .distantPast) < (lastUsed($1) ?? .distantPast) }?.kind
+    }
+
+    /// The app that opens web links (may be Axolotl itself).
+    static var defaultBrowserBundleID: String? {
+        NSWorkspace.shared.urlForApplication(toOpen: URL(string: "https://example.com")!).flatMap { Bundle(url: $0)?.bundleIdentifier }
+    }
+
+    /// When the browser last ran: Chromium rewrites `Local State` on every launch. Only file dates are read.
+    static func lastUsed(_ b: DetectedBrowser) -> Date? {
+        [b.dataFolder.appendingPathComponent("Local State"), b.dataFolder].lazy.compactMap {
+            (try? FileManager.default.attributesOfItem(atPath: $0.path))?[.modificationDate] as? Date
+        }.first
+    }
+
     func dataFolder(for kind: BrowserKind) -> URL {
         home.appendingPathComponent(kind.dataFolderPath, isDirectory: true)
     }

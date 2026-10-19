@@ -218,19 +218,19 @@ final class BrowserImportTests: XCTestCase {
 
     // MARK: Merge + dedupe
 
-    func testReimportingBookmarksAddsOnlyNewOnes() {
-        var ws = Workspace()
+    private func tempStore() -> BookmarkStore {
+        BookmarkStore(fileURL: home.appendingPathComponent("bookmarks-\(UUID().uuidString).json"))
+    }
+
+    func testImportGoesToBookmarkStoreNotTabsAndReimportAddsOnlyNewOnes() {
+        let store = tempStore(), profile = UUID()
         let first: [ImportedBookmark] = [
             .link(title: "A", url: URL(string: "https://a.com/")!),
             .folder(name: "Work", children: [.link(title: "B", url: URL(string: "https://b.com")!)]),
         ]
-        let r1 = ws.mergeImportedBookmarks(first, folderName: "Imported from Chrome", existingFolderId: nil)
-        XCTAssertEqual(r1.added, 2)
-        XCTAssertEqual(ws.integrityProblems(), [])
-        guard let folderId = r1.folderId, case .folder(let root)? = ws.node(withId: folderId) else { return XCTFail() }
-        XCTAssertFalse(root.isExpanded)
-        XCTAssertEqual(ws.section(containing: ws.tabs.values.first!.id), .pinned)
-        XCTAssertEqual(ws.tabs.values.first?.savedURL, ws.tabs.values.first?.url, "imported tabs reset to their bookmark")
+        XCTAssertEqual(BrowserImporter.applyBookmarks(first, folderName: "Imported from Brave", axolotlProfileId: profile, store: store), 2)
+        XCTAssertEqual(store.children(of: nil).map(\.title), ["A", "Work"], "an empty bar takes the import directly")
+        XCTAssertNil(WorkspacePersistence.forProfile(profile).load(), "no workspace (tabs) written")
 
         // Same data again (trailing slash / fragment differences), plus one new link in Work.
         let second: [ImportedBookmark] = [
@@ -240,15 +240,70 @@ final class BrowserImportTests: XCTestCase {
                 .link(title: "C", url: URL(string: "https://c.com")!),
             ]),
         ]
-        let r2 = ws.mergeImportedBookmarks(second, folderName: "Imported from Chrome", existingFolderId: folderId)
-        XCTAssertEqual(r2.added, 1)
-        XCTAssertEqual(r2.folderId, folderId)
-        XCTAssertEqual(ws.tabs.count, 3)
-        XCTAssertEqual(ws.integrityProblems(), [])
+        XCTAssertEqual(BrowserImporter.applyBookmarks(second, folderName: "Imported from Brave", axolotlProfileId: profile, store: store), 1)
+        guard let folder = store.children(of: nil).first(where: { $0.title == "Imported from Brave" }) else { return XCTFail() }
+        XCTAssertEqual(store.children(of: store.children(of: folder.id).first { $0.title == "Work" }?.id).map(\.title), ["C"])
+        XCTAssertEqual(store.bookmarks.count, 3)
+        XCTAssertEqual(store.addImported(second), 0, "nothing new: no empty folders created")
+        XCTAssertEqual(store.folders.count, 3)
+    }
 
-        // Lost the remembered id: the folder is found again by name.
-        XCTAssertEqual(ws.mergeImportedBookmarks(second, folderName: "Imported from Chrome", existingFolderId: UUID()).added, 0)
-        XCTAssertEqual(ws.mergeImportedBookmarks([], folderName: "Imported from Edge", existingFolderId: nil).folderId, nil)
+    func testLegacyImportFolderMovesToBookmarksAndLeavesNoTabs() {
+        var ws = Workspace()
+        let tabA = Tab(url: URL(string: "https://a.com")!, title: "A", savedURL: URL(string: "https://a.com")!)
+        let tabB = Tab(url: URL(string: "https://b.com/page")!, title: "B", savedURL: URL(string: "https://b.com")!)
+        ws.tabs[tabA.id] = tabA
+        ws.tabs[tabB.id] = tabB
+        let inner = Folder(name: "Work", isExpanded: false, children: [.tab(tabB.id)])
+        let old = Folder(name: "Imported from Brave", isExpanded: false, children: [.tab(tabA.id), .folder(inner)])
+        ws.insertNode(.folder(old), at: NodeLocation(spaceId: ws.activeSpaceId, section: .pinned, parentFolderId: nil, index: 0))
+        let tabsBefore = ws.tabs.count
+
+        let moved = ws.takeImportedFolder(old.id)
+        XCTAssertEqual(moved, [.link(title: "A", url: URL(string: "https://a.com")!),
+                               .folder(name: "Work", children: [.link(title: "B", url: URL(string: "https://b.com")!)])],
+                       "saved bookmark URL wins over where the tab navigated")
+        XCTAssertNil(ws.node(withId: old.id))
+        XCTAssertEqual(ws.tabs.count, tabsBefore - 2)
+        XCTAssertEqual(ws.integrityProblems(), [])
+        XCTAssertNil(ws.takeImportedFolder(old.id), "runs once")
+
+        let store = tempStore()
+        store.addImported([.folder(name: "Imported from Brave", children: moved ?? [])])
+        XCTAssertEqual(Set(store.bookmarks.map(\.title)), ["A", "B"])
+    }
+
+    func testPreferredBrowserIsDefaultThenMostRecent() {
+        func b(_ k: BrowserKind) -> DetectedBrowser { DetectedBrowser(kind: k, dataFolder: home, appURL: nil, profiles: []) }
+        let found = [b(.chrome), b(.brave), b(.firefox)]
+        let dates: [BrowserKind: Date] = [.chrome: Date(timeIntervalSince1970: 1), .firefox: Date(timeIntervalSince1970: 5)]
+        XCTAssertEqual(BrowserDetector.preferred(found, defaultBundleID: "com.brave.Browser", lastUsed: { dates[$0.kind] }), .brave)
+        XCTAssertEqual(BrowserDetector.preferred(found, defaultBundleID: "app.axolotl", lastUsed: { dates[$0.kind] }), .firefox)
+        XCTAssertEqual(BrowserDetector.preferred(found, defaultBundleID: nil, lastUsed: { _ in nil }), .chrome)
+        XCTAssertNil(BrowserDetector.preferred([], defaultBundleID: nil, lastUsed: { _ in nil }))
+    }
+
+    func testImportReportTextAndSkippedReasons() {
+        var r = BrowserImporter.Report()
+        r.add(BrowserImporter.Summary(bookmarks: 1204, history: nil), requested: [.bookmarks, .history])
+        var sec = BrowserImporter.SecureSummary(extensionsImported: 3, extensionsFailed: 1, addresses: 0, keychainUnavailable: true)
+        sec.vaultLocked = true
+        r.add(sec, requested: [.cookies, .passwords, .extensions, .autofill], browserName: "Brave")
+        XCTAssertTrue(r.text.hasPrefix("Imported "), r.text)
+        XCTAssertTrue(r.text.contains("1,204 bookmarks") && r.text.contains("3 extensions"), r.text)
+        XCTAssertFalse(r.text.contains("address"), "zero counts stay out of the summary")
+        XCTAssertEqual(r.skipped[.passwords], "Keychain access to Brave Safe Storage wasn't allowed.")
+        XCTAssertEqual(r.skipped[.cookies], r.skipped[.passwords])
+        XCTAssertEqual(r.skipped[.history], "Couldn't read them from this profile.")
+        XCTAssertEqual(r.skipped[.extensions], "1 can't run in Axolotl yet.")
+        XCTAssertEqual(r.counts[.autofill], 0)
+        XCTAssertEqual(BrowserImporter.Report().text, "Everything is already up to date.")
+
+        var declined = BrowserImporter.Report()
+        var s2 = BrowserImporter.SecureSummary()
+        s2.extensionsDeclined = true
+        declined.add(s2, requested: [.extensions], browserName: "Brave")
+        XCTAssertEqual(declined.skipped[.extensions], "You chose not to add them.")
     }
 
     func testImportedHistoryDedupesAndKeepsNewestFirst() {
@@ -428,9 +483,9 @@ final class BrowserImportTests: XCTestCase {
         let later = first + [.link(title: "C", url: c)]
         XCTAssertEqual(ImportedBookmark.removing(imported, from: later), [.link(title: "C", url: c)], "empty folders dropped too")
 
-        var ws = Workspace()
-        let r = ws.mergeImportedBookmarks(ImportedBookmark.removing(imported, from: first), folderName: "Imported", existingFolderId: nil)
-        XCTAssertEqual(r, .init(folderId: nil, added: 0), "a deleted import folder is not recreated empty")
+        let store = tempStore()
+        XCTAssertEqual(store.addImported([.folder(name: "Imported", children: ImportedBookmark.removing(imported, from: first))]), 0)
+        XCTAssertTrue(store.items.isEmpty, "a deleted import folder is not recreated empty")
     }
 
     func testOnePasswordCSVAndVaultCSVRoundTrip() {

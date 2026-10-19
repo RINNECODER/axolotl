@@ -8,7 +8,13 @@ final class BrowserImportModel: ObservableObject {
     @Published var browsers: [DetectedBrowser] = []
     @Published var selectedKind: BrowserKind?
     @Published var profileId: String = ""
-    @Published var types: Set<ImportDataType> = [.bookmarks, .history]
+    /// Everything, unless the user narrows it under Customize.
+    @Published var types: Set<ImportDataType> = Set(ImportDataType.allCases)
+    /// The system default browser, when it's one of `browsers`.
+    @Published var defaultKind: BrowserKind?
+    /// Types the running/last import asked for, in display order, and what came of each.
+    @Published var requested: [ImportDataType] = []
+    @Published var report: BrowserImporter.Report?
     @Published var keepInSync = false
     @Published var running = false
     @Published var summary: String?
@@ -49,7 +55,11 @@ final class BrowserImportModel: ObservableObject {
             }
         }
         browsers = found
-        if selectedKind == nil || !found.contains(where: { $0.kind == selectedKind }) { select(found.first?.kind) }
+        let defaultID = BrowserDetector.defaultBrowserBundleID
+        defaultKind = found.first { b in defaultID.map(b.kind.bundleIdentifiers.contains) == true }?.kind
+        if selectedKind == nil || !found.contains(where: { $0.kind == selectedKind }) {
+            select(BrowserDetector.preferred(found, defaultBundleID: defaultID, lastUsed: BrowserDetector.lastUsed))
+        }
     }
 
     func select(_ kind: BrowserKind?) {
@@ -57,8 +67,10 @@ final class BrowserImportModel: ObservableObject {
         onePasswordSelected = false
         summary = nil
         error = nil
+        report = nil
+        requested = []
         profileId = selected?.profiles.first?.id ?? ""
-        if kind == .safari { types.remove(.history) }
+        if let kind { types = ImportDataType.supported(by: kind.engine) }
     }
 
     func hasAccess(_ b: DetectedBrowser) -> Bool {
@@ -93,6 +105,16 @@ final class BrowserImportModel: ObservableObject {
         return chosen
     }
 
+    /// The one button: asks for folder access the first time, then imports everything selected.
+    func importEverything(into axolotlProfile: UUID) {
+        guard let b = selected else { return }
+        if !hasAccess(b) {
+            requestAccess()
+            guard let refreshed = selected, hasAccess(refreshed) else { return }
+        }
+        runImport(into: axolotlProfile)
+    }
+
     func runImport(into axolotlProfile: UUID) {
         guard let b = selected, let profile = selectedProfile else { return }
         let target = targetProfile(axolotlProfile)
@@ -106,36 +128,32 @@ final class BrowserImportModel: ObservableObject {
         running = true
         summary = nil
         error = nil
+        let types = types.intersection(ImportDataType.supported(by: b.kind.engine))
+        requested = ImportDataType.allCases.filter(types.contains)
+        report = BrowserImporter.Report()
         let basic = types.intersection([.bookmarks, .history])
         let secureTypes = types.intersection([.passwords, .cookies, .extensions, .autofill])
         let sync = keepInSync
         let kind = b.kind
         let profileCount = b.profiles.count
         Task {
-            var parts: [String] = []
-            var errors: [String] = []
             if !basic.isEmpty {
                 let result = await BrowserImporter.run(kind: kind, dataFolder: folder, profile: profile,
                                                        profileCount: profileCount, types: basic,
                                                        axolotlProfileId: target, keepInSync: sync)
-                parts += BrowserImporter.Summary(bookmarks: result.bookmarks, history: result.history).parts
-                errors += result.errors
+                report?.add(result, requested: basic)
             }
             if !secureTypes.isEmpty {
+                // One Keychain prompt (Safe Storage is read once) covers cookies and passwords.
                 let read = await Task.detached(priority: .userInitiated) {
                     BrowserImporter.readSecure(kind: kind, dataFolder: folder, profile: profile, types: secureTypes)
                 }.value
                 let sec = await BrowserImporter.applySecure(read, into: target)
-                parts += sec.parts
-                errors += sec.errors
-                if sec.keychainUnavailable {
-                    errors.append("Passwords and cookies need Keychain access to \(kind.displayName) Safe Storage.")
-                }
+                report?.add(sec, requested: secureTypes, browserName: kind.displayName)
             }
             if !isFixtureMode { folder.stopAccessingSecurityScopedResource() }
             running = false
-            summary = parts.isEmpty ? (errors.isEmpty ? "Nothing new to import." : nil) : "Imported " + parts.joined(separator: ", ") + "."
-            if !errors.isEmpty { error = errors.joined(separator: "\n") }
+            summary = report?.text
         }
     }
 
@@ -151,16 +169,16 @@ final class BrowserImportModel: ObservableObject {
         let bookmarks = NetscapeBookmarks.parse(html)
         guard !bookmarks.isEmpty else { error = "No bookmarks found in that file."; return }
         let name = selectedKind == .safari ? "Imported from Safari" : "Imported Bookmarks"
-        let r = BrowserImporter.applyBookmarks(bookmarks, folderName: name, existingFolderId: nil, axolotlProfileId: target)
+        let added = BrowserImporter.applyBookmarks(bookmarks, folderName: name, axolotlProfileId: target)
         error = nil
-        summary = BrowserImporter.Summary(bookmarks: r.added).text
+        summary = BrowserImporter.Summary(bookmarks: added).text
     }
 
     /// Saves the toggle right away for a source that was imported before.
     func setSync(_ on: Bool, _ axolotl: UUID) {
         guard let b = selected, let p = selectedProfile else { return }
         var src = BrowserImporter.source(b.kind, p, targetProfile(axolotl))
-        guard src.folderId != nil || src.lastVisit != nil, src.keepInSync != on else { return }
+        guard src.importedKeys != nil || src.lastVisit != nil, src.keepInSync != on else { return }
         src.keepInSync = on
         BrowserImporter.save(src)
     }
@@ -172,6 +190,7 @@ final class BrowserImportModel: ObservableObject {
 }
 
 /// Import from Chrome, Brave, Edge, Vivaldi, Arc, Firefox or Safari.
+/// Import from Chrome, Brave, Edge, Vivaldi, Arc, Firefox or Safari.
 struct BrowserImportView: View {
     /// Shown as a sheet (adds a Done button) or embedded in Settings.
     var onDone: (() -> Void)?
@@ -179,9 +198,7 @@ struct BrowserImportView: View {
     @ObservedObject private var profileManager = ProfileManager.shared
     @StateObject private var model = BrowserImportModel()
     @State private var axolotlProfileId: UUID
-    @State private var pickingCSV = false
     @State private var pickingHTML = false
-    @State private var passwordStatus: String?
 
     init(profileId: UUID? = nil, onDone: (() -> Void)? = nil) {
         self.onDone = onDone
@@ -199,7 +216,7 @@ struct BrowserImportView: View {
                 .background(SettingsStyle.page)
                 HStack {
                     Spacer()
-                    Button("Done", action: onDone).keyboardShortcut(.defaultAction).buttonStyle(.settingsProminent)
+                    Button("Done", action: onDone).keyboardShortcut(.cancelAction).buttonStyle(.settings)
                 }
                 .padding(12)
                 .background(SettingsStyle.page)
@@ -224,7 +241,6 @@ struct BrowserImportView: View {
             }
             #endif
         }
-        .fileImporter(isPresented: $pickingCSV, allowedContentTypes: [.commaSeparatedText, .plainText]) { importPasswords($0) }
         .fileImporter(isPresented: $pickingHTML, allowedContentTypes: [.html]) { result in
             if case .success(let url) = result { model.importHTML(url, into: axolotlProfileId) }
         }
@@ -232,113 +248,18 @@ struct BrowserImportView: View {
 
     @ViewBuilder
     private var cards: some View {
-        SettingsCard("Import from", footer: model.isFixtureMode
+        OneClickImportCard(model: model, axolotlProfileId: axolotlProfileId)
+
+        SettingsCard("Other ways to import", footer: model.isFixtureMode
                      ? "Debug: reading synthetic fixtures; importing into a throwaway profile." : nil) {
-            SettingsContentRow {
-                BrowserCardGrid(browsers: model.browsers, selected: model.onePasswordSelected ? nil : model.selectedKind,
-                                onePasswordSelected: model.onePasswordSelected,
-                                onSelect: { model.select($0) },
-                                onSelectOnePassword: { model.select(nil); model.onePasswordSelected = true })
+            SettingsRow("Bookmarks file", subtitle: "An HTML file exported from any browser (Safari: File → Export → Bookmarks…).") {
+                Button("Choose File…") { pickingHTML = true }
             }
-            if model.browsers.isEmpty {
-                SettingsNoteRow("No other browsers found. You can still import a bookmarks file exported from any browser.")
-            }
-        }
-
-        if model.onePasswordSelected {
-            OnePasswordImportSection(axolotlProfileId: model.targetProfile(axolotlProfileId), isFixtureMode: model.isFixtureMode)
-        } else if let browser = model.selected {
-            selectedSection(browser)
-        }
-
-        SettingsCard("Bookmarks file") {
-            SettingsRow("Bookmarks file", subtitle: "Any browser can export bookmarks as an HTML file (Safari: File → Export → Bookmarks…). Pick that file to import it.") {
-                Button("Choose Bookmarks File…") { pickingHTML = true }
-            }
-        }
-
-        if !model.isFixtureMode {
-            SettingsCard(footer: "Bookmarks appear as a pinned folder in the sidebar. History shows up in History and address bar suggestions.") {
+            if !model.isFixtureMode {
                 SettingsMenuRow("Import into", selection: $axolotlProfileId, options: profileManager.profiles.map {
                     .init($0.id, $0.name, image: ProfileAvatar.image(for: $0, size: 16))
                 })
             }
-        }
-    }
-
-    @ViewBuilder
-    private func selectedSection(_ browser: DetectedBrowser) -> some View {
-        let access = model.hasAccess(browser)
-        SettingsCard(browser.kind.displayName) {
-            if browser.kind == .safari && !access {
-                SettingsRow("Safari's data is protected", subtitle: "macOS protects Safari's data, so Axolotl can only read it with Full Disk Access (System Settings → Privacy & Security). The easier way: in Safari choose File → Export → Bookmarks…, then use Choose Bookmarks File below.") {
-                    Button("Try Safari Folder Access…") { model.requestAccess() }
-                }
-            } else if !access {
-                SettingsRow("Allow access", subtitle: "Axolotl is sandboxed, so macOS asks you once to let it read \(browser.kind.displayName)'s data folder. The folder is preselected; just click Allow Access.") {
-                    Button("Allow Access…") { model.requestAccess() }
-                        .buttonStyle(.settingsProminent)
-                }
-            } else {
-                if browser.profiles.count > 1 {
-                    SettingsMenuRow("Profile", selection: $model.profileId,
-                                    options: browser.profiles.map { .init($0.id, $0.name) })
-                }
-                SettingsToggleRow("Bookmarks", isOn: binding(.bookmarks))
-                if browser.kind != .safari {
-                    SettingsToggleRow("History", isOn: binding(.history))
-                }
-                if browser.kind.engine == .chromium {
-                    SettingsToggleRow("Passwords", subtitle: "Saved logins, added to the Axolotl vault.", isOn: binding(.passwords))
-                    SettingsToggleRow("Cookies (keep me signed in)", isOn: binding(.cookies))
-                    SettingsToggleRow("Extensions", isOn: binding(.extensions))
-                    SettingsToggleRow("Autofill addresses", isOn: binding(.autofill))
-                }
-                SettingsToggleRow("Keep in sync", subtitle: "Re-import new bookmarks and history each time Axolotl starts.",
-                                  isOn: $model.keepInSync)
-                SettingsContentRow {
-                    HStack {
-                        Spacer()
-                        if model.running { ProgressView().controlSize(.small).padding(.trailing, 6) }
-                        Button("Import") { model.runImport(into: axolotlProfileId) }
-                            .buttonStyle(.settingsProminent)
-                            .disabled(model.running || model.types.isEmpty || browser.profiles.isEmpty)
-                    }
-                }
-            }
-            if let summary = model.summary {
-                SettingsContentRow {
-                    Label(summary, systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.green)
-                }
-            }
-            if let error = model.error {
-                SettingsNoteRow(error, isError: true)
-            }
-        }
-        .onChange(of: model.selectedKind) { _, _ in model.keepInSync = model.syncEnabled(axolotlProfileId) }
-        .onChange(of: model.keepInSync) { _, on in model.setSync(on, axolotlProfileId) }
-        .onAppear { model.keepInSync = model.syncEnabled(axolotlProfileId) }
-
-        SettingsCard("Passwords", footer: "Delete the CSV after importing; it isn't encrypted.") {
-            SettingsRow("Passwords CSV", subtitle: browser.kind.passwordExportSteps) {
-                Button("Choose Passwords CSV…") { pickingCSV = true }
-            }
-            if let passwordStatus { SettingsNoteRow(passwordStatus) }
-        }
-    }
-
-    private func binding(_ type: ImportDataType) -> Binding<Bool> {
-        Binding(get: { model.types.contains(type) },
-                set: { on in if on { model.types.insert(type) } else { model.types.remove(type) } })
-    }
-
-    private func importPasswords(_ result: Result<URL, Error>) {
-        guard case .success(let url) = result else { return }
-        let target = axolotlProfileId
-        Task {
-            if let status = await Self.importPasswordsCSV(url, into: target) { passwordStatus = status }
         }
     }
 
@@ -357,44 +278,166 @@ struct BrowserImportView: View {
     }
 }
 
-/// Detected browsers (plus 1Password) as selectable cards with their app icons.
-struct BrowserCardGrid: View {
-    let browsers: [DetectedBrowser]
-    let selected: BrowserKind?
-    let onePasswordSelected: Bool
-    let onSelect: (BrowserKind) -> Void
-    let onSelectOnePassword: () -> Void
+/// The one-click import, Chrome/Brave-style: the preselected browser as one card,
+/// a single "Import everything" button, options behind Customize, and per-type
+/// progress that ends in a one-line summary. Used by the import sheet and onboarding.
+struct OneClickImportCard: View {
+    @ObservedObject var model: BrowserImportModel
+    let axolotlProfileId: UUID
+    @State private var customizing = false
+    @State private var pickingCSV = false
+    @State private var passwordStatus: String?
 
     private static let onePasswordApp: URL? = ["com.1password.1password", "com.agilebits.onepassword7"]
         .lazy.compactMap { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) }.first
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 10)], spacing: 10) {
-            ForEach(browsers) { b in
-                card(b.kind.shortName, icon: b.appURL, isSelected: b.kind == selected) { onSelect(b.kind) }
-                    .accessibilityLabel(b.kind.displayName)
+        if model.onePasswordSelected {
+            SettingsCard { SettingsContentRow { header("1Password", app: Self.onePasswordApp, detail: "Import an export file") } }
+            OnePasswordImportSection(axolotlProfileId: model.targetProfile(axolotlProfileId), isFixtureMode: model.isFixtureMode)
+        } else if let browser = model.selected {
+            browserCard(browser)
+            if browser.kind.engine != .chromium { passwordsCSVCard(browser) }
+        } else {
+            SettingsCard {
+                SettingsNoteRow("No other browsers found. You can still import a bookmarks file exported from any browser.")
+                SettingsContentRow { HStack { Spacer(); changeMenu } }
             }
-            card("1Password", icon: Self.onePasswordApp, symbol: "key.viewfinder", isSelected: onePasswordSelected, action: onSelectOnePassword)
         }
-        .padding(.vertical, 4)
     }
 
-    private func card(_ title: String, icon app: URL?, symbol: String = "globe", isSelected: Bool,
-                      action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                (app.map { Image(nsImage: NSWorkspace.shared.icon(forFile: $0.path)) } ?? Image(systemName: symbol))
-                    .resizable().aspectRatio(contentMode: .fit).frame(width: 40, height: 40)
-                Text(title).font(.callout).lineLimit(1)
+    @ViewBuilder
+    private func browserCard(_ browser: DetectedBrowser) -> some View {
+        let access = model.hasAccess(browser)
+        SettingsCard {
+            SettingsContentRow { header(browser.kind.displayName, app: browser.appURL, detail: detail(browser)) }
+            if model.requested.isEmpty {
+                SettingsNoteRow(comesOver(browser) + (access ? "" : browser.kind == .safari
+                    ? "\nmacOS protects Safari's data. If access is refused, export bookmarks from Safari (File → Export → Bookmarks…) and choose that file below."
+                    : "\nmacOS asks once to let Axolotl read \(browser.kind.shortName)'s data. Just click Allow Access."))
+            } else {
+                ForEach(model.requested) { progressRow($0) }
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .background(RoundedRectangle(cornerRadius: 10)
-                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.primary.opacity(0.04)))
-            .overlay(RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 1.5))
-            .contentShape(Rectangle())
+            if let summary = model.summary, !model.running {
+                SettingsContentRow {
+                    Label { Text(summary) } icon: { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                        .font(.system(size: 13, weight: .medium))
+                }
+            }
+            if let error = model.error { SettingsNoteRow(error, isError: true) }
+            if customizing { options(browser) }
+            SettingsContentRow {
+                HStack(spacing: 10) {
+                    Button(customizing ? "Hide Options" : "Customize") { withAnimation(.snappy) { customizing.toggle() } }
+                        .buttonStyle(.link)
+                    Spacer()
+                    if model.running { ProgressView().controlSize(.small) }
+                    Button(model.running ? "Importing…" : "Import Everything") { model.importEverything(into: axolotlProfileId) }
+                        .buttonStyle(.settingsProminent)
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(model.running || model.types.isEmpty || (access && browser.profiles.isEmpty))
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .onChange(of: model.selectedKind) { _, _ in model.keepInSync = model.syncEnabled(axolotlProfileId) }
+        .onChange(of: model.keepInSync) { _, on in model.setSync(on, axolotlProfileId) }
+        .onAppear { model.keepInSync = model.syncEnabled(axolotlProfileId) }
+    }
+
+    private func header(_ name: String, app: URL?, detail: String) -> some View {
+        HStack(spacing: 14) {
+            (app.map { Image(nsImage: NSWorkspace.shared.icon(forFile: $0.path)) } ?? Image(systemName: "globe"))
+                .resizable().aspectRatio(contentMode: .fit).frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(name).font(.system(size: 15, weight: .semibold))
+                Text(detail).font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            changeMenu
+        }
+        .padding(.vertical, 6)
+    }
+
+    /// Other detected browsers and 1Password; hidden when there's nothing else to pick.
+    @ViewBuilder
+    private var changeMenu: some View {
+        let others = model.browsers.filter { $0.kind != model.selectedKind || model.onePasswordSelected }
+        Menu("Change") {
+            ForEach(others) { b in Button(b.kind.displayName) { model.select(b.kind) } }
+            if !model.onePasswordSelected {
+                Divider()
+                Button("1Password…") { model.select(nil); model.onePasswordSelected = true }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(model.running)
+    }
+
+    private func detail(_ b: DetectedBrowser) -> String {
+        var parts: [String] = []
+        if b.kind == model.defaultKind { parts.append("Your default browser") }
+        if let p = model.selectedProfile, b.profiles.count > 1 || p.name != "Default" { parts.append(p.name) }
+        return parts.isEmpty ? "Ready to import" : parts.joined(separator: " · ")
+    }
+
+    private func comesOver(_ b: DetectedBrowser) -> String {
+        let names: [ImportDataType: String] = [.bookmarks: "bookmarks", .history: "history", .passwords: "passwords",
+                                               .cookies: "sign-ins", .extensions: "extensions", .autofill: "addresses"]
+        let list = ImportDataType.allCases.filter(model.types.contains).compactMap { names[$0] }
+        guard !list.isEmpty else { return "Nothing selected. Use Customize to pick what comes over." }
+        let text = list.formatted(.list(type: .and))
+        return text.prefix(1).uppercased() + text.dropFirst() + " will come over."
+    }
+
+    private func progressRow(_ type: ImportDataType) -> some View {
+        let count = model.report?.counts[type]
+        let skipped = model.report?.skipped[type]
+        return SettingsContentRow {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Group {
+                    if count != nil { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+                    else if skipped != nil { Image(systemName: "minus.circle.fill").foregroundStyle(.secondary) }
+                    else { ProgressView().controlSize(.mini) }
+                }
+                .frame(width: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(type.title).font(.system(size: 13))
+                    if let skipped { Text(skipped).font(.system(size: 11)).foregroundStyle(.secondary) }
+                }
+                Spacer()
+                if let count {
+                    Text(count > 0 ? count.formatted() : "Up to date").font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func options(_ browser: DetectedBrowser) -> some View {
+        if browser.profiles.count > 1 {
+            SettingsMenuRow("Profile", selection: $model.profileId, options: browser.profiles.map { .init($0.id, $0.name) })
+        }
+        ForEach(ImportDataType.allCases.filter(ImportDataType.supported(by: browser.kind.engine).contains)) { type in
+            SettingsToggleRow(type.title, isOn: Binding(get: { model.types.contains(type) },
+                                                        set: { on in if on { model.types.insert(type) } else { model.types.remove(type) } }))
+        }
+        SettingsToggleRow("Keep in sync", subtitle: "Bring over new bookmarks and history each time Axolotl starts.",
+                          isOn: $model.keepInSync)
+    }
+
+    /// Firefox and Safari passwords can't be read directly; they come from an exported CSV.
+    private func passwordsCSVCard(_ browser: DetectedBrowser) -> some View {
+        SettingsCard("Passwords", footer: "Delete the CSV after importing; it isn't encrypted.") {
+            SettingsRow("Passwords CSV", subtitle: browser.kind.passwordExportSteps) {
+                Button("Choose CSV…") { pickingCSV = true }
+            }
+            if let passwordStatus { SettingsNoteRow(passwordStatus) }
+        }
+        .fileImporter(isPresented: $pickingCSV, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+            guard case .success(let url) = result else { return }
+            let target = model.targetProfile(axolotlProfileId)
+            Task { if let status = await BrowserImportView.importPasswordsCSV(url, into: target) { passwordStatus = status } }
+        }
     }
 }

@@ -135,9 +135,32 @@ nonisolated enum ImportDataType: String, Codable, CaseIterable, Identifiable, Se
         case .bookmarks: return "Bookmarks"
         case .history: return "History"
         case .passwords: return "Passwords"
-        case .cookies: return "Cookies (keep me signed in)"
+        case .cookies: return "Sign-ins (cookies)"
         case .extensions: return "Extensions"
         case .autofill: return "Autofill addresses"
+        }
+    }
+
+    /// "1,204 bookmarks", "1 history entry".
+    func countText(_ n: Int) -> String {
+        let (one, many): (String, String)
+        switch self {
+        case .bookmarks: (one, many) = ("bookmark", "bookmarks")
+        case .history: (one, many) = ("history entry", "history entries")
+        case .passwords: (one, many) = ("password", "passwords")
+        case .cookies: (one, many) = ("cookie", "cookies")
+        case .extensions: (one, many) = ("extension", "extensions")
+        case .autofill: (one, many) = ("address", "addresses")
+        }
+        return "\(n.formatted()) \(n == 1 ? one : many)"
+    }
+
+    /// Everything a browser engine can bring over.
+    static func supported(by engine: BrowserKind.Engine) -> Set<ImportDataType> {
+        switch engine {
+        case .chromium: return Set(allCases)
+        case .firefox: return [.bookmarks, .history]
+        case .safari: return [.bookmarks]
         }
     }
 }

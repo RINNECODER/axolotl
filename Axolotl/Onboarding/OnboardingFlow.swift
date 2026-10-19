@@ -21,7 +21,7 @@ enum OnboardingStep: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .welcome: return "A calm, fast browser with AI built in. Let's set up a few things — skip anything you like."
-        case .importData: return "Import bookmarks and history in one click. Passwords come in from a CSV or 1Password export."
+        case .importData: return "Bring over bookmarks, history, passwords, sign-ins and extensions from your current browser in one click."
         case .ai: return "Use a subscription you already have, or an API key. OpenRouter covers every model with one key."
         case .look: return "Pick a layout, glass or solid surfaces, and a start page wallpaper."
         case .privacy: return "Everything here is off unless you turn it on."

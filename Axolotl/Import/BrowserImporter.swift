@@ -13,14 +13,49 @@ enum BrowserImporter {
         var total: Int { (bookmarks ?? 0) + (history ?? 0) }
 
         var parts: [String] {
-            var parts: [String] = []
-            if let b = bookmarks { parts.append("\(b.formatted()) bookmark\(b == 1 ? "" : "s")") }
-            if let h = history { parts.append("\(h.formatted()) history entr\(h == 1 ? "y" : "ies")") }
-            return parts
+            [bookmarks.map(ImportDataType.bookmarks.countText), history.map(ImportDataType.history.countText)].compactMap { $0 }
         }
 
         var text: String {
             parts.isEmpty ? "Nothing new to import." : "Imported " + parts.joined(separator: ", ") + "."
+        }
+    }
+
+    /// What one "Import everything" brought over per type, and a one-line reason
+    /// for each requested type that didn't (never a raw error).
+    struct Report: Equatable {
+        var counts: [ImportDataType: Int] = [:]
+        var skipped: [ImportDataType: String] = [:]
+
+        var text: String {
+            let parts = ImportDataType.allCases.compactMap { t in counts[t].flatMap { $0 > 0 ? t.countText($0) : nil } }
+            return parts.isEmpty ? "Everything is already up to date." : "Imported " + parts.formatted(.list(type: .and)) + "."
+        }
+
+        mutating func add(_ s: Summary, requested: Set<ImportDataType>) {
+            for (t, n) in [(ImportDataType.bookmarks, s.bookmarks), (.history, s.history)] where requested.contains(t) {
+                if let n { counts[t] = n } else { skipped[t] = "Couldn't read them from this profile." }
+            }
+        }
+
+        mutating func add(_ s: SecureSummary, requested: Set<ImportDataType>, browserName: String) {
+            let found: [ImportDataType: Int?] = [.cookies: s.cookies, .passwords: s.passwords,
+                                                 .extensions: s.extensionsImported, .autofill: s.addresses]
+            for (t, n) in found where requested.contains(t) {
+                if let n { counts[t] = n; continue }
+                if s.keychainUnavailable, t == .cookies || t == .passwords {
+                    skipped[t] = "Keychain access to \(browserName) Safe Storage wasn't allowed."
+                } else if t == .passwords, s.vaultLocked {
+                    skipped[t] = "The Axolotl password vault stayed locked."
+                } else if t == .extensions, s.extensionsDeclined {
+                    skipped[t] = "You chose not to add them."
+                } else {
+                    skipped[t] = "Couldn't read them from this profile."
+                }
+            }
+            if requested.contains(.extensions), s.extensionsFailed > 0 {
+                skipped[.extensions] = "\(s.extensionsFailed.formatted()) can't run in Axolotl yet."
+            }
         }
     }
 
@@ -29,6 +64,7 @@ enum BrowserImporter {
         var kind: BrowserKind
         var profile: SourceProfile
         var axolotlProfileId: UUID
+        /// The workspace folder an older import created; moved to the bookmark store on launch.
         var folderId: UUID?
         var lastVisit: Date?
         var keepInSync = false
@@ -118,27 +154,37 @@ enum BrowserImporter {
 
     // MARK: Applying (main actor)
 
-    /// Merges into the profile's workspace: the open window's store when there
-    /// is one (so it's undoable and saved normally), otherwise the file on disk.
-    static func applyBookmarks(_ bookmarks: [ImportedBookmark], folderName: String, existingFolderId: UUID?,
-                               axolotlProfileId: UUID) -> Workspace.BookmarkMergeResult {
-        var result = Workspace.BookmarkMergeResult(folderId: nil, added: 0)
-        if let store = WorkspaceOwnership.owner(for: axolotlProfileId) {
-            store.applyChange("Import Bookmarks") { ws in
-                result = ws.mergeImportedBookmarks(bookmarks, folderName: folderName, existingFolderId: existingFolderId)
+    /// Adds bookmarks to the profile's bookmark store (bookmarks bar / axolotl://bookmarks),
+    /// never to workspace tabs. Like Chrome's first import, they go straight onto an
+    /// empty bar; otherwise into a "folderName" folder on the bar. Returns how many were added.
+    static func applyBookmarks(_ bookmarks: [ImportedBookmark], folderName: String, axolotlProfileId: UUID,
+                               store: BookmarkStore? = nil) -> Int {
+        let store = store ?? BookmarkStore.forProfile(axolotlProfileId)
+        let tree = store.children(of: nil).isEmpty ? bookmarks : [.folder(name: folderName, children: bookmarks)]
+        return store.addImported(tree)
+    }
+
+    /// One-time cleanup: moves workspace folders that older imports created (pinned
+    /// tabs) into the bookmark store, then removes them and their tabs.
+    static func migrateLegacyImportFolders() {
+        for var src in sources {
+            guard let folderId = src.folderId else { continue }
+            let name = folderName(src.kind, src.profile, profileCount: 1)
+            var moved: [ImportedBookmark]?
+            if let owner = WorkspaceOwnership.owner(for: src.axolotlProfileId) {
+                owner.applyChange("Move Imported Bookmarks") { ws in moved = ws.takeImportedFolder(folderId) }
+                owner.flush()
+            } else {
+                let persistence = WorkspacePersistence.forProfile(src.axolotlProfileId)
+                if var ws = persistence.load() {
+                    moved = ws.takeImportedFolder(folderId)
+                    if moved != nil { persistence.save(ws); persistence.drain() }
+                }
             }
-            store.flush()
-        } else {
-            let persistence = WorkspacePersistence.forProfile(axolotlProfileId)
-            var ws = persistence.load() ?? Workspace()
-            ws.repair()
-            result = ws.mergeImportedBookmarks(bookmarks, folderName: folderName, existingFolderId: existingFolderId)
-            if result.added > 0 {
-                persistence.save(ws)
-                persistence.drain()
-            }
+            if let moved { BookmarkStore.forProfile(src.axolotlProfileId).addImported([.folder(name: name, children: moved)]) }
+            src.folderId = nil
+            save(src)
         }
-        return result
     }
 
     static func folderName(_ kind: BrowserKind, _ profile: SourceProfile, profileCount: Int) -> String {
@@ -150,6 +196,7 @@ enum BrowserImporter {
     static func run(kind: BrowserKind, dataFolder: URL, profile: SourceProfile, profileCount: Int,
                     types: Set<ImportDataType>, axolotlProfileId: UUID, keepInSync: Bool? = nil,
                     incremental: Bool = false) async -> Summary {
+        migrateLegacyImportFolders()
         var source = source(kind, profile, axolotlProfileId)
         let since = incremental ? source.lastVisit : nil
         let history = ProfileStoreRegistry.stores(for: axolotlProfileId).history
@@ -161,10 +208,8 @@ enum BrowserImporter {
         if let bookmarks = read.bookmarks {
             let fresh = incremental ? ImportedBookmark.removing(source.importedKeys ?? [], from: bookmarks) : bookmarks
             source.importedKeys = (source.importedKeys ?? []).union(ImportedBookmark.keys(bookmarks))
-            let r = applyBookmarks(fresh, folderName: folderName(kind, profile, profileCount: profileCount),
-                                   existingFolderId: source.folderId, axolotlProfileId: axolotlProfileId)
-            summary.bookmarks = r.added
-            if let id = r.folderId { source.folderId = id }
+            summary.bookmarks = applyBookmarks(fresh, folderName: folderName(kind, profile, profileCount: profileCount),
+                                               axolotlProfileId: axolotlProfileId)
         }
         if read.visitsRead != nil {
             summary.history = read.visitsAdded
@@ -185,6 +230,7 @@ enum BrowserImporter {
         guard !launchSyncScheduled, ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         launchSyncScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            migrateLegacyImportFolders()
             Task { await syncAll() }
         }
     }
