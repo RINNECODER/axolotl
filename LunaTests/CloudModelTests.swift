@@ -103,6 +103,8 @@ final class CloudModelTests: XCTestCase {
         let jwks: [[String: Any]] = [["kty": "RSA", "kid": "k", "n": JWTVerifier.base64URLEncode(n), "e": JWTVerifier.base64URLEncode(e)]]
         let token = try sign(["iss": "i", "aud": "a", "exp": Date().addingTimeInterval(-3600).timeIntervalSince1970], kid: "k", key: priv)
         XCTAssertThrowsError(try JWTVerifier.verify(token, jwks: jwks, issuer: "i", audience: "a", nonce: nil))
+        let noExpiry = try sign(["iss": "i", "aud": "a"], kid: "k", key: priv)
+        XCTAssertThrowsError(try JWTVerifier.verify(noExpiry, jwks: jwks, issuer: "i", audience: "a", nonce: nil), "tokens without exp are rejected")
     }
 
     // MARK: Loopback redirect

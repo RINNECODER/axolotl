@@ -124,6 +124,19 @@ final class PersonalizationTests: XCTestCase {
         XCTAssertThrowsError(try customizer.undo(change.id), "undo twice")
     }
 
+    func testUndoOfAnOlderChangeIsRefusedWhileALaterOneTouchedTheSameSetting() throws {
+        defaults.set("dark", forKey: "luma_appearance")
+        let first = try customizer.apply(CustomizationPlan(settings: [SettingChange(key: "appearance.theme", value: "light")]),
+                                         context: context, source: "test")
+        let second = try customizer.apply(CustomizationPlan(settings: [SettingChange(key: "appearance.theme", value: "system")]),
+                                          context: context, source: "test")
+        XCTAssertThrowsError(try customizer.undo(first.id))
+        XCTAssertEqual(defaults.string(forKey: "luma_appearance"), "system", "later change kept")
+        _ = try customizer.undo(second.id)
+        _ = try customizer.undo(first.id)
+        XCTAssertEqual(defaults.string(forKey: "luma_appearance"), "dark")
+    }
+
     func testChangeLogKeepsTheLatestFifty() throws {
         for i in 0..<55 {
             try customizer.apply(CustomizationPlan(settings: [SettingChange(key: "aiPanel.fontSize", value: .number(Double(10 + i % 10)))]),

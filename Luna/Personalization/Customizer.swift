@@ -266,6 +266,11 @@ final class Customizer {
     func undo(_ id: String) throws -> AIChange {
         guard let change = log.entry(id) else { throw LunaToolError.invalidArguments("No change with id \(id).") }
         guard !change.undone else { throw LunaToolError.invalidArguments("Change \(id) was already undone.") }
+        // Restoring this snapshot would silently discard a later change to the same setting.
+        if let later = log.entries.prefix(while: { $0.id != id })
+            .first(where: { !$0.undone && !Set($0.settingOrder).isDisjoint(with: change.settingOrder) }) {
+            throw LunaToolError.invalidArguments("A later change (\(later.title)) touched the same setting. Undo that one first.")
+        }
         if !change.inverse.isEmpty {
             guard let profile = change.profileId, let context = resolveContext(profile) else {
                 throw LunaToolError.unavailable("Open a window on the profile this change was made in, then undo.")
