@@ -148,7 +148,7 @@ extension ProfileMenu {
         let settings = LunaSettingsOpener()
         entries += [
             .divider("p1"),
-            .button("New Profile…", icon: "person.badge.plus") {
+            .button("Add Profile…", icon: "person.badge.plus") {
                 if let profile = ProfileActions.createProfile(manager: manager) { onSwitch(profile) }
             },
             .button("Manage Profiles…", icon: "person.2") { settings(.general) },

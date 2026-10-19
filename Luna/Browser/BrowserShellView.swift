@@ -83,6 +83,7 @@ struct BrowserShellView: View {
     /// Field plus dropdown, in window content coordinates; a click outside closes the dropdown.
     @State private var omniHitRect: CGRect = .zero
     @State private var showBrowserFindBar: Bool = false
+    @State private var showTabSearch = false
     @State private var browserFindQuery: String = ""
     /// Luna Max "Ask on Page" card for the current tab.
     @State private var askOnPageVisible: Bool = false
@@ -202,6 +203,9 @@ struct BrowserShellView: View {
             } else if trafficLightsHidden || windowButtonsPeeking {
                 windowButtonsHotZone.ignoresSafeArea(.container, edges: .top)
             }
+        }
+        .overlay {
+            if showTabSearch { tabSearchOverlay }
         }
         .overlay(alignment: .top) {
             if let profile = profileToast {
@@ -638,7 +642,9 @@ struct BrowserShellView: View {
             forward: { if let id = tabManager.currentTab { web.goForward(in: id) } },
             showHistory: { navigateToHistory() },
             toggleBookmark: { bookmarkCurrentPage() },
-            openSettings: { openSettingsTab($0) }
+            openSettings: { openSettingsTab($0) },
+            showBookmarkManager: { openBookmarkManager() },
+            searchTabs: { showTabSearch.toggle() }
         )
     }
 
@@ -736,14 +742,53 @@ struct BrowserShellView: View {
     private var bookmarks: BookmarkStore { BookmarkStore.forProfile(session.profileId) }
 
     private var bookmarksBar: some View {
-        BookmarksBar(store: bookmarks, onOpen: { url, newTab in
-            Usage.record(.bookmarkOpen)
-            if newTab { newTabWithURL(url) } else { navigateToURL(url) }
-        }, onAddCurrentPage: isCurrentTabStartOrAIChat ? nil : { bookmarkCurrentPage() },
-           chromeStyle: chromeTemplate, onApps: { topChromeActions.newTab() })
+        BookmarksBar(store: bookmarks, onOpen: openBookmark,
+                     onAddCurrentPage: isCurrentTabStartOrAIChat ? nil : { bookmarkCurrentPage() },
+                     chromeStyle: chromeTemplate, onApps: { topChromeActions.newTab() }, onManage: { openBookmarkManager() })
         // At the window's top edge (no toolbar, no docked sidebar) it clears the window buttons.
         .padding(.leading, !showsTopChrome && !topBarPeeking && !sidebarShown ? 70 : 0)
         .padding(.top, !showsTopChrome && !topBarPeeking ? 4 : 0)
+    }
+
+    private func openBookmark(_ url: URL, inNewTab: Bool) {
+        Usage.record(.bookmarkOpen)
+        if inNewTab { newTabWithURL(url) } else { navigateToURL(url) }
+    }
+
+    /// ⌥⌘B: focuses the luna://bookmarks tab, or opens one.
+    private func openBookmarkManager() {
+        if let existing = tabManager.tabOrder.first(where: { InternalPage.isBookmarks(tabManager.tabURL[$0] ?? nil) }) {
+            switchToTab(existing)
+            return
+        }
+        let id = tabManager.newTab(url: InternalPage.bookmarksURL)
+        web.setActiveTab(id)
+        isFirstLoad = false
+        syncAddressBarFromCurrentTab()
+    }
+
+    /// ⇧⌘A: this window's open tabs and its recently closed ones.
+    private var tabSearchOverlay: some View {
+        let ws = session.workspace
+        let open = tabManager.tabOrder.compactMap { id in
+            ws.tab(id).map { TabSearchItem(id: id, title: displayTitle(for: $0), url: $0.url) }
+        }
+        let closed = ws.recentlyClosedTabs.prefix(10).map {
+            TabSearchItem(id: $0.id, title: displayTitle(for: $0), url: $0.url, isClosed: true)
+        }
+        return ZStack(alignment: .top) {
+            Color.black.opacity(0.001)
+                .onTapGesture { showTabSearch = false }
+            TabSearchView(openTabs: open, closedTabs: Array(closed), onSelect: { item in
+                showTabSearch = false
+                if item.isClosed {
+                    if let id = ws.reopenClosedTab(item.id) { switchToTab(id) }
+                } else {
+                    switchToTab(item.id)
+                }
+            }, onClose: { closeTab($0) }, onDismiss: { showTabSearch = false })
+            .padding(.top, 72)
+        }
     }
 
     /// ⌘D: bookmarks the current page (turning the bar on so it shows), or removes it if already bookmarked.
@@ -976,6 +1021,9 @@ struct BrowserShellView: View {
                 } else if InternalPage.isSettings(currentURL) {
                     // luna://settings[/<pane>]: native Settings, no web view
                     SettingsView(selection: settingsPaneBinding(for: currentId))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if InternalPage.isBookmarks(currentURL) {
+                    BookmarkManagerView(store: bookmarks, onOpen: openBookmark)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if currentURL?.scheme == "luma", currentURL?.host == "history" {
                     // History page (always in its own tab)
@@ -1454,6 +1502,10 @@ struct BrowserShellView: View {
     private func navigateToURL(_ url: URL) {
         if InternalPage.isSettings(url) {
             openSettingsTab(InternalPage.settingsPane(url))
+            return
+        }
+        if InternalPage.isBookmarks(url) {
+            openBookmarkManager()
             return
         }
         // Handle luma:// scheme

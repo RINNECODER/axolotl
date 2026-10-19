@@ -17,6 +17,13 @@ enum InternalPage {
         url?.scheme?.lowercased() == settingsScheme && url?.host?.lowercased() == settingsHost
     }
 
+    /// luna://bookmarks: the bookmark manager.
+    static let bookmarksURL = URL(string: "\(settingsScheme)://bookmarks")!
+
+    static func isBookmarks(_ url: URL?) -> Bool {
+        url?.scheme?.lowercased() == settingsScheme && url?.host?.lowercased() == "bookmarks"
+    }
+
     /// `luna://settings` or `luna://settings/<pane>`.
     static func settingsURL(_ pane: SettingsPane? = nil) -> URL {
         URL(string: "\(settingsScheme)://\(settingsHost)" + (pane.map { "/\($0.rawValue)" } ?? ""))!
@@ -31,12 +38,14 @@ enum InternalPage {
     /// Tab title for an internal page.
     static func title(_ url: URL) -> String {
         if isSettings(url) { return "Settings" }
+        if isBookmarks(url) { return "Bookmarks" }
         return url.host == "history" ? "History" : "AI Chat"
     }
 
     /// SF Symbol for an internal page's tab icon.
     static func icon(_ url: URL?) -> String {
         if isSettings(url) { return "gearshape" }
+        if isBookmarks(url) { return "book" }
         return url?.host == "history" ? "clock" : "sparkles"
     }
 }

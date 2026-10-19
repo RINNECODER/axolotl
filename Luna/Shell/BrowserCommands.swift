@@ -19,6 +19,8 @@ struct BrowserCommandActions {
     var toggleBookmark: () -> Void
     /// Opens or focuses this window's Settings tab, on a pane.
     var openSettings: (SettingsPane?) -> Void
+    var showBookmarkManager: () -> Void = {}
+    var searchTabs: () -> Void = {}
 }
 
 /// Browser windows by NSWindow, so menu commands reach the key window's shell. Extra windows
@@ -90,6 +92,8 @@ struct BrowserCommands: Commands {
             .keyboardShortcut("n", modifiers: [.command, .shift])
             Button("Reopen Closed Tab") { browser?.reopenClosedTab() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
+            Button("Search Tabs…") { browser?.searchTabs() }
+                .keyboardShortcut("a", modifiers: [.command, .shift])
         }
         CommandGroup(replacing: .saveItem) {
             Button("Close Tab") {
@@ -137,6 +141,8 @@ struct BrowserCommands: Commands {
             Button("Bookmark This Page") { browser?.toggleBookmark() }
                 .keyboardShortcut("d")
             Toggle("Show Bookmarks Bar", isOn: $showBookmarksBar)
+            Button("Bookmark Manager") { browser?.showBookmarkManager() }
+                .keyboardShortcut("b", modifiers: [.command, .option])
         }
     }
 }
