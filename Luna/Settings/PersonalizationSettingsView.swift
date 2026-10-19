@@ -147,7 +147,7 @@ private struct HourBars: View {
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(hours.indices, id: \.self) { h in
                     RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                        .fill(Color.accentColor.opacity(hours[h] == 0 ? 0.15 : 0.75))
+                        .fill(LunaSurface.accent.opacity(hours[h] == 0 ? 0.15 : 0.75))
                         .frame(height: max(2, 40 * CGFloat(hours[h]) / CGFloat(peak)))
                         .frame(maxWidth: .infinity)
                 }
