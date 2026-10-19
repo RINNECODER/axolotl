@@ -17,12 +17,45 @@ struct RichMessageView: View {
     let linkColor: Color
     var onLinkTapped: ((URL) -> Void)?
 
+    /// Frozen text while a re-render is pending; nil shows `rawText`.
+    @State private var shown: String?
+    @State private var flush: Task<Void, Never>?
+
     var body: some View {
-        let blocks = Self.parseBlocks(rawText)
+        // Streaming changes `rawText` per token; re-parsing the whole reply each time is costly,
+        // so re-render at most ~10x/s. The Equatable content skips body when its text is unchanged.
+        RichMessageContent(rawText: shown ?? rawText, fontSize: fontSize, linkColor: linkColor, onLinkTapped: onLinkTapped)
+            .equatable()
+            .onChange(of: rawText) { oldValue, _ in
+                guard flush == nil else { return }
+                shown = oldValue
+                flush = Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(100))
+                    shown = nil
+                    flush = nil
+                }
+            }
+            .onDisappear { flush?.cancel(); flush = nil; shown = nil }
+    }
+}
+
+struct RichMessageContent: View, Equatable {
+    let rawText: String
+    let fontSize: CGFloat
+    let linkColor: Color
+    var onLinkTapped: ((URL) -> Void)?
+
+    static func == (a: Self, b: Self) -> Bool {
+        a.rawText == b.rawText && a.fontSize == b.fontSize && a.linkColor == b.linkColor
+    }
+
+    var body: some View {
+        let text = Self.neutralizeRemoteImages(rawText)
+        let blocks = Self.parseBlocks(text)
         let anyMath = blocks.contains { $0.containsMath }
 
         if !anyMath {
-            markdownView(rawText)
+            markdownView(text)
         } else {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
@@ -43,6 +76,8 @@ struct RichMessageView: View {
         Markdown(text)
             .markdownTheme(lumaTheme)
             .markdownTextStyle { FontSize(fontSize) }
+            .markdownImageProvider(LocalOnlyImageProvider())
+            .markdownInlineImageProvider(LocalOnlyInlineImageProvider())
             .textSelection(.enabled)
             .environment(\.openURL, OpenURLAction { url in
                 onLinkTapped?(url)
@@ -160,7 +195,9 @@ struct RichMessageView: View {
             text.replaceSubrange(start.lowerBound...end.lowerBound, with: " ")
         }
 
-        let dollarPattern = #"(?s)(?<!\\)\$\$.*?(?<!\\)\$\$|(?<!\\)\$(?!\$).+?(?<!\\)\$"#
+        // Single `$`: opener not followed by a digit/space, closer not preceded by a space
+        // or followed by a digit (pandoc's rule), so "$5 to $10" stays currency.
+        let dollarPattern = #"(?s)(?<!\\)\$\$.*?(?<!\\)\$\$|(?<!\\)\$(?![\s\d$]).+?(?<![\s\\])\$(?!\d)"#
         if let regex = try? NSRegularExpression(pattern: dollarPattern),
            regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil {
             return true
@@ -169,6 +206,35 @@ struct RichMessageView: View {
         if text.contains("\\[") && text.contains("\\]") { return true }
         if text.contains("\\begin{equation") { return true }
         return false
+    }
+
+    // MARK: - Images
+
+    /// Model output must not make the browser fetch remote URLs (tracking pixels, exfiltration via
+    /// query strings). Inline `![alt](url)` becomes a plain link showing the alt text; anything left
+    /// (reference-style images) is dropped by the image providers unless it's a small data: image.
+    /// shortcut: also rewrites `![..](..)` inside code spans/fences; fine for chat display.
+    static func neutralizeRemoteImages(_ text: String) -> String {
+        guard text.contains("![") else { return text }
+        let regex = try! NSRegularExpression(pattern: #"!\[([^\]\n]*)\]\(\s*<?(?!data:)([^)\s>]+)>?[^)\n]*\)"#)
+        var out = text
+        for m in regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).reversed() {
+            guard let whole = Range(m.range, in: text), let altR = Range(m.range(at: 1), in: text),
+                  let urlR = Range(m.range(at: 2), in: text) else { continue }
+            let alt = text[altR].trimmingCharacters(in: .whitespaces)
+            out.replaceSubrange(whole, with: "[Image: \(alt.isEmpty ? String(text[urlR]) : alt)](\(text[urlR]))")
+        }
+        return out
+    }
+
+    static let maxDataImageBytes = 256 * 1024
+
+    /// Decodes a data: image no larger than `maxDataImageBytes`; nil for anything else.
+    static func smallDataImage(_ url: URL?) -> NSImage? {
+        guard let url, url.scheme?.lowercased() == "data",
+              url.absoluteString.utf8.count <= maxDataImageBytes * 4 / 3 + 256,
+              let data = try? Data(contentsOf: url), data.count <= maxDataImageBytes else { return nil }
+        return NSImage(data: data)
     }
 
     // MARK: - Luma dark theme for MarkdownUI
@@ -288,5 +354,20 @@ struct RichMessageView: View {
                 configuration.label
                     .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
             }
+    }
+}
+
+private struct LocalOnlyImageProvider: ImageProvider {
+    func makeImage(url: URL?) -> some View {
+        if let image = RichMessageContent.smallDataImage(url) {
+            Image(nsImage: image).resizable().scaledToFit()
+        }
+    }
+}
+
+private struct LocalOnlyInlineImageProvider: InlineImageProvider {
+    func image(with url: URL, label: String) async throws -> Image {
+        guard let image = RichMessageContent.smallDataImage(url) else { throw URLError(.unsupportedURL) }
+        return Image(nsImage: image)
     }
 }

