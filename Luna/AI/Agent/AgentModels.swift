@@ -164,7 +164,7 @@ enum AgentRedaction {
         pattern: "code|token|key|secret|sig|signature|auth|session|password|passwd|pwd|credential",
         options: .caseInsensitive)
 
-    /// Keeps scheme, host and path; masks the fragment and query values that look secret
+    /// Keeps scheme and host; masks path segments, the fragment and query values that look secret
     /// (sensitive parameter names, or values the detector flags). Parameter names stay.
     static func redactURL(_ urlString: String) -> String {
         guard !urlString.isEmpty, var parts = URLComponents(string: urlString) else { return redact(urlString) }
@@ -181,6 +181,14 @@ enum AgentRedaction {
                 return flagged(decoded, item.name) ? URLQueryItem(name: item.name, value: "REDACTED") : item
             }
         }
+        // Reset-password and magic links carry the token as a path segment; the segment before it is its label.
+        var previous = ""
+        parts.percentEncodedPath = parts.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: false).map { raw in
+            let segment = String(raw)
+            let decoded = segment.removingPercentEncoding ?? segment
+            defer { previous = decoded }
+            return redact(decoded, label: previous) != decoded ? "REDACTED" : segment
+        }.joined(separator: "/")
         // A fragment is often an OAuth/magic-link payload (#access_token=…); drop it entirely.
         if let fragment = parts.fragment, !fragment.isEmpty { parts.fragment = "REDACTED" }
         parts.user = nil

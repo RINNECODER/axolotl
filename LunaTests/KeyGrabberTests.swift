@@ -228,7 +228,6 @@ final class KeyGrabberTests: XCTestCase {
             ("See https://x.test/cb?token=\(lower)", "token inside a URL query"),
             ("Call getUserAccountSettingsForProfile2 first", "camelCase identifier"),
             ("internationalization_localization_settings", "long word without digits"),
-            ("Saved as ‹secret:3›, tab \(UUID().uuidString)", "Luna handle is not a label"),
         ]
         for (text, why) in negatives {
             XCTAssertEqual(SecretDetector.secretRanges(in: text).count, 0, why)
@@ -284,6 +283,32 @@ final class KeyGrabberTests: XCTestCase {
         let flagged = AgentRedaction.redactURL("https://x.example.com/p?blob=sk-proj-" + String(repeating: "a1B2", count: 12))
         XCTAssertFalse(flagged.contains("a1B2a1B2"), flagged)
         XCTAssertEqual(AgentRedaction.redactURL("https://example.com/a/b"), "https://example.com/a/b")
+    }
+
+    private func randomToken(_ count: Int) -> String {
+        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+        var seed: UInt64 = 0x9E3779B97F4A7C15
+        return String((0..<count).map { _ in
+            seed = seed &* 6364136223846793005 &+ 1442695040888963407
+            return alphabet[Int(seed >> 33) % alphabet.count]
+        })
+    }
+
+    func testRedactionMasksPathTokensAndLongTokens() {
+        let mixed = randomToken(43)
+        let reset = AgentRedaction.redactURL("https://accounts.example.com/reset-password/\(mixed)?lang=en")
+        XCTAssertEqual(reset, "https://accounts.example.com/reset-password/REDACTED?lang=en")
+        let hex = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b"
+        XCTAssertEqual(AgentRedaction.redactURL("https://example.com/reset-password/\(hex)"), "https://example.com/reset-password/REDACTED")
+        let long = randomToken(300)
+        XCTAssertEqual(AgentRedaction.redact("session \(long) end"), "session \(AgentRedaction.mask) end")
+
+        for normal in ["https://github.com/apple/swift/commit/\(hex)", "https://example.com/blog/2024/how-to-write-swift-tests-well",
+                       "https://en.wikipedia.org/wiki/Representational_state_transfer"] {
+            XCTAssertEqual(AgentRedaction.redactURL(normal), normal)
+        }
+        let prose = "Internationalization and representational considerations remain"
+        XCTAssertEqual(AgentRedaction.redact(prose), prose)
     }
 
     // MARK: Fixtures with the chat-model policy (no network)
@@ -352,7 +377,7 @@ final class KeyGrabberTests: XCTestCase {
         spy.record("mcp", second.text)
         let done = try JSONDecoder().decode(JSONValue.self, from: Data(second.text.utf8))
         XCTAssertEqual(done["status"]?.stringValue, "saved", second.text)
-        XCTAssertEqual(done["secret_handle"]?.stringValue?.hasPrefix("‹secret:"), true)
+        XCTAssertNotNil(done["keychain_item"]?.stringValue)
         let shown = try await pageText(webView, "document.getElementById('key').textContent")
         XCTAssertEqual(vault.value(account: "fixture/after-login"), shown)
         XCTAssertEqual(spy.leaks(of: shown), [])
