@@ -1,14 +1,14 @@
-# Luna → Arc-style shell, Helium-level customizability
+# Axolotl → Arc-style shell, Helium-level customizability
 
 Status: **approved** · 2026-10-13
 
 ## Goal
 
-Rebuild Luna's browser shell around an Arc-style sidebar: Spaces, pinned and favorite tabs, nested tab folders, split view, drag and drop everywhere, and a floating command bar. Wrap it all in a settings and theming layer as deep as Helium's (privacy defaults, built-in content blocking, bangs, per-site settings, layout toggles). Keep the AI features (Cmd+E panel, SmartSearch, CommandRouter) and plug them into the new shell.
+Rebuild Axolotl's browser shell around an Arc-style sidebar: Spaces, pinned and favorite tabs, nested tab folders, split view, drag and drop everywhere, and a floating command bar. Wrap it all in a settings and theming layer as deep as Helium's (privacy defaults, built-in content blocking, bangs, per-site settings, layout toggles). Keep the AI features (Cmd+E panel, SmartSearch, CommandRouter) and plug them into the new shell.
 
 ## Engine decision (decided: WebKit)
 
-Luna runs on **WebKit (`WKWebView`)**. Helium runs on Chromium (ungoogled-chromium, C++), so we can't reuse its code. We copy its features and defaults instead.
+Axolotl runs on **WebKit (`WKWebView`)**. Helium runs on Chromium (ungoogled-chromium, C++), so we can't reuse its code. We copy its features and defaults instead.
 
 **Recommendation: stay on WebKit.** It's native, light on battery, and the existing code already depends on it. The cost is no Chrome extensions. We cover the most important extension (an ad blocker) with built-in `WKContentRuleList` blocking and add "Boosts" (user CSS/JS per site) for everything else. Moving to Chromium (CEF) would be a separate, much larger project.
 
@@ -22,11 +22,11 @@ Luna runs on **WebKit (`WKWebView`)**. Helium runs on Chromium (ungoogled-chromi
 | Start page / AI | `SmartSearchView` (1,926), `AI/CommandSurface` (1,280) | Kept as is, rehosted. |
 | Profiles | `Profiles/ProfileSession.swift`, `ProfileManager.swift` | Per-profile `WKWebsiteDataStore` and stores, which is solid. `ProfileTabSnapshot` is defined but **never used**, so tabs are lost on quit. |
 | Shortcuts | `NSEvent` local monitor inside the shell view | Hard-coded and can't be rebound. |
-| Tests | `LunaTests/CoreLogicTests.swift` | Covers sessions and CommandRouter against the `TabManager` API. |
+| Tests | `AxolotlTests/CoreLogicTests.swift` | Covers sessions and CommandRouter against the `TabManager` API. |
 
 ## Target architecture
 
-### Data model (`Luna/Workspace/`)
+### Data model (`Axolotl/Workspace/`)
 
 ```
 Workspace (per profile, Codable, persisted)
@@ -53,7 +53,7 @@ Tab        { id, url, title, faviconURL, savedURL?, lastActive, isMuted, interac
 - `WebViewWrapper` drops the "active tab" singleton state. Theme color, back/forward, and progress move to per-tab `@Published` dictionaries, and the shell reads the *focused pane*.
 - Hibernation: unload web views for tabs inactive longer than N minutes (configurable) and restore them from `interactionState`.
 
-### Shell layout (`Luna/Shell/`)
+### Shell layout (`Axolotl/Shell/`)
 
 ```
 ┌───────────┬──────────────────────────────────────────┬────────┐
@@ -72,7 +72,7 @@ Tab        { id, url, title, faviconURL, savedURL?, lastActive, isMuted, interac
 - **Spaces**: a row of dots or icons at the bottom of the sidebar. Two-finger horizontal swipe or Ctrl+1…9 switches spaces. Each space has its own theme gradient.
 - **No top toolbar.** The URL pill sits at the top of the sidebar, and back/forward/reload are sidebar buttons or shortcuts. A compact "top bar" layout is available as a setting.
 
-### Command bar (`Luna/Shell/CommandBar/`)
+### Command bar (`Axolotl/Shell/CommandBar/`)
 
 - A floating overlay. Cmd+L opens it pre-filled with the current URL to replace it; Cmd+K opens it empty (switch tabs, run commands).
 - **Cmd+T keeps opening the SmartSearch AI start page** in a new tab (decided). The command bar never replaces it.
@@ -112,9 +112,9 @@ Sleek and native to macOS 27: system Liquid Glass materials, standard controls, 
 - [x] A. AI input focus: no blue ring, small shadow
 - [x] B. Helium layouts + appearance options + native Settings window
 - [x] C. Profiles without the popover (native menus + Settings pane)
-- [x] D. AI panel redesign (Desktop LUNA / Siri style) + nicer tab/document attachments
+- [x] D. AI panel redesign (Desktop AXOLOTL / Siri style) + nicer tab/document attachments
 - [x] E. Cloud models: Sign in with ChatGPT, OpenAI and Anthropic API keys
-- [x] F. Luna Max (Arc Max equivalent)
+- [x] F. Axolotl Max (Arc Max equivalent)
 - [ ] 4. Drag and drop
 - [ ] 5. Split view rendering
 - [ ] 6. Spaces (swipe, themes, auto-archive)
@@ -141,16 +141,16 @@ Settings becomes a native macOS 27 Settings window: category sidebar (Profiles, 
 No floating popover. Profiles live in a native menu (sidebar avatar button and a Profiles menu-bar menu: switch, open in new window, new profile, manage) and a Settings → Profiles pane for create/rename/color/delete.
 
 ### D. AI panel
-Modeled on the Desktop LUNA Safari extension and the Siri app: floating rounded glass panel inset from the window edge, header with circular icon buttons, an animated Siri orb only in the empty state, iMessage-style user bubbles and plain assistant text, a capsule input with a small soft shadow (no colored ring). Context shows as compact capsule chips (favicon + title, × on hover). The + button opens a searchable menu of open tabs (favicons, titles, hosts) and "Choose Files…", with drag-and-drop of files onto the panel.
+Modeled on the Desktop AXOLOTL Safari extension and the Siri app: floating rounded glass panel inset from the window edge, header with circular icon buttons, an animated Siri orb only in the empty state, iMessage-style user bubbles and plain assistant text, a capsule input with a small soft shadow (no colored ring). Context shows as compact capsule chips (favicon + title, × on hover). The + button opens a searchable menu of open tabs (favicons, titles, hosts) and "Choose Files…", with drag-and-drop of files onto the panel.
 
 ### E. Cloud models
-- **ChatGPT (Sign in with ChatGPT):** OpenAI's official open-source/local-app flow. Authorization code + PKCE (S256) in the system browser, loopback redirect `http://127.0.0.1:<port>/auth/callback`, `client_id=dynamic_agent_client` on first registration with `agent_name_hint=Luna` and a persisted `ext_agent_host_id`, scopes `openid profile email offline_access resource.invoke chatgpt.tokens.use.direct`, resource `https://api.openai.com/v1`. Issued client ID and tokens stored in the Keychain; rotating refresh; revocation on sign-out. Inference via `POST /v1/responses` (`stream: true`, `store: false`), models from `GET /v1/models`. Requires enabling the sandbox's incoming-network entitlement for the loopback listener.
+- **ChatGPT (Sign in with ChatGPT):** OpenAI's official open-source/local-app flow. Authorization code + PKCE (S256) in the system browser, loopback redirect `http://127.0.0.1:<port>/auth/callback`, `client_id=dynamic_agent_client` on first registration with `agent_name_hint=Axolotl` and a persisted `ext_agent_host_id`, scopes `openid profile email offline_access resource.invoke chatgpt.tokens.use.direct`, resource `https://api.openai.com/v1`. Issued client ID and tokens stored in the Keychain; rotating refresh; revocation on sign-out. Inference via `POST /v1/responses` (`stream: true`, `store: false`), models from `GET /v1/models`. Requires enabling the sandbox's incoming-network entitlement for the loopback listener.
 - **OpenAI API key** as an alternative.
 - **Anthropic:** API key from the Claude Console (Anthropic offers no third-party sign-in and prohibits reusing Claude subscription logins in other apps). Messages API with streaming.
 - Gemini and Ollama stay.
 
-### F. Luna Max (Arc Max equivalent)
-Ask on Page (hold ⌘F or ⌘⇧F), link previews (hover a link and press Shift for an AI summary), tidy titles for pinned tabs (plus Rename / Tidy Title in the tab menu), tidy downloads (rename files, one-click undo), Tidy Today (✦ on the Today divider groups tabs into folders, undoable). Each feature toggles individually in Settings → Luna Max and uses the selected model. Asking AI from the command bar ships with phase 7.
+### F. Axolotl Max (Arc Max equivalent)
+Ask on Page (hold ⌘F or ⌘⇧F), link previews (hover a link and press Shift for an AI summary), tidy titles for pinned tabs (plus Rename / Tidy Title in the tab menu), tidy downloads (rename files, one-click undo), Tidy Today (✦ on the Today divider groups tabs into folders, undoable). Each feature toggles individually in Settings → Axolotl Max and uses the selected model. Asking AI from the command bar ships with phase 7.
 
 ## Phases
 

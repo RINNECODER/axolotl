@@ -1,10 +1,10 @@
-# Luma — MVP: UI/UX Focus
+# Axolotl — MVP: UI/UX Focus
 
-## What Luma Is
+## What Axolotl Is
 
-**Luma** is a macOS-native, AI-first browser. The web view is standard WebKit; the differentiator is a **context-aware AI command surface** (Cmd+E) that sees the current page (URL, title, visible text, optional selection) and can propose browser actions (new tab, navigate, close tab). The **chrome** (tabs + address bar) **unifies with the page** by sampling the page’s background color and switching to light or dark UI so the browser frame feels part of the page.
+**Axolotl** is a macOS-native, AI-first browser. The web view is standard WebKit; the differentiator is a **context-aware AI command surface** (Cmd+E) that sees the current page (URL, title, visible text, optional selection) and can propose browser actions (new tab, navigate, close tab). The **chrome** (tabs + address bar) **unifies with the page** by sampling the page’s background color and switching to light or dark UI so the browser frame feels part of the page.
 
-So: **browsing + light** (the page’s “luma”) **+ AI that understands the page.**
+So: **browsing that adapts to the page + AI that understands the page.**
 
 ---
 
@@ -20,16 +20,16 @@ So: **browsing + light** (the page’s “luma”) **+ AI that understands the p
 
 - **Tab strip**: compact height (~38pt), traffic lights aligned, active tab shows chrome color; inactive area stays a consistent dark gray.
 - **Address bar**: omnibox (URL or search), back/forward/reload, optional AI entry point.
-- **No clutter**: no bookmarks bar, no extra toolbars in MVP. Focus is on content + one primary affordance: **Luma** (the AI panel).
+- **No clutter**: no bookmarks bar, no extra toolbars in MVP. Focus is on content + one primary affordance: **Axolotl** (the AI panel).
 
 ### 3. **AI panel: calm, focused, transparent**
 
 - **Trigger**: Cmd+E toggles a **right-side panel** (~380pt width, resizable).
 - **Tone**: Soft, calm, professional — dark gray with slight warmth (no pure black), blue-slate accents when active.
-- **Header**: “Luma” + short status (e.g. “Context-aware • Recent context”) + close. No heavy branding.
+- **Header**: “Axolotl” + short status (e.g. “Context-aware • Recent context”) + close. No heavy branding.
 - **Context**: A collapsible “Context (always included)” shows what’s sent: URL, page title, page text snippet, optional selection. User sees exactly what the AI sees.
 - **Chat**: Plain, scrollable history; user messages right-aligned in a subtle bubble; assistant replies left-aligned, no bubble. Markdown supported.
-- **Input**: Single text field, “Message Luma…” placeholder, Enter to send, optional “Include selection” toggle. Focus state: soft blue-slate glow (Xcode-assistant style), not harsh.
+- **Input**: Single text field, “Message Axolotl…” placeholder, Enter to send, optional “Include selection” toggle. Focus state: soft blue-slate glow (Xcode-assistant style), not harsh.
 - **Actions**: When the model proposes an action (e.g. open URL, close tab), the app shows a **confirmation**; the user approves or dismisses. No automatic execution without consent.
 
 ### 4. **Start page**
@@ -42,9 +42,9 @@ So: **browsing + light** (the page’s “luma”) **+ AI that understands the p
 - **Rounded corners**: 14–18pt continuous radius for panels and key controls so the app feels modern and cohesive.
 - **Padding**: Generous enough that the UI doesn’t feel cramped (e.g. 16–18pt horizontal in the AI panel).
 
-### 6. **Color and “Luma”**
+### 6. **Color**
 
-- **Luma** = light / luminance. The product literally uses **page luminance** to drive chrome contrast.
+- The product literally uses **page luminance** to drive chrome contrast.
 - **Palette**: Dark gray base (~0.09–0.14), warm rather than cold; accent blue-slate (~0.45, 0.58, 0.72) for focus and links; red only for errors; green for “ready” status.
 - Logo and icon should **echo “light” and “browser”** — a glow, a lens, or a single clear symbol that reads as “this app brings light/context to the web.”
 
@@ -59,7 +59,7 @@ So: **browsing + light** (the page’s “luma”) **+ AI that understands the p
 | Cmd+E AI panel, context preview, confirm actions | Inline AI, auto-actions, voice |
 | Start page with search/URL | Rich start page widgets |
 | Downloads list / hub | Sync, history search UI |
-| One clear “Luma” entry (panel + optional icon in chrome) | Multiple AI surfaces |
+| One clear “Axolotl” entry (panel + optional icon in chrome) | Multiple AI surfaces |
 
 ---
 
@@ -67,7 +67,7 @@ So: **browsing + light** (the page’s “luma”) **+ AI that understands the p
 
 The logo should capture:
 
-1. **Light / luminance** — “Luma” = light; the app uses page light to adapt the UI.
+1. **Light / luminance** — the app uses page light to adapt the UI.
 2. **Browser** — window, frame, or view onto content.
 3. **Clarity and calm** — soft, professional, not playful or noisy.
 4. **Single iconic abstract shape** — no letters. Works at 16×16 (favicon) and at larger sizes; readable in light and dark.

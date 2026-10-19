@@ -4,7 +4,7 @@
 
 ### Signing & Capabilities → App Sandbox
 
-Under **Signing & Capabilities** for the Luma target, **App Sandbox** adds entitlements that control what the app can access. These are already set in `Luma.entitlements`:
+Under **Signing & Capabilities** for the Axolotl target, **App Sandbox** adds entitlements that control what the app can access. These are already set in `Axolotl.entitlements`:
 
 | Entitlement | Purpose |
 |-------------|--------|
@@ -40,6 +40,6 @@ Those are implemented in app code. Adding or removing frameworks here does not f
 
 ## Summary
 
-- **Signing & Capabilities** (and `Luma.entitlements`): use them for **sandbox and file/network access** (Downloads, User Selected File, Network). That’s all you need there for uploads and downloads to work.
-- **Frameworks, Libraries, and Embedded Content**: only for linking frameworks; leave as-is for Luma.
+- **Signing & Capabilities** (and `Axolotl.entitlements`): use them for **sandbox and file/network access** (Downloads, User Selected File, Network). That’s all you need there for uploads and downloads to work.
+- **Frameworks, Libraries, and Embedded Content**: only for linking frameworks; leave as-is for Axolotl.
 - **Viewing files in the browser, tab/zoom/appearance behavior**: handled in code (e.g. `WebViewWrapper`, `TabManager`, `ContentView`, Settings).
