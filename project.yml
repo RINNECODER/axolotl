@@ -51,8 +51,8 @@ targetTemplates:
       base:
         PRODUCT_NAME: Axolotl
         PRODUCT_BUNDLE_IDENTIFIER: com.axolotl.browser
-        MARKETING_VERSION: "1.0.2"
-        CURRENT_PROJECT_VERSION: 3
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: 4
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_ENTITLEMENTS: Axolotl/Axolotl.entitlements
