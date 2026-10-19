@@ -728,7 +728,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func setActiveTab(_ tabId: UUID) {
         activeTab = tabId
-        currentURL = webViews[tabId]?.url
+        // A tab showing an error page is on the page that failed, not the one underneath
+        // (about:blank or nothing for a first load), as in didFailProvisionalNavigation.
+        currentURL = pageErrorByTab[tabId]?.url ?? webViews[tabId]?.url
         updatePageThemeForActiveTab()
         updateBackForwardForActiveTab()
     }
@@ -1268,55 +1270,40 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     ]
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse, decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        let response = navigationResponse.response
+        let http = response as? HTTPURLResponse
+        decisionHandler(Self.responsePolicy(
+            url: response.url, mimeType: response.mimeType, statusCode: http?.statusCode,
+            contentDisposition: http?.value(forHTTPHeaderField: "Content-Disposition"),
+            isMainFrame: navigationResponse.isForMainFrame, canShowMIMEType: navigationResponse.canShowMIMEType))
+    }
+
+    /// Display or download a response. Only content the server asked to save, or that WebKit
+    /// can't show, downloads; a response without a MIME type or an HTTP error displays (WebKit
+    /// sniffs it), so a failing or bare response never turns into a download.
+    static func responsePolicy(url: URL?, mimeType: String?, statusCode: Int?, contentDisposition: String?,
+                               isMainFrame: Bool, canShowMIMEType: Bool) -> WKNavigationResponsePolicy {
+        let scheme = url?.scheme?.lowercased()
         // 0) Local file:// URLs: always display in browser (don't treat as download)
-        if navigationResponse.response.url?.scheme?.lowercased() == "file" {
-            decisionHandler(.allow)
-            return
-        }
+        if scheme == "file" { return .allow }
         // 1) HTTP redirect (3xx): always allow so redirect chains (e.g. library resolvers, SSO) complete
-        if let http = navigationResponse.response as? HTTPURLResponse,
-           (300...399).contains(http.statusCode) {
-            decisionHandler(.allow)
-            return
-        }
+        if let statusCode, (300...399).contains(statusCode) { return .allow }
         // 2) Server says "save as file" → always download
-        if let http = navigationResponse.response as? HTTPURLResponse,
-           let disposition = http.value(forHTTPHeaderField: "Content-Disposition"),
-           disposition.lowercased().contains("attachment") {
-            decisionHandler(.download)
-            return
-        }
+        if contentDisposition?.lowercased().contains("attachment") == true { return .download }
+        let mime = (mimeType ?? "").lowercased()
+        let isWeb = scheme == "http" || scheme == "https"
         // 3) Main-frame navigation to remote image/* (HEIC, PNG, JPEG, etc.): download to Downloads
         //    (subresources like <img> on a page stay allowed so images display)
-        let scheme = navigationResponse.response.url?.scheme?.lowercased()
-        let mime = (navigationResponse.response.mimeType ?? "").lowercased()
-        let requestURL = navigationResponse.response.url
-        if navigationResponse.isForMainFrame,
-           (scheme == "http" || scheme == "https"),
-           mime.hasPrefix("image/") {
-            decisionHandler(.download)
-            return
-        }
+        if isMainFrame, isWeb, mime.hasPrefix("image/") { return .download }
         // 4) Display web/document content; always allow resolver/document URLs (e.g. Primo, Alma) even with wrong MIME
-        if navigationResponse.isForMainFrame, (scheme == "http" || scheme == "https"),
-           Self.looksLikeDocumentURL(requestURL) {
-            decisionHandler(.allow)
-            return
-        }
-        // 5) Standard displayable types
-        let isDisplayable: Bool = {
-            if mime.isEmpty { return true }
-            if Self.displayableMIMETypes.contains(mime) { return true }
-            if mime.hasPrefix("image/") { return true }
-            if mime.hasPrefix("text/") { return true }
-            if mime == "application/xhtml+xml" { return true }
-            return false
-        }()
-        if isDisplayable && navigationResponse.canShowMIMEType {
-            decisionHandler(.allow)
-        } else {
-            decisionHandler(.download)
-        }
+        if isMainFrame, isWeb, looksLikeDocumentURL(url) { return .allow }
+        // 5) No MIME type (WebKit sniffs it) or an HTTP error page: display, never download.
+        if mime.isEmpty { return .allow }
+        if isMainFrame, let statusCode, statusCode >= 400 { return .allow }
+        // 6) Standard displayable types
+        let isDisplayable = displayableMIMETypes.contains(mime) || mime.hasPrefix("image/")
+            || mime.hasPrefix("text/") || mime == "application/xhtml+xml"
+        return isDisplayable && canShowMIMEType ? .allow : .download
     }
 
     /// URLs that are typically HTML documents (resolvers, .do, /view/, etc.) so we allow display even when MIME is wrong.

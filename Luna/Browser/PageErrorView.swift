@@ -78,8 +78,13 @@ struct PageError: Equatable {
             }
             return PageError(kind: kind, url: url, code: ns.code)
         }
-        // WebKit's own errors: 102 = frame load interrupted by policy change (downloads,
-        // handled navigations); WKError.* covers JS/content errors, not unreachable sites.
+        // WebKit's own errors: 101 = can't show URL, 103 = blocked port (e.g. :1, Chrome's
+        // ERR_UNSAFE_PORT) never reach the network, so show the page. 102 = frame load
+        // interrupted by policy change (downloads, handled navigations) and WKError.* (JS/content
+        // errors) show nothing.
+        if ns.domain == "WebKitErrorDomain", ns.code == 101 || ns.code == 103 {
+            return PageError(kind: .cantReach, url: url, code: ns.code)
+        }
         if ns.domain == "WebKitErrorDomain" || ns.domain == WKError.errorDomain { return nil }
         return PageError(kind: .cantReach, url: url, code: ns.code)
     }

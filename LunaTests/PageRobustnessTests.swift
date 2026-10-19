@@ -34,6 +34,31 @@ final class PageRobustnessTests: XCTestCase {
         }
     }
 
+    func testBlockedPortShowsAnErrorPage() {
+        // http://127.0.0.1:1: WebKit refuses restricted ports itself (103) before connecting.
+        let error = PageError.classify(NSError(domain: "WebKitErrorDomain", code: 103), url: URL(string: "http://127.0.0.1:1/"))
+        XCTAssertEqual(error?.kind, .cantReach)
+        XCTAssertEqual(error?.host, "127.0.0.1")
+    }
+
+    func testOnlySavedOrUnshowableResponsesDownload() {
+        func policy(_ mime: String?, status: Int? = 200, disposition: String? = nil, main: Bool = true,
+                    canShow: Bool = true) -> WKNavigationResponsePolicy {
+            WebViewWrapper.responsePolicy(url: URL(string: "http://127.0.0.1:8080/x"), mimeType: mime, statusCode: status,
+                                          contentDisposition: disposition, isMainFrame: main, canShowMIMEType: canShow)
+        }
+        // No MIME type or an error status displays (WebKit can't "show" an empty type).
+        XCTAssertEqual(policy(nil, canShow: false), .allow)
+        XCTAssertEqual(policy("", status: nil, canShow: false), .allow)
+        XCTAssertEqual(policy("application/octet-stream", status: 502, canShow: false), .allow)
+        XCTAssertEqual(policy("text/html"), .allow)
+        // Real downloads still download.
+        XCTAssertEqual(policy("text/html", disposition: "attachment; filename=a.html"), .download)
+        XCTAssertEqual(policy("application/zip", canShow: false), .download)
+        XCTAssertEqual(policy("image/png"), .download)
+        XCTAssertEqual(policy("image/png", main: false), .allow)
+    }
+
     func testModifierAndMiddleClicksOpenNewTabs() {
         XCTAssertNil(WebViewWrapper.newTabDisposition(type: .linkActivated, modifiers: [], button: 1))
         XCTAssertEqual(WebViewWrapper.newTabDisposition(type: .linkActivated, modifiers: .command, button: 1), false)
