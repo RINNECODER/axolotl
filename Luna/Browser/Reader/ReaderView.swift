@@ -78,9 +78,7 @@ struct ReaderControls: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
-        .background(.regularMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.1)))
-        .shadow(color: .black.opacity(0.12), radius: 8, y: 2)
+        .lunaGlassCapsule(surface: .popovers)
     }
 
     private func button(_ symbol: String, _ help: String, action: @escaping () -> Void) -> some View {
@@ -166,18 +164,23 @@ struct ReaderChip: View {
     @ObservedObject var web: WebViewWrapper
 
     var body: some View {
-        if let id = web.activeTab, web.readerableTabs.contains(id) {
-            let on = web.readerArticleByTab[id] != nil
-            Button { web.toggleReader(in: id) } label: {
-                Image(systemName: on ? "doc.plaintext.fill" : "doc.plaintext")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
-                    .frame(width: 18, height: 18)
-                    .contentShape(Rectangle())
+        if let id = web.activeTab {
+            TabRuntimeReader(state: web.tabRuntime.state(for: id)) { runtime in
+                if runtime.isReaderable { chip(id, on: runtime.readerArticle != nil) }
             }
-            .buttonStyle(.plain)
-            .help(on ? "Close Reader (Esc)" : "Show Reader")
-            .accessibilityLabel(on ? "Close Reader" : "Show Reader")
         }
+    }
+
+    @ViewBuilder private func chip(_ id: UUID, on: Bool) -> some View {
+        Button { web.toggleReader(in: id) } label: {
+            Image(systemName: on ? "doc.plaintext.fill" : "doc.plaintext")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(on ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(on ? "Close Reader (Esc)" : "Show Reader")
+        .accessibilityLabel(on ? "Close Reader" : "Show Reader")
     }
 }

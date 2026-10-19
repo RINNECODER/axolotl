@@ -26,6 +26,8 @@ struct BrowserCommandActions {
     var viewSource: () -> Void = {}
     var savePage: () -> Void = {}
     var pictureInPicture: () -> Void = {}
+    var toggleReader: () -> Void = {}
+    var isReaderable: () -> Bool = { false }
 }
 
 /// Browser windows by NSWindow, so menu commands reach the key window's shell. Extra windows
@@ -121,6 +123,9 @@ struct BrowserCommands: Commands {
                 .keyboardShortcut("r")
             Button("Hard Reload This Page") { browser?.hardReload() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+            Button("Show Reader") { browser?.toggleReader() }
+                .keyboardShortcut("r", modifiers: [.command, .option])
+                .disabled(!(browser?.isReaderable() ?? false))
             Divider()
             Button("Actual Size") { browser?.zoomReset() }
                 .keyboardShortcut("0")

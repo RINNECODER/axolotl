@@ -22,6 +22,11 @@ final class TabRuntimeState: ObservableObject {
     /// Camera / microphone / location prompt waiting for the user.
     @Published fileprivate(set) var pendingPermission: SitePermissionRequest?
 
+    /// Page looks like an article (reader button shown).
+    @Published fileprivate(set) var isReaderable = false
+    /// Article being shown in Reader, if any.
+    @Published fileprivate(set) var readerArticle: ReaderMode.Article?
+
     var isLoading: Bool { loadingProgress != nil }
 
     /// Stand-in when there is no tab (never changes).
@@ -50,6 +55,15 @@ final class TabRuntimeStore: ObservableObject {
     var findResultByTab: [UUID: FindInPage.Result] { states.compactMapValues(\.findResult) }
     var pageErrorByTab: [UUID: PageError] { states.compactMapValues(\.pageError) }
     var pendingPermissions: [UUID: SitePermissionRequest] { states.compactMapValues(\.pendingPermission) }
+
+    var readerableTabs: Set<UUID> { Set(states.filter { $0.value.isReaderable }.keys) }
+    var readerArticleByTab: [UUID: ReaderMode.Article] { states.compactMapValues(\.readerArticle) }
+
+    func setReaderable(_ on: Bool, for tabId: UUID) { set(\.isReaderable, on, for: tabId) }
+    func setReaderArticle(_ article: ReaderMode.Article?, for tabId: UUID) {
+        let state = state(for: tabId)
+        if state.readerArticle != nil || article != nil { state.readerArticle = article }
+    }
 
     /// Drops a closed tab's state so it doesn't outlive the tab.
     func remove(_ tabId: UUID) {

@@ -653,7 +653,9 @@ struct BrowserShellView: View {
             showPasswords: { openPasswordsPage() },
             viewSource: { openViewSource() },
             savePage: { if !isCurrentTabStartOrAIChat, let id = tabManager.currentTab { web.savePageAs(in: id) } },
-            pictureInPicture: { if let id = tabManager.currentTab { web.pictureInPicture(in: id) } }
+            pictureInPicture: { if let id = tabManager.currentTab { web.pictureInPicture(in: id) } },
+            toggleReader: { if let id = tabManager.currentTab, web.readerableTabs.contains(id) { web.toggleReader(in: id) } },
+            isReaderable: { tabManager.currentTab.map { web.readerableTabs.contains($0) } ?? false }
         )
     }
 
@@ -1077,10 +1079,12 @@ struct BrowserShellView: View {
                                               onContinueHTTP: { web.continueToHTTP(in: currentId) })
                             }
                         }
-                        if let article = web.readerArticleByTab[currentId] {
-                            ReaderView(article: article, onClose: { web.toggleReader(in: currentId) },
-                                       onOpenLink: { web.load(url: $0, in: currentId) })
-                                .id(currentId)
+                        TabRuntimeReader(state: web.tabRuntime.state(for: currentId)) { runtime in
+                            if let article = runtime.readerArticle {
+                                ReaderView(article: article, onClose: { web.toggleReader(in: currentId) },
+                                           onOpenLink: { web.load(url: $0, in: currentId) })
+                                    .id(currentId)
+                            }
                         }
                         if isFocused && isFirstLoad {
                             ProgressView()

@@ -449,7 +449,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
                                   "chrome.roundedFrame", "chrome.homeButton", "chrome.hideWindowButtons", "addressBar.centered",
                                   "addressBar.minimalURL", "addressBar.loadingProgress", "startPage.showShortcuts",
                                   "appearance.density", "appearance.cornerRadius", "appearance.fontScale", "appearance.contrast",
-                                  "glass.blur", "glass.tint"] + GlassSurface.allCases.map(\.registryKey)
+                                  "glass.blur", "glass.tint", "reader.fontSize", "reader.font", "reader.theme", "reader.width"] + GlassSurface.allCases.map(\.registryKey)
         case .tabs: return ["tabs.unloadAfterMinutes"]
         case .ai: return ["aiPanel.fontSize", "lunaMax.askOnPage", "lunaMax.linkPreviews", "lunaMax.tidyTitles",
                           "lunaMax.tidyDownloads"]
@@ -632,6 +632,8 @@ private struct AppearanceSettingsView: View {
 
             WallpaperSettingsSection()
 
+            ReaderSettingsCard()
+
             SettingsCard("Start page") {
                 RegistryToggle("startPage.showShortcuts")
                 SettingsRow("Shortcuts", subtitle: shortcutStore.shortcuts.isEmpty
@@ -649,6 +651,23 @@ private struct AppearanceSettingsView: View {
         }
         // The profile name field would otherwise take initial focus (selected text) when the pane opens.
         .onAppear { DispatchQueue.main.async { NSApp.keyWindow?.makeFirstResponder(nil) } }
+    }
+}
+
+/// Reader view defaults (the same prefs as the Reader toolbar).
+private struct ReaderSettingsCard: View {
+    @AppStorage(ReaderPrefs.fontSize) private var fontSize = 19
+
+    var body: some View {
+        SettingsCard("Reader", footer: "Show Reader with ⌥⌘R on article pages.") {
+            RegistryPicker("reader.font")
+            SettingsRow(RegistrySettings.setting("reader.fontSize").title) {
+                Stepper("\(fontSize) pt", value: $fontSize, in: ReaderPrefs.fontSizes)
+                    .monospacedDigit()
+            }
+            RegistryPicker("reader.theme")
+            RegistryIntPicker("reader.width")
+        }
     }
 }
 

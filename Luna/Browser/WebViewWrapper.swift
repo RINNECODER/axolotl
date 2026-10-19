@@ -80,24 +80,23 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     /// Find-bar match count per tab ("3 of 17"), set by FindInPage.
     var findResultByTab: [UUID: FindInPage.Result] { tabRuntime.findResultByTab }
     /// Tabs whose page looks like an article (reader button shown), and the tabs showing Reader.
-    @Published private(set) var readerableTabs: Set<UUID> = []
-    @Published private(set) var readerArticleByTab: [UUID: ReaderMode.Article] = [:]
+    var readerableTabs: Set<UUID> { tabRuntime.readerableTabs }
+    var readerArticleByTab: [UUID: ReaderMode.Article] { tabRuntime.readerArticleByTab }
 
     /// Shows Reader for the tab, or closes it.
     func toggleReader(in tabId: UUID) {
-        if readerArticleByTab.removeValue(forKey: tabId) != nil { return }
+        if tabRuntime.state(for: tabId).readerArticle != nil { tabRuntime.setReaderArticle(nil, for: tabId); return }
         guard let webView = webViews[tabId] else { return }
         Task { @MainActor [weak self] in
             if let article = await ReaderMode.extract(webView), self?.webViews[tabId] === webView {
-                self?.readerArticleByTab[tabId] = article
+                self?.tabRuntime.setReaderArticle(article, for: tabId)
             }
         }
     }
 
     private func clearReader(_ tabId: UUID) {
-        // Assign only on change: each @Published write re-renders the shell.
-        if readerableTabs.contains(tabId) { readerableTabs.remove(tabId) }
-        if readerArticleByTab[tabId] != nil { readerArticleByTab.removeValue(forKey: tabId) }
+        tabRuntime.setReaderable(false, for: tabId)
+        tabRuntime.setReaderArticle(nil, for: tabId)
     }
     
     /// Favicon URLs per tab (extracted from page <link rel="icon">)
@@ -1469,7 +1468,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         fetchFavicon(for: tabId, webView: webView)
         Task { @MainActor [weak self] in
             if await ReaderMode.isReaderable(webView), self?.webViews[tabId] === webView, webView.url == navigationURL {
-                self?.readerableTabs.insert(tabId)
+                self?.tabRuntime.setReaderable(true, for: tabId)
             }
         }
         guard Self.samplesPageTheme else { return }
