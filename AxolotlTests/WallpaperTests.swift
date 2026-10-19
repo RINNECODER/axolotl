@@ -12,7 +12,8 @@ final class WallpaperTests: XCTestCase {
 
     func testStoredStylesAreClampedAndUnknownSwatchesFallBackToPresetDefaults() throws {
         let json = #"""
-        {"inkBloom": {"palette": "neon", "accent": "amber", "speed": 9, "intensity": -1, "dim": 0.4},
+        {"inkBloom": {"palette": "neon", "accent": "amber", "speed": 9, "intensity": -1, "dim": 0.4,
+                      "grain": 3, "zoom": 0.1, "pointer": "laser", "click": "burst"},
          "nightDrift": {"speed": "fast"},
          "notAPreset": {"palette": "moss", "accent": "mint"},
          "none": {"palette": "moss", "accent": "mint"}}
@@ -20,20 +21,47 @@ final class WallpaperTests: XCTestCase {
         let styles = WallpaperStore.decodeStyles(Data(json.utf8))
 
         XCTAssertEqual(Set(styles.keys), ["inkBloom", "nightDrift"])
-        XCTAssertEqual(styles["inkBloom"], WallpaperStyle(palette: "orchid", accent: "amber", speed: 2, intensity: 0.3, dim: 0.4))
+        XCTAssertEqual(styles["inkBloom"], WallpaperStyle(palette: "orchid", accent: "amber", speed: 2, intensity: 0.3, dim: 0.4,
+                                                          grain: 1, zoom: 1, pointer: .off, click: .burst))
         XCTAssertEqual(styles["nightDrift"], WallpaperStyle(palette: "midnight", accent: "moonlight"))
         XCTAssertEqual(WallpaperStore.decodeStyles(Data("not json".utf8)), [:])
     }
 
+    func testStylesSavedBeforeEffectsDecodeWithThePresetDefaults() {
+        let old = #"{"velvetMesh": {"palette": "moss", "accent": "mint", "speed": 0.5, "intensity": 0.9, "dim": 0.3}}"#
+        let style = WallpaperStore.decodeStyles(Data(old.utf8))["velvetMesh"]
+        XCTAssertEqual(style, WallpaperStyle(palette: "moss", accent: "mint", speed: 0.5, intensity: 0.9, dim: 0.3,
+                                             grain: WallpaperPreset.velvetMesh.defaultStyle.grain))
+        XCTAssertEqual(style?.pointer, .off, "pointer effects are opt-in")
+        XCTAssertEqual(style?.click, .off)
+        XCTAssertEqual(style?.zoom, 1)
+    }
+
+    func testSurpriseKeepsKnobsInRangeAndLeavesPointerEffectsAlone() {
+        var rng = SystemRandomNumberGenerator()
+        let mine = WallpaperStyle(palette: "moss", accent: "mint", dim: 0.5, pointer: .ripple, click: .burst)
+        for preset in WallpaperPreset.allCases where preset != .none {
+            let s = mine.surprise(for: preset, using: &rng)
+            XCTAssertEqual(s, s.validated(for: preset), "\(preset) out of range")
+            XCTAssertGreaterThan(s.speed, 0, "never frozen")
+            XCTAssertEqual([s.pointer.rawValue, s.click.rawValue, "\(s.dim)"], ["ripple", "burst", "0.5"])
+        }
+    }
+
     func testRenderConfigResolvesSwatchesToColorsAndRejectsUnsupportedFrameRates() throws {
-        let style = WallpaperStyle(palette: "ember", accent: "cyan", speed: 1.5, intensity: 0.8)
+        let style = WallpaperStyle(palette: "ember", accent: "cyan", speed: 0, intensity: 0.8, grain: 0.3, zoom: 1.5,
+                                   pointer: .parallax, click: .burst)
         let config = WallpaperRenderConfig(preset: .emberPlasma, style: style, fps: 45, still: true, scale: 3)
 
         let decoded = try JSONSerialization.jsonObject(with: Data(config.json().utf8)) as! [String: Any]
         XCTAssertEqual(decoded["preset"] as? String, "emberPlasma")
         XCTAssertEqual(decoded["colors"] as? [String: String],
                        ["bg": "#0f0605", "a": "#5a1a10", "b": "#c2532a", "accent": "#6fe3ff"])
-        XCTAssertEqual(decoded["speed"] as? Double, 1.5)
+        XCTAssertEqual(decoded["speed"] as? Double, 0)
+        XCTAssertEqual(decoded["grain"] as? Double, 0.3)
+        XCTAssertEqual(decoded["zoom"] as? Double, 1.5)
+        XCTAssertEqual(decoded["pointer"] as? String, "parallax")
+        XCTAssertEqual(decoded["click"] as? String, "burst")
         XCTAssertEqual(decoded["fps"] as? Int, 30)
         XCTAssertEqual(decoded["scale"] as? Double, 1)
         XCTAssertEqual(decoded["still"] as? Bool, true)
@@ -47,13 +75,14 @@ final class WallpaperTests: XCTestCase {
         XCTAssertEqual(store.frameRate, 30)
 
         store.preset = .tidalDither
-        store.setStyle(WallpaperStyle(palette: "moss", accent: "rose", speed: 0.5), for: .tidalDither)
+        let custom = WallpaperStyle(palette: "moss", accent: "rose", speed: 0.5, grain: 0.7, zoom: 1.25, pointer: .glow, click: .burst)
+        store.setStyle(custom, for: .tidalDither)
         store.showMoon = false
         store.frameRate = 60
 
         let reloaded = WallpaperStore(defaults: defaults)
         XCTAssertEqual(reloaded.preset, .tidalDither)
-        XCTAssertEqual(reloaded.style(for: .tidalDither), WallpaperStyle(palette: "moss", accent: "rose", speed: 0.5))
+        XCTAssertEqual(reloaded.style(for: .tidalDither), custom)
         XCTAssertEqual(reloaded.style(for: .polarVeil), WallpaperPreset.polarVeil.defaultStyle)
         XCTAssertFalse(reloaded.showMoon)
         XCTAssertEqual(reloaded.frameRate, 60)

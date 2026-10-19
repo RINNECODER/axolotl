@@ -3,7 +3,7 @@
 // page from Swift through window.axolotlWallpaper; nothing here touches the network.
 import { createShader, isWebGPUSupported } from './shaders.js'
 
-const grain = (strength = 0.14) => ({ type: 'FilmGrain', props: { strength, bias: 2, animated: false } })
+const grain = (strength) => ({ type: 'FilmGrain', props: { strength, bias: 2, animated: false } })
 const vignette = (intensity = 0.6, radius = 0.75) =>
   ({ type: 'Vignette', props: { color: '#000000', intensity, radius, falloff: 0.9 } })
 const solid = (color) => ({ type: 'SolidColor', props: { color } })
@@ -15,12 +15,12 @@ const PRESETS = {
     { type: 'Aurora', props: { colorA: c.a, colorB: c.accent, colorC: c.b, colorSpace: 'oklab', balance: 55,
       intensity: 85, curtainCount: 3, speed: 2.5 * s, waviness: 60, rayDensity: 25, height: 130,
       center: { x: 0.5, y: 0 } } },
-    grain(0.12), vignette(0.55),
+    vignette(0.55),
   ],
   inkBloom: (c, s) => [
     { type: 'FlowingGradient', props: { colorA: c.bg, colorB: c.a, colorC: c.bg, colorD: c.b,
       colorSpace: 'oklch', speed: 0.45 * s, distortion: 0.8 } },
-    grain(0.12), vignette(0.6),
+    vignette(0.6),
   ],
   velvetMesh: (c, s) => [
     { type: 'MeshGradient', props: { colorSpace: 'oklab', count: 5, smoothness: 3, variation: 0.4,
@@ -29,7 +29,7 @@ const PRESETS = {
         { color: c.b, position: 0.9 }, { color: c.accent, position: 1 }] } },
     { type: 'SimplexNoise', props: { colorA: '#ffffff', colorB: '#000000', scale: 3, speed: 0.3 * s },
       opacity: 0.08, blendMode: 'softLight' },
-    grain(0.16), vignette(0.65),
+    vignette(0.65),
   ],
   nightDrift: (c, s) => [
     { type: 'LinearGradient', props: { colorA: c.a, colorB: c.bg, start: { x: 0.5, y: 1 }, end: { x: 0.5, y: 0.25 },
@@ -48,7 +48,7 @@ const PRESETS = {
       colorSpace: 'oklab' }, opacity: 0.35 },
     { type: 'Fog', props: { colorA: c.b, colorB: c.bg, speed: 0.35 * s, turbulence: 0.8, detail: 15, blending: 0.35,
       mouseInfluence: 0, colorSpace: 'oklab' }, opacity: 0.6, blendMode: 'screen' },
-    grain(0.1), vignette(0.55),
+    vignette(0.55),
   ],
   tidalDither: (c, s) => [
     solid(c.bg),
@@ -66,7 +66,7 @@ const PRESETS = {
       colorA: c.b, colorB: c.bg, colorSpace: 'oklab' } },
     { type: 'RadialGradient', props: { colorA: c.accent, colorB: c.bg, center: { x: 0.8, y: 0.85 }, radius: 0.9,
       colorSpace: 'oklab' }, opacity: 0.18, blendMode: 'screen' },
-    grain(0.12), vignette(0.7),
+    vignette(0.7),
   ],
   halftoneDusk: (c, s) => [
     { type: 'MeshGradient', props: { colorSpace: 'oklab', count: 4, smoothness: 3, variation: 0.3, swirl: 0.2,
@@ -81,7 +81,7 @@ const PRESETS = {
     { type: 'Marble', props: { colorA: c.a, colorB: c.bg, colorC: c.bg, scale: 1.5, turbulence: 10, speed: 0.025 * s,
       colorSpace: 'oklab' } },
     { type: 'SolidColor', props: { color: c.accent }, opacity: 0.08, blendMode: 'softLight' },
-    grain(0.15), vignette(0.65),
+    vignette(0.65),
   ],
   lunarRays: (c, s) => [
     solid(c.bg),
@@ -89,7 +89,7 @@ const PRESETS = {
       colorSpace: 'oklab' }, opacity: 0.7 },
     { type: 'Godrays', props: { center: { x: 0.5, y: -0.08 }, density: 0.22, intensity: 0.45, spotty: 0.6,
       speed: 0.25 * s, rayColor: c.accent, backgroundColor: 'transparent' }, opacity: 0.8 },
-    grain(0.12), vignette(0.5),
+    vignette(0.5),
   ],
 }
 
@@ -97,6 +97,8 @@ const canvas = document.getElementById('wall')
 const fallback = document.getElementById('fallback')
 let shader = null
 let applied = null      // JSON of the last config we built
+let current = null      // ...and that config
+let movers = []         // ids of the layers parallax shifts, back to front
 let active = false      // Axolotl says the start page is on screen
 let still = false       // Reduce Motion / Low Power: draw once, then hold the frame
 let building = Promise.resolve()
@@ -113,16 +115,67 @@ function showFallback(cfg) {
   canvas.classList.remove('ready')
 }
 
+// Filters work on the layers below them; zoom and parallax move only the others.
+const FILTERS = new Set(['FilmGrain', 'Vignette', 'Dither', 'Halftone', 'CursorRipples'])
+const GRAIN_MAX = 0.3   // FilmGrain strength at the Grain slider's 100%
+const PARALLAX = 0.04   // how far (in screen widths) the top layer shifts at the window edge
+
 function toPreset(cfg) {
   const make = PRESETS[cfg.preset]
   if (!make) return null
-  // opacity and blendMode are universal props, so they travel with the others.
+  const layers = make(cfg.colors, cfg.speed)
+  const vignette = layers.pop()
+  const zoom = cfg.zoom ?? 1
+  // A tiny offset keeps the transform live, so parallax moves don't rebuild the pipeline.
+  if (zoom !== 1 || cfg.pointer === 'parallax') for (const l of layers) {
+    if (!FILTERS.has(l.type)) l.transform = { scale: zoom, edges: 'mirror', offsetX: 1e-4, offsetY: 0 }
+  }
+  if (cfg.pointer === 'glow') layers.push({ type: 'RadialGradient', props: { colorA: cfg.colors.accent, colorB: '#000000',
+    center: { type: 'mouse-position', smoothing: 0.6 }, radius: 0.45, colorSpace: 'oklab' }, opacity: 0.22, blendMode: 'screen' })
+  if (cfg.pointer === 'ripple') layers.push({ type: 'CursorRipples', props: { intensity: 5, decay: 6, radius: 0.4, chromaticSplit: 0.6 } })
+  if (cfg.grain > 0) layers.push(grain(cfg.grain * GRAIN_MAX))
+  layers.push(vignette)
+  // opacity, blendMode and transform are universal props, so they travel with the others.
   return {
-    components: make(cfg.colors, cfg.speed).map(({ type, props, opacity, blendMode }, i) => ({
+    components: layers.map(({ type, props, opacity, blendMode, transform }, i) => ({
       type, id: `l${i}`, children: [],
-      props: { ...props, ...(opacity !== undefined && { opacity }), ...(blendMode && { blendMode }) },
+      props: { ...props, ...(opacity !== undefined && { opacity }), ...(blendMode && { blendMode }), ...(transform && { transform }) },
     })),
   }
+}
+
+// Pointer input from Axolotl, normalized to 0...1 with y down. Axolotl sends it only while
+// the start page is on screen, animating, and the preset has an effect turned on.
+let wake = null
+function pointer(x, y, click) {
+  if (!shader || !current) return
+  const cfg = current
+  const clientX = x * window.innerWidth, clientY = y * window.innerHeight
+  if (click) { if (cfg.click === 'burst') burst(clientX, clientY); return }
+  if (cfg.pointer === 'glow' || cfg.pointer === 'ripple') {
+    window.dispatchEvent(new MouseEvent('mousemove', { clientX, clientY }))
+  } else if (cfg.pointer === 'parallax') {
+    movers.forEach((id, i) => {
+      const depth = PARALLAX * (i + 1) / movers.length
+      shader.update(id, { transform: { offsetX: (0.5 - x) * depth + 1e-4, offsetY: (y - 0.5) * depth } })
+    })
+  }
+  // A frozen (speed 0) wallpaper wakes for a moment so the effect can draw, then holds again.
+  if (still && active) {
+    shader.resume()
+    clearTimeout(wake)
+    wake = setTimeout(syncRunning, 600)
+  }
+}
+
+// Click: a soft ring of accent light that grows and fades, drawn by the compositor.
+function burst(x, y) {
+  const el = document.createElement('div')
+  el.className = 'burst'
+  el.style.left = `${x}px`; el.style.top = `${y}px`
+  el.style.setProperty('--accent', current.colors.accent)
+  el.addEventListener('animationend', () => el.remove())
+  document.body.appendChild(el)
 }
 
 function syncRunning() {
@@ -136,6 +189,7 @@ async function build(cfg) {
   const preset = toPreset(cfg)
   if (shader) { shader.destroy(); shader = null }
   canvas.classList.remove('ready')
+  movers = preset ? preset.components.filter((c) => c.props.transform).map((c) => c.id) : []
   if (!preset) { fallback.classList.remove('shown'); post({ state: 'none' }); return }
   if (!isWebGPUSupported() || !navigator.gpu) { showFallback(cfg); post({ state: 'fallback', reason: 'unsupported' }); return }
   try {
@@ -169,17 +223,19 @@ async function build(cfg) {
 
 window.axolotlWallpaper = {
   apply(cfg) {
-    still = !!cfg.still
+    still = !!cfg.still || cfg.speed === 0
     const key = JSON.stringify({ ...cfg, still: undefined, intensity: undefined })
     document.documentElement.style.setProperty('--intensity', String(cfg.intensity))
     if (key === applied) { syncRunning(); return }
     applied = key
+    current = cfg
     building = building.then(() => build(cfg))
   },
   setActive(on) {
     active = !!on
     building.then(syncRunning)
   },
+  pointer,
   // A still JPEG of a preset for the settings picker; runs one at a time.
   snapshot(cfg, w, h) {
     const job = building.then(() => snapshot(cfg, w, h))
