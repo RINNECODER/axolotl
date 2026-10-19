@@ -25,6 +25,9 @@ struct HorizontalTabStrip: View {
     /// The tab being dragged: it lifts off the strip and follows the pointer
     /// while the others slide aside (Helium-style).
     @State private var drag: TabDrag?
+    @State private var scroll = ScrollPosition(edge: .leading)
+    /// Visible part of the strip: x = scroll offset, width = viewport, height = content width.
+    @State private var scrollWindow: CGRect = .zero
     /// Each tab's frame in the strip, for hit-testing the drag.
     @State private var frames: [UUID: CGRect] = [:]
     /// The strip's origin in window coordinates (drags report window points).
@@ -177,14 +180,48 @@ struct HorizontalTabStrip: View {
                 }
                 .animation(.spring(response: 0.28, dampingFraction: 0.82), value: ids)
             }
-            // The lifted tab can rise a little out of the strip.
+            // The lifted tab can rise a little out of the strip, but tabs never slide
+            // under the window buttons or the tab search button beside it.
             .scrollClipDisabled()
+            .mask(Rectangle().padding(.vertical, -24))
             .scrollDisabled(titled == 0 || CGFloat(titled) * minWidth <= available)
+            .scrollPosition($scroll)
+            .onScrollGeometryChange(for: CGRect.self, of: {
+                CGRect(x: $0.contentOffset.x, y: 0, width: $0.containerSize.width, height: $0.contentSize.width)
+            }) { _, new in scrollWindow = new }
+            .overlay(alignment: .leading) {
+                if scrollWindow.minX > 1 { scrollArrow(-1) }
+            }
+            .overlay(alignment: .trailing) {
+                if scrollWindow.minX + scrollWindow.width < scrollWindow.height - 1 { scrollArrow(1) }
+            }
         }
         .frame(height: height)
     }
 
     private static let space = "axolotl.tabstrip"
+
+    /// Shown when tabs overflow: a fade with a chevron that pages the strip.
+    private func scrollArrow(_ direction: CGFloat) -> some View {
+        let page = scrollWindow.width * 0.8
+        return Button {
+            let maxX = max(0, scrollWindow.height - scrollWindow.width)
+            withAnimation(.easeOut(duration: 0.25)) {
+                scroll.scrollTo(x: min(max(0, scrollWindow.minX + direction * page), maxX))
+            }
+        } label: {
+            Image(systemName: direction < 0 ? "chevron.left" : "chevron.right")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 22, height: height - 8)
+                .background(.bar, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 2)
+        .help(direction < 0 ? "Scroll tabs left" : "Scroll tabs right")
+        .accessibilityLabel(direction < 0 ? "Scroll tabs left" : "Scroll tabs right")
+    }
 
     // MARK: Dragging
 

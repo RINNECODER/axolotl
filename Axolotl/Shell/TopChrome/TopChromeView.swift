@@ -165,7 +165,7 @@ struct TopChromeView: View {
             if showsTabs {
                 HStack(spacing: 0) {
                     Spacer().frame(width: omitsWindowButtonInset ? 8 : ChromeMetrics.tabSearchLeading)
-                    ChromeTabSearchButton(store: store, onActivate: actions.activate)
+                    ChromeTabSearchButton { BrowserCommandTargets.shared.key?.searchTabs() }
                         .padding(.top, ChromeMetrics.tabTop)
                         .frame(maxHeight: .infinity, alignment: .top)
                         .background(NonDraggableWindowView())

@@ -304,35 +304,28 @@ struct ChromeIcon: View {
     }
 }
 
-/// Tab search (the chevron in a rounded square after the window buttons): lists the open tabs.
+/// Tab search (the chevron in a rounded square after the window buttons): opens the ⇧⌘A
+/// search panel, sized like Chrome's, instead of a menu that grows with every tab.
 struct ChromeTabSearchButton: View {
-    @ObservedObject var store: WorkspaceStore
-    let onActivate: (UUID) -> Void
+    let action: () -> Void
 
     @Environment(\.colorScheme) private var scheme
+    @State private var isHovering = false
 
     var body: some View {
         let palette = ChromePalette.for(scheme)
-        AxolotlMenuButton(minWidth: 280, debugID: "chrome.tabs", items: {
-            var entries: [AxolotlMenuEntry] = [.header("Open tabs")]
-            for id in store.orderedTabIds {
-                guard let tab = store.tab(id) else { continue }
-                entries.append(.item(AxolotlMenuItem(id: "tab.\(id)", title: displayTitle(for: tab),
-                                                  icon: AxolotlMenuEntry.favicon(tab.url).map { .image($0) },
-                                                  isChecked: false, action: { onActivate(id) })))
-            }
-            return entries
-        }) { isOpen in
+        Button(action: action) {
             Image(systemName: "chevron.down")
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(palette.title)
                 .frame(width: ChromeMetrics.tabSearchSize, height: ChromeMetrics.tabSearchSize)
                 .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isOpen ? palette.tabHover : palette.tabSearch))
+                    .fill(isHovering ? palette.tabHover : palette.tabSearch))
                 .contentShape(Rectangle())
         }
-        .fixedSize()
-        .help("Search Tabs")
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("Search Tabs (⇧⌘A)")
         .accessibilityLabel("Search Tabs")
     }
 }

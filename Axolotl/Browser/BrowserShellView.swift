@@ -813,7 +813,7 @@ struct BrowserShellView: View {
         let closed = ws.recentlyClosedTabs.prefix(10).map {
             TabSearchItem(id: $0.id, title: displayTitle(for: $0), url: $0.url, isClosed: true)
         }
-        return ZStack(alignment: .top) {
+        return ZStack(alignment: .topLeading) {
             Color.black.opacity(0.001)
                 .onTapGesture { showTabSearch = false }
             TabSearchView(openTabs: open, closedTabs: Array(closed), onSelect: { item in
@@ -824,7 +824,9 @@ struct BrowserShellView: View {
                     switchToTab(item.id)
                 }
             }, onClose: { closeTab($0) }, onDismiss: { showTabSearch = false })
-            .padding(.top, 72)
+            // Chrome opens tab search under its button, at the window's leading edge.
+            .padding(.top, 44)
+            .padding(.leading, 72)
         }
     }
 
