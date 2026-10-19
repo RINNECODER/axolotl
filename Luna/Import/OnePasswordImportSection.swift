@@ -84,7 +84,7 @@ struct OnePasswordImportSection: View {
             guard await PasswordVault.shared.unlock(reason: "import passwords") else { return }
             do {
                 let r = try PasswordVault.shared.importCSV(OnePasswordImporter.vaultCSV(parsed.logins), profile: lunaProfileId)
-                succeed("Imported \(r.imported) login\(r.imported == 1 ? "" : "s")" + suffix, file: url)
+                succeed(String(r.summary.dropLast()) + suffix, file: url)
             } catch {
                 fail("Couldn't save the logins.")
             }

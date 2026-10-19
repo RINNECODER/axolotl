@@ -43,6 +43,7 @@ final class PasswordSyncKeyTests: XCTestCase {
         item[kSecAttrServer as String] = host
         item[kSecAttrAccount as String] = user
         item[kSecValueData as String] = Data(secret.utf8)
+        item[kSecAttrProtocol as String] = kSecAttrProtocolHTTPS
         if let modified { item[kSecAttrModificationDate as String] = modified }
         XCTAssertEqual(store.add(item, sync: .synchronizable), errSecSuccess)
     }
@@ -95,6 +96,103 @@ final class PasswordSyncKeyTests: XCTestCase {
         XCTAssertEqual(domains(), ["name:work"])
         try v.setICloudSync(false, profile: id)
         XCTAssertEqual(domains(), [id.uuidString])
+    }
+
+    // MARK: Sync toggle safety
+
+    private func secret(_ host: String, in domain: String) -> String? {
+        logins().first { $0[kSecAttrServer as String] as? String == host && $0[kSecAttrSecurityDomain as String] as? String == domain }
+            .flatMap { $0[kSecValueData as String] as? Data }.map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    func testTurningSyncOnKeepsTheNewerCopyOnConflict() throws {
+        let id = profile("Work")
+        let old = Date(timeIntervalSince1970: 1_000), new = Date(timeIntervalSince1970: 2_000)
+        for (host, secret, modified) in [("a.com", "device-new", new), ("b.com", "device-old", old)] {
+            var item = PasswordVault.baseQuery(domain: id.uuidString)
+            item[kSecAttrServer as String] = host
+            item[kSecAttrAccount as String] = "me"
+            item[kSecValueData as String] = Data(secret.utf8)
+            item[kSecAttrModificationDate as String] = modified
+            item[kSecAttrProtocol as String] = kSecAttrProtocolHTTPS
+            XCTAssertEqual(store.add(item, sync: .deviceOnly), errSecSuccess)
+        }
+        seedSynced(domain: "name:work", host: "a.com", secret: "synced-old", modified: old)
+        seedSynced(domain: "name:work", host: "b.com", secret: "synced-new", modified: new)
+        defaults.set(false, forKey: PasswordVault.syncKey(id.uuidString))
+
+        try vault().setICloudSync(true, profile: id)
+        XCTAssertEqual(domains(), ["name:work", "name:work"])
+        XCTAssertEqual(secret("a.com", in: "name:work"), "device-new", "newer device copy replaces the older synced one")
+        XCTAssertEqual(secret("b.com", in: "name:work"), "synced-new", "newer synced copy kept")
+        XCTAssertTrue(vault().isICloudSyncEnabled(profile: id))
+    }
+
+    func testFailedMoveKeepsEveryLoginAndTheOldSetting() throws {
+        let id = profile("Work")
+        let v = vault()
+        try v.setICloudSync(false, profile: id)
+        try v.save(host: "a.com", username: "me", password: "pa", profile: id)
+        try v.save(host: "b.com", username: "me", password: "pb", profile: id)
+        fake.failAdd = { $0[kSecAttrServer as String] as? String == "b.com" }
+
+        XCTAssertThrowsError(try v.setICloudSync(true, profile: id))
+        XCTAssertFalse(v.isICloudSyncEnabled(profile: id), "setting only flips once every login moved")
+        XCTAssertTrue(v.isSaved(host: "a.com", username: "me", password: "pa", profile: id))
+        XCTAssertTrue(v.isSaved(host: "b.com", username: "me", password: "pb", profile: id))
+
+        fake.failAdd = nil
+        try v.setICloudSync(true, profile: id)
+        XCTAssertEqual(domains(), ["name:work", "name:work"])
+        XCTAssertTrue(v.isSaved(host: "a.com", username: "me", password: "pa", profile: id))
+    }
+
+    // MARK: CSV import
+
+    func testCSVImportNeverOverwritesASavedPasswordAndDropsRepeatedRows() throws {
+        let id = profile("Work")
+        let v = vault()
+        try v.save(host: "a.example", username: "alice", password: "newer", profile: id)
+        let csv = """
+            Title,URL,Username,Password
+            A,https://a.example,alice,older
+            B,b.example,bob,pw
+            B,https://b.example,bob,pw
+            B2,b.example,bob,other
+            C,,carol,pw
+            """
+        let r = try v.importCSV(csv, profile: id)
+        XCTAssertEqual([r.imported, r.skipped, r.conflicts], [1, 2, 2])
+        XCTAssertTrue(v.isSaved(host: "a.example", username: "alice", password: "newer", profile: id))
+        XCTAssertTrue(v.isSaved(host: "b.example", username: "bob", password: "pw", profile: id))
+        XCTAssertEqual(logins().count, 2)
+        XCTAssertEqual(r.summary, "Imported 1 login, skipped 2, kept 2 existing logins with a different password.")
+    }
+
+    // MARK: Profile delete
+
+    func testDeletingAProfileRemovesItsLoginsAndSetting() throws {
+        let work = profile("Work"), local = profile("Local")
+        let v = vault()
+        try v.save(host: "synced.com", username: "me", password: "pw", profile: work)
+        try v.setICloudSync(false, profile: local)
+        try v.save(host: "device.com", username: "me", password: "pw", profile: local)
+        let keep = profile("Keep")
+        try v.save(host: "keep.com", username: "me", password: "pw", profile: keep)
+
+        v.deleteAll(profile: work)
+        v.deleteAll(profile: local)
+        XCTAssertEqual(domains(), ["name:keep"])
+        XCTAssertNil(defaults.object(forKey: PasswordVault.syncKey(local.uuidString)))
+    }
+
+    func testDeletingAProfileKeepsSyncedLoginsOfAnotherProfileWithTheSameName() throws {
+        let a = profile("Work")
+        try vault().save(host: "example.com", username: "me", password: "pw", profile: a)
+        let b = profile("work")
+        vault().deleteAll(profile: b)
+        names.removeAll { $0.id == b }
+        XCTAssertTrue(vault().isSaved(host: "example.com", username: "me", password: "pw", profile: a))
     }
 
     // MARK: Rename
@@ -172,9 +270,9 @@ final class PasswordSyncKeyTests: XCTestCase {
 
     func testLegacyMigratorWritesSyncedLoginsUnderNameKey() {
         let id = profile("Work")
-        _ = store.legacyAdd([kSecClass as String: kSecClassInternetPassword, kSecAttrCreator as String: PasswordVault.creator,
+        _ = fake.add(store.legacyScoped([kSecClass as String: kSecClassInternetPassword, kSecAttrCreator as String: PasswordVault.creator,
                              kSecAttrSecurityDomain as String: id.uuidString, kSecAttrServer as String: "example.com",
-                             kSecAttrAccount as String: "me", kSecValueData as String: Data("pw".utf8)])
+                             kSecAttrAccount as String: "me", kSecValueData as String: Data("pw".utf8)]))
         var m = KeychainMigrator(store: store, defaults: defaults)
         m.vaultSync = { _ in true }
         let domains = vault().syncDomainSnapshot()
