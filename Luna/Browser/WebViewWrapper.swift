@@ -1025,9 +1025,9 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
                 if let urlString = result as? String, !urlString.isEmpty, let url = URL(string: urlString) {
                     self.tabRuntime.setFaviconURL(url, for: tabId)
                     self.fetchPrimaryTintFromFavicon(for: tabId, faviconURL: url)
-                } else if let pageURL = webView.url, let host = pageURL.host {
-                    // Fallback to /favicon.ico
-                    let url = URL(string: "https://\(host)/favicon.ico")
+                } else if let pageURL = webView.url, pageURL.host != nil {
+                    // Fallback to /favicon.ico on the page's own origin (scheme and port included).
+                    let url = URL(string: "/favicon.ico", relativeTo: pageURL)?.absoluteURL
                     self.tabRuntime.setFaviconURL(url, for: tabId)
                     if let url { self.fetchPrimaryTintFromFavicon(for: tabId, faviconURL: url) }
                 } else {
@@ -1358,6 +1358,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         updateBackForwardForActiveTab()
         // Re-apply per-tab zoom after load
         applyZoom(to: tabId)
+        // The URL observer runs before the new document is parsed; read its <link rel=icon> now.
+        fetchFavicon(for: tabId, webView: webView)
         // Fallback: sample theme again at load end (documentEnd script may have already run).
         let script = """
         (function(){
