@@ -16,7 +16,7 @@ enum LiquidGlass {
     static let defaultValue = true
 
     static var isOn: Bool {
-        UserDefaults.standard.object(forKey: defaultsKey) as? Bool ?? defaultValue
+        UserDefaults.standard.object(forKey: defaultsKey) == nil ? defaultValue : UserDefaults.standard.bool(forKey: defaultsKey)
     }
 }
 

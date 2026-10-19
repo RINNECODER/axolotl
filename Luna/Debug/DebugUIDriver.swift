@@ -37,8 +37,14 @@ enum DebugUIDriver {
             // Put browser / settings windows on the current Space, behind other apps' windows,
             // without activating Luna: they stay capturable without covering anything.
             for window in NSApp.windows where window.isVisible && window.frame.width > 300 && window.parent == nil {
-                window.collectionBehavior.insert(.canJoinAllSpaces)
-                window.orderBack(nil)
+                window.collectionBehavior.formUnion([.canJoinAllSpaces, .fullScreenAuxiliary])
+                let ours = Set(NSApp.windows.map(\.windowNumber))
+                if let front = NSWindow.windowNumbers(options: .allApplications)?.map(\.intValue)
+                    .first(where: { !ours.contains($0) }) {
+                    window.order(.below, relativeTo: front)
+                } else {
+                    window.orderBack(nil)
+                }
             }
         case "pin": LunaMenuController.debugPinned = arg == "1"
         case "settings":

@@ -14,7 +14,8 @@ import Combine
 enum LunaMenuFlavor {
     /// Chrome template: Chrome's solid colors, always (Chrome never uses glass).
     case chrome
-    /// Luna layouts: Luna's neutrals; Liquid Glass background when that setting is on.
+    /// Luna layouts: Luna's neutrals. Menus stay solid with Liquid Glass on too: glass in a
+    /// borderless menu panel samples the panel's own transparent margin and renders clipped.
     case luna
 }
 
@@ -39,8 +40,6 @@ struct LunaMenuStyle {
     var shadow: Color
     var shadowRadius: CGFloat
     var shadowY: CGFloat
-    /// Draw Liquid Glass behind the rows instead of `background`.
-    var usesGlass: Bool
     var cornerRadius: CGFloat = 12
     var rowHeight: CGFloat = 28
     var verticalPadding: CGFloat
@@ -51,7 +50,7 @@ struct LunaMenuStyle {
     var fontSize: CGFloat
     var separatorMargin: CGFloat
 
-    static func resolve(_ flavor: LunaMenuFlavor, dark: Bool, glass: Bool) -> LunaMenuStyle {
+    static func resolve(_ flavor: LunaMenuFlavor, dark: Bool) -> LunaMenuStyle {
         switch flavor {
         case .chrome:
             // Sampled from Chrome's ⋮ menu: light #FFFFFF / hover #F2F2F2 / separator #D6E2FB,
@@ -65,7 +64,7 @@ struct LunaMenuStyle {
                 separator: dark ? Color(lunaHex: 0x5E5E5E) : Color(lunaHex: 0xD6E2FB),
                 zoomButton: dark ? Color(lunaHex: 0x282828) : Color(lunaHex: 0xF2F2F2),
                 shadow: .black.opacity(dark ? 0.55 : 0.20), shadowRadius: 10, shadowY: 4,
-                usesGlass: false, verticalPadding: 12, horizontalPadding: 24, hoverInset: 0, hoverRadius: 0,
+                verticalPadding: 12, horizontalPadding: 24, hoverInset: 0, hoverRadius: 0,
                 fontSize: 13.5, separatorMargin: 8)
         case .luna:
             return LunaMenuStyle(
@@ -77,7 +76,7 @@ struct LunaMenuStyle {
                 separator: dark ? Color.white.opacity(0.09) : Color.black.opacity(0.08),
                 zoomButton: dark ? Color.white.opacity(0.08) : Color.black.opacity(0.05),
                 shadow: .black.opacity(dark ? 0.5 : 0.16), shadowRadius: 12, shadowY: 5,
-                usesGlass: glass, verticalPadding: 6, horizontalPadding: 14, hoverInset: 6, hoverRadius: 6,
+                verticalPadding: 6, horizontalPadding: 14, hoverInset: 6, hoverRadius: 6,
                 fontSize: 13, separatorMargin: 5)
         }
     }
@@ -89,22 +88,13 @@ struct LunaMenuChrome: ViewModifier {
 
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: style.cornerRadius, style: .continuous)
-        if style.usesGlass {
-            if #available(macOS 26.0, *) {
-                content.glassEffect(.regular, in: shape)
-            } else {
-                content.background(shape.fill(.regularMaterial))
-                    .overlay(shape.strokeBorder(style.border, lineWidth: 1))
-            }
-        } else {
-            content
-                .background(shape.fill(style.background))
-                .clipShape(shape)
-                .overlay(shape.strokeBorder(style.border, lineWidth: 1))
-                .compositingGroup()
-                .shadow(color: style.shadow, radius: style.shadowRadius, y: style.shadowY)
-                .shadow(color: .black.opacity(0.06), radius: 1, y: 0)
-        }
+        content
+            .background(shape.fill(style.background))
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(style.border, lineWidth: 1))
+            .compositingGroup()
+            .shadow(color: style.shadow, radius: style.shadowRadius, y: style.shadowY)
+            .shadow(color: .black.opacity(0.06), radius: 1, y: 0)
     }
 }
 
@@ -164,7 +154,7 @@ final class LunaMenuController: ObservableObject {
         current?.close()
         let appearance = window?.effectiveAppearance ?? NSApp.effectiveAppearance
         let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-        let style = LunaMenuStyle.resolve(flavor, dark: dark, glass: LiquidGlass.isOn)
+        let style = LunaMenuStyle.resolve(flavor, dark: dark)
         let controller = LunaMenuController(build: build, anchorRect: anchorRect, placement: placement,
                                             window: window, style: style, minWidth: minWidth, onClose: onClose)
         if highlightFirst { controller.nav.move(1) }
@@ -284,8 +274,10 @@ final class LunaMenuController: ObservableObject {
                 menu.origin.x = alignment == .trailing ? anchorRect.maxX - menu.width : anchorRect.minX
                 let below = anchorRect.minY - 2 - menu.height
                 let above = anchorRect.maxY + 2
+                // Prefer staying inside the browser window (bottom bars open upward), then the screen.
+                let floor = max(screen.minY, (parentWindow?.frame.minY ?? screen.minY))
                 if case .below = placement {
-                    menu.origin.y = below >= screen.minY || above + menu.height > screen.maxY ? below : above
+                    menu.origin.y = below >= floor || above + menu.height > screen.maxY ? below : above
                 } else {
                     menu.origin.y = above + menu.height <= screen.maxY || below < screen.minY ? above : below
                 }
@@ -551,7 +543,11 @@ private struct LunaMenuRow: View {
                 .lineLimit(1)
                 .fixedSize()
             Spacer(minLength: 32)
-            if item.isSubmenu {
+            if item.isChecked, item.icon != nil {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(style.text)
+            } else if item.isSubmenu {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(style.secondary)
@@ -574,7 +570,7 @@ private struct LunaMenuRow: View {
 
     @ViewBuilder
     private var icon: some View {
-        if item.isChecked {
+        if item.isChecked, item.icon == nil {
             Image(systemName: "checkmark")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(style.text)
@@ -618,7 +614,7 @@ private struct LunaMenuZoomRow: View {
             circle("plus", label: "Make text larger") { perform(zoom.zoomIn) }
             if let fullScreen = zoom.fullScreen {
                 Rectangle().fill(style.separator).frame(width: 1, height: 28).padding(.horizontal, 10)
-                circle("arrow.up.left.and.arrow.down.right", label: "Full screen") { perform(fullScreen) }
+                circle("viewfinder", label: "Full screen") { perform(fullScreen) }
             }
         }
         .padding(.leading, style.horizontalPadding)
@@ -678,7 +674,7 @@ struct LunaAnchorView: NSViewRepresentable {
     }
 }
 
-private struct LunaMenuPresenter: ViewModifier {
+struct LunaMenuPresenter: ViewModifier {
     @Binding var isPresented: Bool
     let placement: (NSRect) -> LunaMenuPlacement
     let minWidth: CGFloat
@@ -731,14 +727,18 @@ struct LunaMenuButton<Label: View>: View {
     var alignment: HorizontalAlignment = .leading
     var minWidth: CGFloat = 0
     var help: String?
+    /// Open above the button (bottom bars).
+    var opensAbove = false
     /// Names the menu for the debug UI driver (`menu:<id>`).
     var debugID: String?
     let items: () -> [LunaMenuEntry]
     @ViewBuilder let label: (_ isOpen: Bool) -> Label
     @State private var isOpen = false
 
-    init(alignment: HorizontalAlignment = .leading, minWidth: CGFloat = 0, help: String? = nil, debugID: String? = nil,
+    init(alignment: HorizontalAlignment = .leading, minWidth: CGFloat = 0, help: String? = nil, opensAbove: Bool = false,
+         debugID: String? = nil,
          items: @escaping () -> [LunaMenuEntry], @ViewBuilder label: @escaping (_ isOpen: Bool) -> Label) {
+        self.opensAbove = opensAbove
         self.alignment = alignment
         self.minWidth = minWidth
         self.help = help
@@ -750,7 +750,9 @@ struct LunaMenuButton<Label: View>: View {
     var body: some View {
         Button { isOpen.toggle() } label: { label(isOpen) }
             .buttonStyle(.plain)
-            .lunaMenu(isPresented: $isOpen, alignment: alignment, minWidth: minWidth, items)
+            .modifier(LunaMenuPresenter(isPresented: $isOpen,
+                                        placement: { _ in opensAbove ? .above(alignment) : .below(alignment) },
+                                        minWidth: minWidth, build: items))
             .help(help ?? "")
             .accessibilityAddTraits(.isButton)
             .accessibilityHint("Opens a menu")

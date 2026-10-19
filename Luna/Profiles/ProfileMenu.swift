@@ -118,7 +118,7 @@ extension ProfileMenu {
     @MainActor
     var entries: [LunaMenuEntry] {
         let manager = profileManager
-        var entries: [LunaMenuEntry] = [.header(active.name)]
+        var entries: [LunaMenuEntry] = [.header("Profiles")]
         for profile in manager.profiles {
             entries.append(.item(LunaMenuItem(id: "profile.\(profile.id)", title: profile.name,
                                               icon: .image(ProfileAvatar.image(for: profile, size: 16)),

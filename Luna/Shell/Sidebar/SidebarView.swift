@@ -218,7 +218,7 @@ private struct SidebarMoreMenu: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        LunaMenuButton(alignment: .trailing, minWidth: 220, help: "More", items: {
+        LunaMenuButton(alignment: .leading, minWidth: 220, help: "More", opensAbove: true, debugID: "sidebar.more", items: {
             let settings = LunaSettingsOpener(openSettings: openSettings)
             return ExtensionMenuEntries.build(host: extensions, settings: settings, icon: "puzzlepiece.extension")
                 + [.divider("s"), .button("Settings", icon: "gearshape", shortcut: "⌘,") { settings() }]
