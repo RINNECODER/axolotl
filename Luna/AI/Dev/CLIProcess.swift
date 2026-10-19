@@ -106,6 +106,8 @@ nonisolated final class CLIProcess: @unchecked Sendable {
         self.arguments = arguments
         self.workingDirectory = workingDirectory
         self.environment = environment
+        // Unbounded on purpose: these are JSON-RPC/stream-json protocol lines (replies, approval requests,
+        // turn ends); dropping one desyncs the session. The framer already caps each line's size.
         (lines, linesContinuation) = AsyncStream.makeStream(of: Data.self, bufferingPolicy: .unbounded)
     }
 
@@ -222,9 +224,10 @@ nonisolated final class CLIProcess: @unchecked Sendable {
         var queue: [Int32] = [pid]
         while let next = queue.popLast(), found.count < 512 {
             var buffer = [Int32](repeating: 0, count: 256)
-            let bytes = proc_listchildpids(next, &buffer, Int32(buffer.count * MemoryLayout<Int32>.size))
-            guard bytes > 0 else { continue }
-            let kids = buffer.prefix(Int(bytes) / MemoryLayout<Int32>.size).filter { $0 > 0 }
+            // Takes the buffer size in bytes but returns a pid count.
+            let count = proc_listchildpids(next, &buffer, Int32(buffer.count * MemoryLayout<Int32>.size))
+            guard count > 0 else { continue }
+            let kids = buffer.prefix(Int(count)).filter { $0 > 0 }
             found += kids
             queue += kids
         }

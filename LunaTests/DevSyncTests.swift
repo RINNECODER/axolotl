@@ -301,6 +301,28 @@ final class DevSyncTests: XCTestCase {
         XCTAssertFalse(users.contains("message number 0 with padding padding padding"))
     }
 
+    func testFollowOfShrunkFileReplaysOnlyItsTail() async throws {
+        let f = try makeFixture()
+        func lines(_ n: Int, _ tag: String) -> String {
+            (0..<n).map { line(["type": "user", "sessionId": "11111111-aaaa", "message": ["role": "user", "content": "\(tag) \($0) with padding padding padding"]]) + "\n" }.joined()
+        }
+        try Data(lines(400, "old").utf8).write(to: f.claudeFile)
+        let sync = SessionSync(claudeRoot: f.claudeRoot, codexRoot: f.codexRoot, processes: { [] },
+                               resumeStore: AgentCLIResumeStore(defaults: scratchDefaults()))
+        var iterator = sync.follow(file: f.claudeFile, harness: .claudeCode, interval: 0.05, maxHistoryBytes: 2_000).makeAsyncIterator()
+        while let event = await iterator.next() { if case .userMessage(let t) = event, t.hasPrefix("old 399 ") { break } }
+        // Replaced by a smaller file that is still over the cap: only its tail is replayed.
+        try Data(lines(200, "new").utf8).write(to: f.claudeFile, options: .atomic)
+        var marker = false
+        var users: [String] = []
+        while users.count < 3, let event = await iterator.next() {
+            if case .historyTruncated = event { marker = true }
+            if case .userMessage(let t) = event { users.append(t) }
+        }
+        XCTAssertTrue(marker, "the shrunk file is truncated to the history cap, not replayed whole")
+        XCTAssertTrue(users.allSatisfy { $0.hasPrefix("new 1") }, users.joined(separator: " | "))
+    }
+
     func testSessionIDsMustNotLookLikeOptions() {
         XCTAssertEqual(DevSessionRef.validID("11111111-aaaa"), "11111111-aaaa")
         XCTAssertEqual(DevSessionRef.validID("thread_1"), "thread_1")

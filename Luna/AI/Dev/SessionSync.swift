@@ -325,6 +325,9 @@ actor SessionSync {
                     continue
                 }
                 let size = (try? handle.seekToEnd()) ?? 0
+                if started, size < offset { // truncated or replaced: replay its tail like a fresh file
+                    started = false; offset = 0; framer = NDJSONFramer(); skipPartialLine = false
+                }
                 if !started {
                     started = true
                     let start = Self.tailStartOffset(size: size, maxBytes: maxHistoryBytes)
@@ -334,7 +337,7 @@ actor SessionSync {
                         skipPartialLine = true
                         continuation.yield(.historyTruncated(skippedBytes: start))
                     }
-                } else if size < offset { offset = 0; framer = NDJSONFramer(); skipPartialLine = false } // truncated or replaced
+                }
                 if size > offset {
                     try? handle.seek(toOffset: offset)
                     while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {

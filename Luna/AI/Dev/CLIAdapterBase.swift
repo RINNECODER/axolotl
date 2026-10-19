@@ -27,6 +27,8 @@ class CLIAdapterBase {
         self.kind = kind
         self.mcp = mcp
         self.resumeStore = resumeStore
+        // Unbounded on purpose: approval requests and turn/exit events must never drop, and the
+        // consumer (DevSession on the main actor) drains continuously.
         (events, continuation) = AsyncStream.makeStream(of: CLIEvent.self, bufferingPolicy: .unbounded)
     }
 
