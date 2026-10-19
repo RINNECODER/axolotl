@@ -17,10 +17,11 @@ struct AsciiMoon: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        // Runs while the window is on screen, whether or not Luna is the
-        // active app (pausing on an inactive window froze the moon mid-frame
-        // whenever focus went elsewhere). Occluded, minimized or removed:
-        // the schedule pauses and no frames are drawn. Reduce Motion: still.
+        // Runs while Luna is the active app and the window is on screen.
+        // Inactive app, occluded, minimized or removed: the schedule pauses and
+        // no frames are drawn; it resumes on NSApplication.didBecomeActive
+        // (driven by notifications, not controlActiveState, which froze the
+        // moon mid-frame). Reduce Motion: still.
         let animating = onScreen && !reduceMotion
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: !animating)) { tl in
             Canvas { ctx, size in
@@ -36,7 +37,7 @@ struct AsciiMoon: View {
 }
 
 /// Reports whether the hosting window is actually on screen (not occluded,
-/// minimized or hidden), from AppKit notifications rather than app focus.
+/// minimized or hidden) and the app is active, from AppKit notifications.
 struct WindowVisibilityReader: NSViewRepresentable {
     @Binding var isVisible: Bool
 
@@ -58,13 +59,18 @@ struct WindowVisibilityReader: NSViewRepresentable {
             super.viewDidMoveToWindow()
             observers.forEach(NotificationCenter.default.removeObserver)
             observers = []
+            for name in [NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    self?.report()
+                })
+            }
             if let window {
                 let names: [Notification.Name] = [
                     NSWindow.didChangeOcclusionStateNotification,
                     NSWindow.didMiniaturizeNotification,
                     NSWindow.didDeminiaturizeNotification,
                 ]
-                observers = names.map {
+                observers += names.map {
                     NotificationCenter.default.addObserver(forName: $0, object: window, queue: .main) { [weak self] _ in
                         self?.report()
                     }
@@ -78,7 +84,7 @@ struct WindowVisibilityReader: NSViewRepresentable {
 
         func report() {
             let visible = window.map { $0.occlusionState.contains(.visible) && !$0.isMiniaturized } ?? false
-            let shown = visible && !isHiddenOrHasHiddenAncestor
+            let shown = visible && NSApp.isActive && !isHiddenOrHasHiddenAncestor
             // Deferred: this can run during a SwiftUI view update.
             DispatchQueue.main.async { [weak self] in self?.onChange?(shown) }
         }

@@ -14,6 +14,7 @@ final class FaviconCache {
 
     private init() {
         cache.countLimit = 500
+        cache.totalCostLimit = 16 * 1024 * 1024
     }
 
     func cachedImage(for url: URL) -> NSImage? {
@@ -37,8 +38,12 @@ final class FaviconCache {
         let image = await task.value
         inFlight.removeValue(forKey: url)
         if let image {
-            cache.setObject(image, forKey: url as NSURL)
+            // Cost estimate: 4 bytes per pixel of the largest representation.
+            let pixels = image.representations.map { $0.pixelsWide * $0.pixelsHigh }.max() ?? 0
+            let cost = pixels > 0 ? pixels * 4 : Int(image.size.width * image.size.height) * 4
+            cache.setObject(image, forKey: url as NSURL, cost: cost)
         } else {
+            if failed.count > 1000 { failed.removeAll() }
             failed.insert(url)
         }
         return image

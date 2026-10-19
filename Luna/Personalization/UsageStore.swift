@@ -231,18 +231,41 @@ final class UsageStore: ObservableObject {
 enum Usage {
     static var profileId: () -> UUID = { ProfileManager.shared.lastActiveProfileId }
 
+    /// Cached copy of the personalization flag, kept current by KVO so recording
+    /// while it is off doesn't read UserDefaults on every call.
+    private final class EnabledFlag: NSObject {
+        private let lock = NSLock()
+        private var value: Bool
+
+        override init() {
+            value = PersonalizationPrefs.isEnabled()
+            super.init()
+            UserDefaults.standard.addObserver(self, forKeyPath: PersonalizationPrefs.enabledKey, options: [], context: nil)
+        }
+
+        var isEnabled: Bool { lock.lock(); defer { lock.unlock() }; return value }
+
+        override func observeValue(forKeyPath keyPath: String?, of object: Any?,
+                                   change: [NSKeyValueChangeKey: Any]?, context: UnsafeMutableRawPointer?) {
+            let fresh = PersonalizationPrefs.isEnabled()
+            lock.lock(); value = fresh; lock.unlock()
+        }
+    }
+    private static let enabledFlag = EnabledFlag()
+    private static var isEnabled: Bool { enabledFlag.isEnabled }
+
     static func record(_ feature: UsageFeature) {
-        guard PersonalizationPrefs.isEnabled() else { return }
+        guard isEnabled else { return }
         UsageStore.forProfile(profileId()).record(feature)
     }
 
     static func recordShortcut(_ shortcut: String) {
-        guard PersonalizationPrefs.isEnabled() else { return }
+        guard isEnabled else { return }
         UsageStore.forProfile(profileId()).recordShortcut(shortcut)
     }
 
     static func noteOpenTabs(_ count: Int) {
-        guard PersonalizationPrefs.isEnabled() else { return }
+        guard isEnabled else { return }
         UsageStore.forProfile(profileId()).noteOpenTabs(count)
     }
 }

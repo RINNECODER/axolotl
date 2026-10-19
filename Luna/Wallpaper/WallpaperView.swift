@@ -161,9 +161,15 @@ enum WallpaperWeb {
         }
     }
 
+    /// One process pool and in-memory data store for every wallpaper and moon view, so they
+    /// share a WebContent process (and the parsed shaders) instead of one each.
+    private static let processPool = WKProcessPool()
+    private static let dataStore = WKWebsiteDataStore.nonPersistent()
+
     static func makeWebView(bridge: WallpaperBridge, page: Page = .wallpaper) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .nonPersistent()
+        config.processPool = processPool
+        config.websiteDataStore = dataStore
         config.setURLSchemeHandler(WallpaperSchemeHandler(), forURLScheme: scheme)
         config.suppressesIncrementalRendering = true
         config.mediaTypesRequiringUserActionForPlayback = .all

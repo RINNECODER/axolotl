@@ -19,11 +19,14 @@ final class KeychainMigrationCoordinator: ObservableObject {
     func checkAtLaunch(window: UUID) {
         guard !checked else { return }
         checked = true
-        PasswordVault.shared.migrateToNameKeys()
         let migrator = migrator
         guard !migrator.isDone else { return }
         Task {
-            let pending = await Task.detached { migrator.legacyItemsExist() }.value
+            // Keychain reads stay off the main thread; the vault migration runs before the check.
+            let pending = await Task.detached {
+                PasswordVault.shared.migrateToNameKeys()
+                return migrator.legacyItemsExist()
+            }.value
             if pending {
                 presenter = window
             } else {
