@@ -113,6 +113,18 @@ final class PasswordTests: XCTestCase {
         XCTAssertEqual(values, "me@x.com|s3cret")
     }
 
+    func testPrivateWindowNeverOffersToSave() async throws {
+        let (web, _, wv) = try await asyncLoginPage()
+        web.isPrivate = true
+        _ = try await wv.evaluateJavaScript("""
+            document.getElementById('u').value = 'new@x.com';
+            document.getElementById('p').value = 'pw-123';
+            document.getElementById('go').click();
+            """)
+        try await Task.sleep(for: .seconds(1))  // the normal-window test below sees its offer well within this
+        XCTAssertNil(web.passwordSaveOffer)
+    }
+
     func testSubmittingANewLoginOffersToSaveIt() async throws {
         let (web, tab, wv) = try await asyncLoginPage()
         _ = try await wv.evaluateJavaScript("""

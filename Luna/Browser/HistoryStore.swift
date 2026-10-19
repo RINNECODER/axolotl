@@ -15,19 +15,21 @@ nonisolated final class HistoryStore: @unchecked Sendable {
         var title: String
     }
 
-    private let fileURL: URL
+    /// nil = in memory only (private windows).
+    private let fileURL: URL?
     private var db: OpaquePointer?
 
     /// Cheap: the file is opened on first use, on the caller's queue.
-    init(fileURL: URL) { self.fileURL = fileURL }
+    init(fileURL: URL?) { self.fileURL = fileURL }
 
     deinit { sqlite3_close(db) }
 
     private func open() -> OpaquePointer? {
         if let db { return db }
-        try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        guard sqlite3_open(fileURL.path, &db) == SQLITE_OK else {
-            print("History: cannot open \(fileURL.lastPathComponent): \(String(cString: sqlite3_errmsg(db)))")
+        if let fileURL { try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true) }
+        let path = fileURL?.path ?? ":memory:"
+        guard sqlite3_open(path, &db) == SQLITE_OK else {
+            print("History: cannot open \((path as NSString).lastPathComponent): \(String(cString: sqlite3_errmsg(db)))")
             sqlite3_close(db)
             db = nil
             return nil

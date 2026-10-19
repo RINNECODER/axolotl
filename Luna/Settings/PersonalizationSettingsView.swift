@@ -30,6 +30,11 @@ struct PersonalizationSettingsView: View {
                 }
             }
 
+            SettingsCard("Privacy", footer: "Third-party cookies are always blocked: WebKit blocks cross-site tracking cookies by default.") {
+                RegistryToggle("privacy.globalPrivacyControl")
+                RegistryToggle("privacy.httpsFirst")
+            }
+
             SettingsCard("Browsing data") {
                 if profileManager.profiles.count > 1 {
                     SettingsMenuRow("Profile", selection: $dataProfileId,

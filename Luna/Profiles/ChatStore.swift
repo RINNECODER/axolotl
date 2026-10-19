@@ -5,14 +5,16 @@ import Foundation
 final class ChatStore: ObservableObject {
     @Published private(set) var messagesByTab: [UUID: [ChatMessage]] = [:]
 
-    private let fileURL: URL
+    /// nil = in memory only (private windows).
+    private let fileURL: URL?
     private var pendingSave: DispatchWorkItem?
     private let maxTabs = 100
     private let maxMessagesPerTab = 200
     /// Serial queue for disk writes so JSON encoding never blocks the main thread.
     private let saveQueue = DispatchQueue(label: "com.luna.chat-save", qos: .utility)
 
-    init(profileId: UUID, fileManager: FileManager = .default) {
+    init(profileId: UUID, persistent: Bool = true, fileManager: FileManager = .default) {
+        guard persistent else { fileURL = nil; return }
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("Luna/Profiles/\(profileId.uuidString)", isDirectory: true)
         try? fileManager.createDirectory(at: base, withIntermediateDirectories: true)
@@ -55,8 +57,8 @@ final class ChatStore: ObservableObject {
     }
 
     private func saveNow() {
+        guard let url = fileURL else { return }
         let snapshot = messagesByTab
-        let url = fileURL
         saveQueue.async {
             do {
                 let data = try JSONEncoder().encode(snapshot)
@@ -68,7 +70,7 @@ final class ChatStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: fileURL),
+        guard let fileURL, let data = try? Data(contentsOf: fileURL),
               let decoded = try? JSONDecoder().decode([UUID: [ChatMessage]].self, from: data) else { return }
         messagesByTab = decoded.mapValues { Array($0.suffix(maxMessagesPerTab)) }
         trimTabsIfNeeded()

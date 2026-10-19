@@ -84,6 +84,10 @@ struct BrowserCommands: Commands {
                 BrowserWindows.open(profileId: browser?.profileId() ?? ProfileManager.shared.lastActiveProfileId)
             }
             .keyboardShortcut("n")
+            Button("New Private Window") {
+                BrowserWindows.open(profileId: browser?.profileId() ?? ProfileManager.shared.lastActiveProfileId, isPrivate: true)
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
             Button("Reopen Closed Tab") { browser?.reopenClosedTab() }
                 .keyboardShortcut("t", modifiers: [.command, .shift])
         }

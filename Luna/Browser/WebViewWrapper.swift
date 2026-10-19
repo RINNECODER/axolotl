@@ -18,6 +18,8 @@ private let downloadLog = Logger(subsystem: "com.luna.browser", category: "downl
 /// Autofill of saved credentials works when sites use standard autocomplete attributes.
 final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
     let profileId: UUID
+    /// A private window's tabs: no password-save offers, no disk-cached favicons, new windows stay private.
+    var isPrivate = false
     private let websiteDataStore: WKWebsiteDataStore
     private var webViews: [UUID: WKWebView] = [:]
     /// The focused tab (in a split, the focused pane). Chrome mirrors its state
@@ -104,6 +106,10 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
     @Published var passwordFillOffer: PasswordFillOffer?
     @Published var passwordSaveOffer: PasswordSaveOffer?
+    /// HTTPS-first: the http URL each tab's pending https try stands in for.
+    private var httpsUpgrades: [UUID: URL] = [:]
+    /// Hosts the user chose "Continue to http" for, this window session.
+    private var httpAllowedHosts: Set<String> = []
     /// Usernames typed on a host this session, for two-step sign-ins.
     private var lastUsernameByHost: [String: String] = [:]
     
@@ -276,7 +282,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         case "username":
             if let user = dict["username"] as? String, !user.isEmpty { lastUsernameByHost[host] = user }
         case "submit":
-            guard let password = dict["password"] as? String, !password.isEmpty, !vault.isNeverSave(host) else { return }
+            guard !isPrivate, let password = dict["password"] as? String, !password.isEmpty, !vault.isNeverSave(host) else { return }
             var username = dict["username"] as? String ?? ""
             if username.isEmpty { username = lastUsernameByHost[host] ?? "" } else { lastUsernameByHost[host] = username }
             guard !vault.isSaved(host: host, username: username, password: password, profile: profileId) else { return }
@@ -554,6 +560,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         config.userContentController.add(mediaHandler, contentWorld: .defaultClient, name: "lunaMedia")
         config.userContentController.addUserScript(WKUserScript(source: WebViewWrapper.mediaScriptSource, injectionTime: .atDocumentEnd,
                                                                 forMainFrameOnly: false, in: .defaultClient))
+        // An exception to the documentEnd rule: GPC must be set before page scripts read it (on by default, Brave).
+        if PrivacyPrefs.isOn(PrivacyPrefs.globalPrivacyControl) { config.userContentController.addUserScript(PrivacyPrefs.gpcScript()) }
         let wv = LunaWebView(frame: .zero, configuration: config)
         // Use Safari UA for all requests to avoid bot detection on Akamai-protected sites.
         wv.customUserAgent = WebViewWrapper.safariUserAgent
@@ -579,7 +587,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             }
             lwv.onOpenInNewWindow = { [weak self] url in
                 guard let self else { return }
-                BrowserWindows.open(profileId: self.profileId, adopting: TabTransfer(tab: Tab(url: url)))
+                BrowserWindows.open(profileId: self.profileId, adopting: TabTransfer(tab: Tab(url: url)), isPrivate: self.isPrivate)
             }
             lwv.onPrint = { [weak self, weak wv] in
                 guard let self, let wv, let id = self.tabId(for: wv) else { return }
@@ -714,7 +722,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         updateBackForwardForActiveTab()
     }
 
-    func load(url: URL, in tabId: UUID) {
+    func load(url requested: URL, in tabId: UUID) {
+        let url = httpsFirst(requested, in: tabId)
         let wv = ensureWebView(for: tabId)
         wv.customUserAgent = Self.userAgent(for: url)
         if url.isFileURL {
@@ -724,11 +733,29 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         } else {
             var request = URLRequest(url: url)
             request.httpShouldHandleCookies = true
+            if PrivacyPrefs.isOn(PrivacyPrefs.globalPrivacyControl) { request.setValue("1", forHTTPHeaderField: "Sec-GPC") }
             wv.load(request)
         }
         if activeTab == tabId {
             currentURL = url
         }
+    }
+
+    /// HTTPS-first: the https URL to load instead of `url`, remembering the http one for the error page.
+    private func httpsFirst(_ url: URL, in tabId: UUID) -> URL {
+        guard PrivacyPrefs.isOn(PrivacyPrefs.httpsFirst), let https = HTTPSUpgrade.upgrade(url, exempt: httpAllowedHosts) else {
+            httpsUpgrades.removeValue(forKey: tabId)
+            return url
+        }
+        httpsUpgrades[tabId] = url
+        return https
+    }
+
+    /// The error page's "Continue to http": loads the http page and stops upgrading its host.
+    func continueToHTTP(in tabId: UUID) {
+        guard let url = pageErrorByTab.removeValue(forKey: tabId)?.httpFallback else { return }
+        if let host = url.host?.lowercased() { httpAllowedHosts.insert(host) }
+        load(url: url, in: tabId)
     }
 
     /// Restores a tab's back/forward list and current page from saved
@@ -1070,7 +1097,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
         var request = URLRequest(url: faviconURL)
         request.cachePolicy = .returnCacheDataElseLoad
         request.timeoutInterval = 10
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, _ in
+        (isPrivate ? PrivateBrowsing.urlSession : URLSession.shared).dataTask(with: request) { [weak self] data, _, _ in
             guard let self else { return }
             // shortcut: the size cap applies after download (bounded by the timeout); stream it if icons get abused.
             guard let data, data.count <= 1_000_000, let image = NSImage(data: data), let color = Self.dominantColor(from: image) else { return }
@@ -1227,6 +1254,19 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
             decisionHandler(.cancel, preferences)
             return
         }
+        if navigationAction.targetFrame?.isMainFrame == true, let url = navigationAction.request.url,
+           url.scheme?.lowercased() == "http", let tabId = tabId(for: webView) {
+            if let pending = httpsUpgrades[tabId], pending.host?.lowercased() == url.host?.lowercased() {
+                // The https site sent us back to http: it doesn't do https, so don't loop.
+                httpsUpgrades.removeValue(forKey: tabId)
+                if let host = url.host?.lowercased() { httpAllowedHosts.insert(host) }
+            } else if navigationAction.navigationType == .linkActivated, PrivacyPrefs.isOn(PrivacyPrefs.httpsFirst),
+                      HTTPSUpgrade.upgrade(url, exempt: httpAllowedHosts) != nil {
+                decisionHandler(.cancel, preferences)
+                load(url: url, in: tabId)
+                return
+            }
+        }
         // Switch UA on the fly so redirects (e.g. Gmail → accounts.google.com)
         // pick up the correct UA for the target host.
         if let targetURL = navigationAction.request.url {
@@ -1237,7 +1277,8 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
-        guard let tabId = tabId(for: webView), let pageError = PageError.classify(error, url: webView.url) else { return }
+        guard let tabId = tabId(for: webView), var pageError = PageError.classify(error, url: webView.url) else { return }
+        if let http = httpsUpgrades.removeValue(forKey: tabId) { pageError.httpFallback = http }
         pageErrorByTab[tabId] = pageError
         // The address bar shows the page that failed, not the one still underneath.
         if tabId == activeTab, let failed = pageError.url { currentURL = failed }
@@ -1356,6 +1397,7 @@ final class WebViewWrapper: NSObject, ObservableObject, WKNavigationDelegate, WK
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard let tabId = tabId(for: webView) else { return }
+        httpsUpgrades.removeValue(forKey: tabId)
         if pageErrorByTab[tabId] != nil { pageErrorByTab.removeValue(forKey: tabId) }
         // The old document's media is gone; frames of the new one report again.
         setAudible(false, frame: nil, in: tabId)

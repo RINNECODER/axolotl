@@ -36,7 +36,8 @@ final class FaviconCache {
         cache.object(forKey: url as NSURL)
     }
 
-    func image(for url: URL) async -> NSImage? {
+    /// `ephemeral`: a private window's fetch, kept out of the shared URL cache on disk.
+    func image(for url: URL, ephemeral: Bool = false) async -> NSImage? {
         if let hit = cache.object(forKey: url as NSURL) { return hit }
         if failed.contains(url) { return nil }
         if let existing = inFlight[url] { return await existing.value }
@@ -46,7 +47,8 @@ final class FaviconCache {
             if url.scheme?.lowercased() == "data" { return Self.decodeDataURI(url).flatMap(NSImage.init(data:)) }
             var request = URLRequest(url: url)
             request.timeoutInterval = 10
-            guard let (data, response) = try? await URLSession.shared.data(for: request),
+            let session = ephemeral ? PrivateBrowsing.urlSession : URLSession.shared
+            guard let (data, response) = try? await session.data(for: request),
                   let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
                   let image = NSImage(data: data) else { return nil }
             return image
@@ -74,6 +76,7 @@ struct FaviconView: View {
     let faviconURL: URL?
 
     @State private var image: NSImage?
+    @Environment(\.isPrivateBrowsing) private var isPrivate
 
     init(url: URL, faviconURL: URL? = nil) {
         self.url = url
@@ -114,7 +117,7 @@ struct FaviconView: View {
                 image = hit
                 return
             }
-            image = await FaviconCache.shared.image(for: fav)
+            image = await FaviconCache.shared.image(for: fav, ephemeral: isPrivate)
         }
     }
 }

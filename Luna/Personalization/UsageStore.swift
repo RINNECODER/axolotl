@@ -255,7 +255,9 @@ enum Usage {
         }
     }
     private static let enabledFlag = EnabledFlag()
-    private static var isEnabled: Bool { enabledFlag.isEnabled }
+    /// Set while a private window is key: nothing it does is recorded.
+    static var paused = false
+    private static var isEnabled: Bool { enabledFlag.isEnabled && !paused }
 
     static func record(_ feature: UsageFeature) {
         guard isEnabled else { return }

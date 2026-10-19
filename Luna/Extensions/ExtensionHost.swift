@@ -21,8 +21,10 @@ final class ExtensionHost: NSObject, ObservableObject, WKWebExtensionControllerD
 
     nonisolated deinit {}
 
-    init(profileId: UUID, dataStore: WKWebsiteDataStore) {
-        let config = WKWebExtensionController.Configuration(identifier: profileId)
+    init(profileId: UUID, dataStore: WKWebsiteDataStore, isPrivate: Bool = false) {
+        // Private windows: extension storage lives in memory, apart from the profile's.
+        let config = isPrivate ? WKWebExtensionController.Configuration.nonPersistent()
+                               : WKWebExtensionController.Configuration(identifier: profileId)
         config.defaultWebsiteDataStore = dataStore
         controller = WKWebExtensionController(configuration: config)
         super.init()
